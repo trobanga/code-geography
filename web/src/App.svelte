@@ -16,7 +16,8 @@
   import { buildTree, collapse, levelExpanded, splitByLevel, type Tree } from './lib/expansion';
   import { decodeHash, encodeHash, freshHash, type Source } from './lib/hash';
   import { indexInWorker } from './lib/indexProject';
-  import { chooseInputs, inputError, summarize, type Summary } from './lib/project';
+  import { inputError, summarize, type Summary } from './lib/project';
+  import { collectDir, fromEntry, type Collect, type DirEntry } from './lib/walk';
   import { runLayout, type Layout } from './lib/layout';
   import type { Graph, Level, View } from './lib/types';
   import init, { Explorer, isInput } from './lib/wasm/cg_wasm.js';
@@ -144,18 +145,23 @@
   }
 
   /** Indexes the Java sources of a chosen directory in a worker (ADR 0015). Only inputs are read. */
-  async function openDirectory(files: File[]) {
+  async function openDirectory(collect: Collect) {
     const my = ++openSeq;
     try {
       await init();
-      const chosen = chooseInputs(files, (f) => f.webkitRelativePath || f.name, isInput);
+      const t0 = performance.now();
+      phase = 'scanning';
+      const chosen = await collect(isInput, (n) => {
+        if (my === openSeq) phase = `scanning: ${n} directories`;
+      });
+      if (my !== openSeq) return;
+      console.info(`scanned ${chosen.root}: ${chosen.inputs.length} inputs ${Math.round(performance.now() - t0)} ms`);
       const err = inputError(chosen);
       if (err) {
         error = err;
         phase = null;
         return;
       }
-      const t0 = performance.now();
       phase = `reading ${chosen.inputs.length} files of ${chosen.root}`;
       const paths = chosen.inputs.map((i) => i.path);
       const texts = await Promise.all(chosen.inputs.map((i) => i.file.text()));
@@ -172,6 +178,21 @@
       phase = null;
       error = `cannot index the directory: ${e instanceof Error ? e.message : String(e)}`;
     }
+  }
+
+  // A directory dropped anywhere on the page opens like a chosen one. The counter follows
+  // enter and leave over child elements, so the hint does not flicker.
+  let dragDepth = $state(0);
+  const carriesFiles = (e: DragEvent) => !!e.dataTransfer?.types.includes('Files');
+
+  function onDrop(e: DragEvent) {
+    if (!carriesFiles(e)) return;
+    e.preventDefault();
+    dragDepth = 0;
+    // The entries must be taken during the event: the data transfer is empty afterwards.
+    const entry = e.dataTransfer?.items[0]?.webkitGetAsEntry();
+    if (entry?.isDirectory) openDirectory(collectDir(fromEntry(entry as unknown as DirEntry)));
+    else error = 'drop a directory to index it';
   }
 
   /** Expands the containers on the path to `id` and selects it. */
@@ -268,6 +289,28 @@
   });
 </script>
 
+<svelte:window
+  ondragenter={(e) => {
+    if (carriesFiles(e)) dragDepth++;
+  }}
+  ondragleave={(e) => {
+    if (carriesFiles(e)) dragDepth = Math.max(0, dragDepth - 1);
+  }}
+  ondragover={(e) => {
+    if (carriesFiles(e)) e.preventDefault();
+  }}
+  ondrop={onDrop}
+/>
+
+{#if dragDepth > 0}
+  <div
+    class="pointer-events-none fixed inset-3 z-50 flex items-center justify-center border-2 border-dashed border-[var(--accent)] bg-[var(--bg)]/80 text-lg"
+    data-drop-hint
+  >
+    drop a project directory to index it in this browser
+  </div>
+{/if}
+
 <div class="flex h-full flex-col">
   <Toolbar
     level={activeLevel}
@@ -360,7 +403,7 @@
     {:else if missing}
       <div class="flex flex-1 items-center justify-center">
         <div class="flex max-w-md flex-col gap-3" data-start>
-          <p>No <code>graph.json</code> here. Open a project directory to index it in this browser (Java only for now), or open a graph file made by <code>cg index</code>.</p>
+          <p>No <code>graph.json</code> here. Open a project directory, or drop one anywhere on this page, to index it in this browser (Java only for now). Or open a graph file made by <code>cg index</code>.</p>
           <p class="text-[var(--muted)]">Nothing is stored: a reload returns to this screen.</p>
           <div class="flex gap-2">
             <OpenButtons

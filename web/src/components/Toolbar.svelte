@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Source } from '../lib/hash';
   import OpenButtons from './OpenButtons.svelte';
+  import type { Collect } from '../lib/walk';
   import { KIND_LETTER, kindColor } from '../lib/kinds';
   import { LEVELS, type Level, type NodeKind } from '../lib/types';
 
@@ -32,7 +33,7 @@
     onfit: () => void;
     onreset: () => void;
     onfile: (f: File) => void;
-    ondir: (files: File[]) => void;
+    ondir: (collect: Collect) => void;
   } = $props();
 
   const kinds: NodeKind[] = ['module', 'package', 'type', 'function'];
