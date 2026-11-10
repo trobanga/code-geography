@@ -95,8 +95,34 @@ describe('drawable with a placeholder of the focus cut', () => {
 });
 
 describe('deeper', () => {
+  it('ranks a type as function, so that types with inner types open with the other types', () => {
+    const t = buildTree([
+      { id: 'm', parent: null, kind: 'module', name: 'm' },
+      { id: 'p', parent: 'm', kind: 'package', name: 'p' },
+      { id: 'A', parent: 'p', kind: 'type', name: 'A' },
+      { id: 'B', parent: 'A', kind: 'type', name: 'B' },
+      { id: 'b', parent: 'B', kind: 'function', name: 'b' },
+      { id: 'C', parent: 'p', kind: 'type', name: 'C' },
+      { id: 'c', parent: 'C', kind: 'function', name: 'c' },
+    ]);
+    expect(sorted(deeper(t, ['m', 'p', 'A', 'C'], new Set(['m', 'p'])))).toEqual(['A', 'C', 'm', 'p']);
+  });
+  it('ranks a container by the children that the view can show', () => {
+    // Without its hidden inner type, t1 holds only a function and waits for p2.
+    const shown = new Set(['m1', 'm2', 'p1', 'p2', 't1', 'f1', 't2']);
+    expect(sorted(deeper(tree, ['m1', 'p1', 'p2', 't1'], new Set(['m1', 'p1']), shown))).toEqual(['m1', 'p1', 'p2']);
+  });
+  it('opens only the frontier containers whose children have the coarsest kind', () => {
+    // p2 holds a type, t1i only a function: the type layer opens first.
+    expect(sorted(deeper(tree, ['m1', 'p1', 'p2', 't1', 't1i'], new Set(['m1', 'p1', 't1'])))).toEqual([
+      'm1',
+      'p1',
+      'p2',
+      't1',
+    ]);
+  });
   it('opens every visible closed container of the view, skips placeholders', () => {
-    expect(sorted(deeper(['p1', 'p2', 'rest:m1'], new Set(['m1'])))).toEqual(['m1', 'p1', 'p2']);
+    expect(sorted(deeper(tree, ['p1', 'p2', 'rest:m1'], new Set(['m1'])))).toEqual(['m1', 'p1', 'p2']);
   });
 });
 
@@ -112,7 +138,7 @@ describe('shallower', () => {
 describe('stepBack', () => {
   it('undoes the last "+" while the state is what it gave, which the leaf rule cannot', () => {
     const before = new Set(['m1', 'p2']);
-    const after = deeper(['m1', 'p1', 'p2'], before);
+    const after = deeper(tree, ['m1', 'p1', 'p2'], before);
     expect(sorted(shallower(tree, after))).toEqual(['m1']);
     const r = stepBack(tree, [{ before, after }], after);
     expect(sorted(r.expanded)).toEqual(['m1', 'p2']);

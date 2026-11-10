@@ -55,6 +55,11 @@ describe('toElkGraph', () => {
     expect(m1.layoutOptions!['elk.nodeSize.minimum']).toMatch(/^\(\d+(\.\d+)?,\s*\d+(\.\d+)?\)$/);
   });
 
+  it('lays out the hierarchy as one graph to the right while an edge crosses a container border', () => {
+    expect(g.layoutOptions!['elk.hierarchyHandling']).toBe('INCLUDE_CHILDREN');
+    expect(find(g, 'm1')!.layoutOptions!['elk.direction']).toBeUndefined();
+  });
+
   it('omits edges between a node and its ancestor and keeps the others', () => {
     const pairs = g.edges!.map((e) => `${e.sources[0]}->${e.targets[0]}`);
     expect(pairs).toEqual(['p1->p2', 'm2->p1']);
@@ -131,5 +136,34 @@ describe('toElkGraph with a placeholder of the focus cut', () => {
     expect(find(g, 'm1')!.children!.map((c) => c.id)).toEqual(['p1', 'rest:m1']);
     expect(find(g, 'rest:m1')!.width).toBe(labelWidth('12 more', false));
     expect(g.edges!.map((e) => [e.sources[0], e.targets[0]])).toEqual([['rest:m1', 'm2']]);
+  });
+});
+
+describe('toElkGraph when every edge joins two siblings, as after lifting', () => {
+  const sib: View = {
+    nodes: ['m1', 'p1', 'p2', 't1', 'm2'],
+    expandable: [],
+    changes: {},
+    edges: [
+      { from: 'p1', to: 'p2', count: 1, kinds: { imports: 1 }, added: 0, removed: 0 },
+      { from: 'm2', to: 'm1', count: 1, kinds: { imports: 1 }, added: 0, removed: 0 },
+    ],
+  };
+  const g = toElkGraph(sib, tree);
+
+  it('lays out each container on its own, alternating the direction by depth', () => {
+    expect(g.layoutOptions!['elk.hierarchyHandling']).toBe('SEPARATE_CHILDREN');
+    expect(g.layoutOptions!['elk.direction']).toBe('RIGHT');
+    expect(find(g, 'm1')!.layoutOptions!['elk.direction']).toBe('DOWN');
+    expect(find(g, 'p1')!.layoutOptions!['elk.direction']).toBe('RIGHT');
+    expect(find(g, 'm1')!.layoutOptions!['elk.hierarchyHandling']).toBe('SEPARATE_CHILDREN');
+  });
+
+  it('gives each container the routing of the root, which it does not inherit, and the dense spacing', () => {
+    const o = find(g, 'm1')!.layoutOptions!;
+    for (const k of ['elk.algorithm', 'elk.edgeRouting', 'elk.layered.mergeEdges']) expect(o[k]).toBe(g.layoutOptions![k]);
+    const dense = rootOptions(1000);
+    for (const k of ['elk.spacing.nodeNode', 'elk.layered.spacing.nodeNodeBetweenLayers', 'elk.spacing.edgeNode', 'elk.spacing.edgeEdge'])
+      expect(o[k]).toBe(dense[k]);
   });
 });

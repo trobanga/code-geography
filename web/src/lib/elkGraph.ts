@@ -60,9 +60,35 @@ export function edgeIndex(elkEdgeId: string): number {
   return Number(elkEdgeId.slice(1));
 }
 
+/**
+ * With INCLUDE_CHILDREN, ELK lays out the whole hierarchy as one graph in the root direction, so
+ * nested chains add up to a wide strip, and a direction set on a container is ignored. When every
+ * edge joins two siblings (as after lifting, O3), no edge crosses a container border, and each
+ * container is laid out on its own, in a direction that alternates with depth.
+ */
+function containerDirection(depth: number): string {
+  return depth % 2 === 0 ? 'DOWN' : 'RIGHT';
+}
+
 export function toElkGraph(view: View, tree: Tree, nodeCount = view.nodes.length): ElkNode {
   const root: ElkNode = { id: 'root', layoutOptions: rootOptions(nodeCount), children: [], edges: [] };
   const visible = new Set(view.nodes);
+  const kept = view.edges.filter((e) => visible.has(e.from) && visible.has(e.to) && drawable(tree, e));
+  const separate = kept.every((e) => parentOf(tree, e.from) === parentOf(tree, e.to));
+  if (separate) root.layoutOptions!['elk.hierarchyHandling'] = 'SEPARATE_CHILDREN';
+  // Options of the layered algorithm for the children of one container: the routing of the root
+  // and the dense spacing; the sparse spacing stays at the top level, where it was tuned.
+  const { 'elk.json.edgeCoords': _e, 'elk.json.shapeCoords': _s, ...dense } = rootOptions(DENSE);
+  const layered = {
+    ...dense,
+    'elk.hierarchyHandling': 'SEPARATE_CHILDREN',
+    'elk.layered.mergeEdges': root.layoutOptions!['elk.layered.mergeEdges'],
+  };
+  const depthOf = (id: string) => {
+    let d = 0;
+    for (let p = parentOf(tree, id); p !== null; p = parentOf(tree, p)) d++;
+    return d;
+  };
   const expandable = new Set(view.expandable);
   const elkById = new Map<string, ElkNode>();
   const hasVisibleChild = new Set<string>();
@@ -94,6 +120,7 @@ export function toElkGraph(view: View, tree: Tree, nodeCount = view.nodes.length
           id,
           children: [],
           layoutOptions: {
+            ...(separate ? { ...layered, 'elk.direction': containerDirection(depthOf(id)) } : {}),
             'elk.padding': containerPadding(nodeCount),
             'elk.nodeSize.constraints': 'MINIMUM_SIZE',
             'elk.nodeSize.minimum': `(${w}, ${BOX.header + 16})`,

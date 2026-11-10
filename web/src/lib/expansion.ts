@@ -111,14 +111,38 @@ export function drawable(tree: Tree, e: { from: string; to: string }): boolean {
   return e.from !== e.to && !isAncestor(tree, e.from, e.to) && !isAncestor(tree, e.to, e.from);
 }
 
+const KIND_RANK: Record<NodeKind, number> = { module: 0, package: 1, type: 2, function: 3 };
+
 /**
- * One layer deeper: every container that the view shows closed and that can open. Takes the
- * view's `expandable`, so that the cut stays in WASM and a focus cut opens only what it shows.
+ * Rank of a container: the coarsest kind among its children that the view can show. A type has
+ * the rank of a function, so that types with inner types open together with the other types.
  */
-export function deeper(expandable: readonly string[], expanded: ReadonlySet<string>): Set<string> {
-  const out = new Set(expanded);
-  for (const id of expandable) if (!id.startsWith(REST)) out.add(id);
-  return out;
+function rank(tree: Tree, id: string, shown: ReadonlySet<string> | undefined): number {
+  let r = KIND_RANK.function;
+  if (tree.byId.get(id)?.kind === 'type') return r;
+  for (const c of tree.children.get(id) ?? []) {
+    const n = tree.byId.get(c);
+    if (n && (shown === undefined || shown.has(c))) r = Math.min(r, KIND_RANK[n.kind]);
+  }
+  return r;
+}
+
+/**
+ * One layer deeper: of the containers that the view shows closed and that can open, those whose
+ * children have the coarsest kind, so that package layers open one by one before types, and types
+ * before functions. Takes the view's `expandable`, so that the cut stays in WASM and a focus cut
+ * opens only what it shows; `shown` are the nodes the view can show (see `splitByLevel`).
+ */
+export function deeper(
+  tree: Tree,
+  expandable: readonly string[],
+  expanded: ReadonlySet<string>,
+  shown?: ReadonlySet<string>,
+): Set<string> {
+  const frontier = expandable.filter((id) => !id.startsWith(REST) && !expanded.has(id));
+  const ranks = frontier.map((id) => rank(tree, id, shown));
+  const coarsest = Math.min(...ranks);
+  return new Set([...expanded, ...frontier.filter((_, i) => ranks[i] === coarsest)]);
 }
 
 /**

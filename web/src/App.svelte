@@ -94,7 +94,7 @@
   }
   const view = $derived(explorer && tree ? cut(explorer, expanded) : null);
   /** What "+" would give; equal to `expanded` when nothing visible can open. */
-  const deeperSet = $derived(view ? deeper(view.expandable, expanded) : expanded);
+  const deeperSet = $derived(view && tree ? deeper(tree, view.expandable, expanded, shown) : expanded);
   /** "+" history, so that "−" right after it returns to the same set (see `stepBack`). */
   let steps: DepthStep[] = [];
   /** A "+" that waits for a second click, valid only for the set it was computed for. */
