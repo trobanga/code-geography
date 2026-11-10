@@ -1,0 +1,12 @@
+[package]
+name = "cg-index-java"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+cg-core = { version = "0.1.0", path = "../core" }
+tree-sitter = "0.27.2"
+tree-sitter-java = "0.23.5"
+
+[dev-dependencies]
+tempfile = "3.27.0"

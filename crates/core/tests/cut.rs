@@ -1,0 +1,197 @@
+use cg_core::{Edge, EdgeKind, Graph, Node, NodeKind, ViewEdge};
+use std::collections::{BTreeMap, HashSet};
+
+fn node(id: &str, parent: Option<&str>, kind: NodeKind) -> Node {
+    Node {
+        id: id.into(),
+        parent: parent.map(Into::into),
+        kind,
+        name: id.into(),
+        file: None,
+        span: None,
+        test: false,
+    }
+}
+
+fn edge(from: &str, to: &str, kind: EdgeKind) -> Edge {
+    Edge {
+        from: from.into(),
+        to: to.into(),
+        kind,
+    }
+}
+
+fn view_edge(from: &str, to: &str, kinds: &[(EdgeKind, usize)]) -> ViewEdge {
+    ViewEdge {
+        from: from.into(),
+        to: to.into(),
+        count: kinds.iter().map(|(_, n)| n).sum(),
+        kinds: kinds.iter().copied().collect(),
+    }
+}
+
+/// Two modules. `A` has the types `T1` and `T2` in package `a`, `B` has `U` in package `b`.
+fn two_modules() -> Graph {
+    Graph {
+        nodes: vec![
+            node("A", None, NodeKind::Module),
+            node("a", Some("A"), NodeKind::Package),
+            node("T1", Some("a"), NodeKind::Type),
+            node("T2", Some("a"), NodeKind::Type),
+            node("B", None, NodeKind::Module),
+            node("b", Some("B"), NodeKind::Package),
+            node("U", Some("b"), NodeKind::Type),
+        ],
+        edges: vec![
+            edge("T1", "U", EdgeKind::Extends),
+            edge("T2", "U", EdgeKind::TypeRef),
+            edge("T1", "T2", EdgeKind::TypeRef),
+        ],
+    }
+}
+
+fn expanded(ids: &[&str]) -> HashSet<String> {
+    ids.iter().map(|id| id.to_string()).collect()
+}
+
+#[test]
+fn collapsed_modules_show_one_edge_with_the_count_of_the_leaf_edges() {
+    let view = two_modules().cut(&expanded(&[]));
+
+    assert_eq!(view.nodes, vec!["A", "B"]);
+    assert_eq!(
+        view.edges,
+        vec![view_edge(
+            "A",
+            "B",
+            &[(EdgeKind::Extends, 1), (EdgeKind::TypeRef, 1)]
+        )]
+    );
+}
+
+#[test]
+fn an_expanded_container_shows_its_children_and_their_edges() {
+    let view = two_modules().cut(&expanded(&["A", "a"]));
+
+    assert_eq!(view.nodes, vec!["A", "a", "T1", "T2", "B"]);
+    assert_eq!(
+        view.edges,
+        vec![
+            view_edge("T1", "B", &[(EdgeKind::Extends, 1)]),
+            view_edge("T1", "T2", &[(EdgeKind::TypeRef, 1)]),
+            view_edge("T2", "B", &[(EdgeKind::TypeRef, 1)]),
+        ]
+    );
+}
+
+#[test]
+fn an_expanded_container_below_a_collapsed_one_stays_hidden() {
+    let view = two_modules().cut(&expanded(&["a"]));
+
+    assert_eq!(view.nodes, vec!["A", "B"]);
+}
+
+#[test]
+fn file_span_and_test_are_left_out_of_the_json_when_unset_and_default_on_read() {
+    let plain = node("p", None, NodeKind::Package);
+    let json = serde_json::to_string(&plain).unwrap();
+    assert_eq!(
+        json,
+        r#"{"id":"p","parent":null,"kind":"package","name":"p"}"#
+    );
+    assert_eq!(serde_json::from_str::<Node>(&json).unwrap(), plain);
+
+    let function = Node {
+        file: Some("a/Foo.java".into()),
+        span: Some(cg_core::Span {
+            start_line: 3,
+            end_line: 5,
+        }),
+        test: true,
+        ..node("f", Some("t"), NodeKind::Function)
+    };
+    let json = serde_json::to_string(&function).unwrap();
+    assert!(
+        json.contains(r#""span":{"start_line":3,"end_line":5}"#),
+        "{json}"
+    );
+    assert_eq!(serde_json::from_str::<Node>(&json).unwrap(), function);
+}
+
+fn test_node(id: &str, parent: &str, kind: NodeKind) -> Node {
+    Node {
+        test: true,
+        ..node(id, Some(parent), kind)
+    }
+}
+
+#[test]
+fn without_tests_drops_test_nodes_their_descendants_their_edges_and_emptied_containers() {
+    let graph = Graph {
+        nodes: vec![
+            node("M", None, NodeKind::Module),
+            node("p", Some("M"), NodeKind::Package),
+            node("T", Some("p"), NodeKind::Type),
+            node("f", Some("T"), NodeKind::Function),
+            test_node("TT", "p", NodeKind::Type),
+            // A function below a test type is removed with it, whatever its own flag.
+            node("tf", Some("TT"), NodeKind::Function),
+            node("TM", None, NodeKind::Module),
+            node("tp", Some("TM"), NodeKind::Package),
+            test_node("TU", "tp", NodeKind::Type),
+        ],
+        edges: vec![
+            edge("T", "TT", EdgeKind::TypeRef),
+            edge("TT", "T", EdgeKind::TypeRef),
+            edge("tf", "T", EdgeKind::TypeRef),
+            edge("f", "T", EdgeKind::TypeRef),
+            edge("TU", "T", EdgeKind::Extends),
+        ],
+    };
+
+    let kept = graph.without_tests();
+
+    let ids: Vec<_> = kept.nodes.iter().map(|n| n.id.as_str()).collect();
+    assert_eq!(ids, ["M", "p", "T", "f"]);
+    assert_eq!(kept.edges, vec![edge("f", "T", EdgeKind::TypeRef)]);
+}
+
+#[test]
+fn without_tests_leaves_a_graph_without_test_nodes_equal() {
+    let graph = two_modules();
+
+    assert_eq!(graph.without_tests(), graph);
+}
+
+#[test]
+fn a_view_edge_counts_the_aggregated_edges_by_kind_and_serializes_the_kinds_as_a_map() {
+    let view = two_modules().cut(&expanded(&[]));
+
+    let edge = &view.edges[0];
+    assert_eq!(edge.count, 2);
+    assert_eq!(
+        edge.kinds,
+        BTreeMap::from([(EdgeKind::Extends, 1), (EdgeKind::TypeRef, 1)])
+    );
+    assert_eq!(edge.kinds.values().sum::<usize>(), edge.count);
+    let json = serde_json::to_string(edge).unwrap();
+    assert_eq!(
+        json,
+        r#"{"from":"A","to":"B","count":2,"kinds":{"extends":1,"type_ref":1}}"#
+    );
+    assert_eq!(serde_json::from_str::<ViewEdge>(&json).unwrap(), *edge);
+}
+
+#[test]
+fn expandable_lists_the_visible_nodes_that_have_children_in_graph_order() {
+    let collapsed = two_modules().cut(&expanded(&[]));
+    assert_eq!(collapsed.expandable, vec!["A", "B"]);
+
+    let open = two_modules().cut(&expanded(&["A", "a"]));
+    assert_eq!(open.nodes, vec!["A", "a", "T1", "T2", "B"]);
+    assert_eq!(
+        open.expandable,
+        vec!["A", "a", "B"],
+        "the leaves T1 and T2 cannot open"
+    );
+}
