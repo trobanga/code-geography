@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <rect width="32" height="32" rx="5" fill="#ffffff"/>
+  <!-- an open container with one child -->
+  <rect x="3" y="4" width="16" height="15" rx="1.5" fill="#e8ecf3" stroke="#3b5b8a" stroke-width="2"/>
+  <rect x="7" y="9" width="8" height="6" rx="1" fill="#2f7a55"/>
+  <!-- a closed container -->
+  <rect x="19" y="21" width="10" height="8" rx="1.5" fill="#e8ecf3" stroke="#3b5b8a" stroke-width="2"/>
+  <!-- the edge between them, with a right angle -->
+  <path d="M11 15v10h5" fill="none" stroke="#c2410c" stroke-width="2.5" stroke-linejoin="miter"/>
+  <path d="M15 21.5l4.5 3.5-4.5 3.5z" fill="#c2410c"/>
+</svg>
