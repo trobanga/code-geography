@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Source } from '../lib/hash';
+  import OpenButtons from './OpenButtons.svelte';
   import { KIND_LETTER, kindColor } from '../lib/kinds';
   import { LEVELS, type Level, type NodeKind } from '../lib/types';
 
@@ -16,6 +17,7 @@
     onfit,
     onreset,
     onfile,
+    ondir,
   }: {
     /** null: a file opened from disk. */
     src: Source | null;
@@ -30,6 +32,7 @@
     onfit: () => void;
     onreset: () => void;
     onfile: (f: File) => void;
+    ondir: (files: File[]) => void;
   } = $props();
 
   const kinds: NodeKind[] = ['module', 'package', 'type', 'function'];
@@ -60,19 +63,7 @@
   </label>
   <button class={btn} onclick={onfit}>fit</button>
   <button class="{btn} disabled:opacity-40" disabled={!moved} onclick={onreset}>reset positions</button>
-  <label class="{btn} cursor-pointer">
-    open file
-    <input
-      type="file"
-      accept=".json,application/json"
-      class="hidden"
-      onchange={(e) => {
-        const f = e.currentTarget.files?.[0];
-        if (f) onfile(f);
-        e.currentTarget.value = '';
-      }}
-    />
-  </label>
+  <OpenButtons {btn} {onfile} {ondir} />
   <span class="text-[var(--muted)]">{busy ? 'layout…' : ''}</span>
   <div class="ml-auto flex items-center gap-3 text-[var(--muted)]">
     {#each kinds as k (k)}

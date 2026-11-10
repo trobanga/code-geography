@@ -72,3 +72,9 @@ export function decodeHash(hash: string): HashState {
   }
   return state;
 }
+
+/** The hash for a graph that replaces the current one: no source, nothing open, no focus; tests and edge options stay. */
+export function freshHash(hash: string): string {
+  const s = decodeHash(hash);
+  return encodeHash({ level: 'modules', tests: s.tests, open: [], edges: s.edges });
+}

@@ -5,6 +5,7 @@
   import Diagram from './components/Diagram.svelte';
   import EdgeBar from './components/EdgeBar.svelte';
   import FocusBar from './components/FocusBar.svelte';
+  import OpenButtons from './components/OpenButtons.svelte';
   import Toolbar from './components/Toolbar.svelte';
   import type { Offset } from './lib/drag';
   import { DEFAULT_EDGE_OPTIONS, edgePipeline, painted, type Drawn, type EdgeOptions } from './lib/edgeOptions';
@@ -13,18 +14,27 @@
   import { changedFiles } from './lib/files';
   import { focusActive, focusOn, NO_FOCUS, type Focus } from './lib/focus';
   import { buildTree, collapse, levelExpanded, splitByLevel, type Tree } from './lib/expansion';
-  import { decodeHash, encodeHash, type Source } from './lib/hash';
+  import { decodeHash, encodeHash, freshHash, type Source } from './lib/hash';
+  import { indexInWorker } from './lib/indexProject';
+  import { chooseInputs, inputError, summarize, type Summary } from './lib/project';
   import { runLayout, type Layout } from './lib/layout';
   import type { Graph, Level, View } from './lib/types';
-  import init, { Explorer } from './lib/wasm/cg_wasm.js';
+  import init, { Explorer, isInput } from './lib/wasm/cg_wasm.js';
 
   // An import that a use covers is a duplicate, so the view never counts it (ADR 13).
   const MERGE_IMPORTS = true;
 
   let error = $state<string | null>(null);
   let graph = $state.raw<Graph | null>(null);
-  /** null: a file opened from disk. */
+  /** null: a file or a directory opened from disk. */
   let src = $state<Source | null>('graph');
+  /** /graph.json is missing: show the start screen. */
+  let missing = $state(false);
+  /** What an opened directory gave; null for any other source. */
+  let project = $state.raw<Summary | null>(null);
+  /** Progress of opening a directory, e.g. "reading 307 files". */
+  let phase = $state<string | null>(null);
+  let openSeq = 0;
   let hasCommit = $state(false);
   let explorer = $state.raw<Explorer | null>(null);
   let tree = $state.raw<Tree | null>(null);
@@ -77,7 +87,7 @@
       : 0,
   );
 
-  async function load(text: string) {
+  async function load(text: string, hash = location.hash) {
     try {
       await init();
       const g = JSON.parse(text) as Graph;
@@ -88,7 +98,7 @@
       tree = buildTree(g.nodes);
       offsets = new Map();
       error = null;
-      applyHash(location.hash);
+      applyHash(hash);
     } catch (e) {
       error = `cannot load graph: ${e instanceof Error ? e.message : String(e)}`;
     }
@@ -107,13 +117,60 @@
   async function fetchSource(s: Source) {
     try {
       const r = await fetch(`/${s}.json`);
+      // The dev and preview servers answer a missing file with index.html.
+      if (s === 'graph' && !tree && (r.status === 404 || !r.headers.get('content-type')?.includes('json'))) {
+        missing = true;
+        return;
+      }
       if (!r.ok || !r.headers.get('content-type')?.includes('json')) throw new Error(`HTTP ${r.status}`);
       const text = await r.text();
       src = s;
       selected = null;
+      project = null;
       await load(text);
     } catch (e) {
       error = `cannot load /${s}.json: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  /** Replaces the graph by one opened from disk: nothing open, no focus, no selection. */
+  async function loadOpened(text: string, summary: Summary | null) {
+    const hash = freshHash(location.hash);
+    selected = null;
+    src = null;
+    project = summary;
+    await load(text, hash);
+    if (graph) missing = false;
+  }
+
+  /** Indexes the Java sources of a chosen directory in a worker (ADR 0015). Only inputs are read. */
+  async function openDirectory(files: File[]) {
+    const my = ++openSeq;
+    try {
+      await init();
+      const chosen = chooseInputs(files, (f) => f.webkitRelativePath || f.name, isInput);
+      const err = inputError(chosen);
+      if (err) {
+        error = err;
+        phase = null;
+        return;
+      }
+      const t0 = performance.now();
+      phase = `reading ${chosen.inputs.length} files of ${chosen.root}`;
+      const paths = chosen.inputs.map((i) => i.path);
+      const texts = await Promise.all(chosen.inputs.map((i) => i.file.text()));
+      if (my !== openSeq) return;
+      phase = `indexing ${chosen.inputs.length} files of ${chosen.root}`;
+      const r = await indexInWorker({ paths, texts, rootName: chosen.root });
+      if (my !== openSeq) return;
+      const g = JSON.parse(r.graphText) as Graph;
+      console.info(`indexed ${chosen.root}: ${g.nodes.length} nodes ${g.edges.length} edges ${Math.round(performance.now() - t0)} ms`);
+      phase = null;
+      await loadOpened(r.graphText, summarize(chosen.root, paths, g, r.report));
+    } catch (e) {
+      if (my !== openSeq) return;
+      phase = null;
+      error = `cannot index the directory: ${e instanceof Error ? e.message : String(e)}`;
     }
   }
 
@@ -226,12 +283,16 @@
     ontests={(v) => (tests = v)}
     onfit={() => diagram?.fit()}
     onreset={() => (offsets = new Map())}
-    onfile={(f) => {
-      selected = null;
-      src = null;
-      f.text().then(load);
-    }}
+    onfile={(f) => f.text().then((t) => loadOpened(t, null))}
+    ondir={openDirectory}
   />
+  {#if phase}
+    <div class="border-b border-[var(--line)] px-3 py-1 text-[var(--muted)]" data-phase>{phase}…</div>
+  {:else if project}
+    <div class="border-b border-[var(--line)] px-3 py-1 text-[var(--muted)]" title={project.tooltip} data-project>
+      {project.text}
+    </div>
+  {/if}
   <EdgeBar {opts} onchange={(patch) => Object.assign(opts, patch)} drawn={paintedCount} total={drawn?.total ?? 0} dropped={drawn?.dropped ?? 0} />
   {#if diff && totals}
     <CommitStrip
@@ -296,6 +357,20 @@
           setFocus(r.focus);
         }}
       />
+    {:else if missing}
+      <div class="flex flex-1 items-center justify-center">
+        <div class="flex max-w-md flex-col gap-3" data-start>
+          <p>No <code>graph.json</code> here. Open a project directory to index it in this browser (Java only for now), or open a graph file made by <code>cg index</code>.</p>
+          <p class="text-[var(--muted)]">Nothing is stored: a reload returns to this screen.</p>
+          <div class="flex gap-2">
+            <OpenButtons
+              btn="px-2 py-0.5 border border-[var(--line)] hover:border-[var(--muted)]"
+              onfile={(f) => f.text().then((t) => loadOpened(t, null))}
+              ondir={openDirectory}
+            />
+          </div>
+        </div>
+      </div>
     {:else}
       <div class="flex-1"></div>
     {/if}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_EDGE_OPTIONS } from './edgeOptions';
-import { decodeHash, encodeHash } from './hash';
+import { decodeHash, encodeHash, freshHash } from './hash';
 import { NO_FOCUS } from './focus';
 
 describe('hash', () => {
@@ -80,5 +80,17 @@ describe('hash', () => {
 
   it('accepts a hash with leading # and missing fields', () => {
     expect(decodeHash('#level=packages')).toEqual({ level: 'packages', tests: false, open: [], edges: DEFAULT_EDGE_OPTIONS });
+  });
+});
+
+describe('freshHash', () => {
+  it('drops source, level, open ids and focus of the old graph and keeps tests and edge options', () => {
+    const fresh = decodeHash(freshHash('#src=commit&level=types&tests=1&open=pkg::a&kinds=calls&focus=type:a.B'));
+    expect(fresh).toEqual({
+      level: 'modules',
+      tests: true,
+      open: [],
+      edges: { ...DEFAULT_EDGE_OPTIONS, kinds: { extends: false, implements: false, imports: false, type_ref: false, calls: true } },
+    });
   });
 });
