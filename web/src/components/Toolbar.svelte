@@ -10,6 +10,8 @@
     hasCommit,
     onsrc,
     level,
+    partial,
+    depth,
     tests,
     busy,
     moved,
@@ -25,6 +27,16 @@
     hasCommit: boolean;
     onsrc: (s: Source) => void;
     level: Level | null;
+    /** Between two levels: the deeper one whose containers are all open; extra containers are open too. */
+    partial: { level: Level; extra: number } | null;
+    depth: {
+      canDeeper: boolean;
+      canShallower: boolean;
+      /** "+" waits for a second click: the number of boxes it gives. */
+      ask: number | null;
+      ondeeper: () => void;
+      onshallower: () => void;
+    };
     tests: boolean;
     busy: boolean;
     moved: boolean;
@@ -53,10 +65,29 @@
   <div class="flex">
     {#each LEVELS as l (l)}
       <button
-        class="{btn} -ml-px first:ml-0 {level === l ? 'bg-[var(--fg)] text-[var(--bg)]' : ''}"
+        class="{btn} -ml-px first:ml-0 {level === l
+          ? 'bg-[var(--fg)] text-[var(--bg)]'
+          : partial?.level === l
+            ? 'bg-[var(--line)]'
+            : ''}"
+        title={partial?.level === l ? `${l} and ${partial.extra} more open containers` : undefined}
         onclick={() => onlevel(l)}>{l}</button
       >
     {/each}
+  </div>
+  <div class="flex items-center">
+    <button
+      class="{btn} disabled:opacity-40"
+      title="one layer less (-)"
+      disabled={!depth.canShallower}
+      onclick={depth.onshallower}>−</button
+    >
+    <button
+      class="{btn} -ml-px disabled:opacity-40 {depth.ask !== null ? 'border-[var(--accent)] text-[var(--accent)]' : ''}"
+      title={depth.ask !== null ? `click again to show ${depth.ask} boxes` : 'one layer more (+)'}
+      disabled={!depth.canDeeper}
+      onclick={depth.ondeeper}>{depth.ask !== null ? `+ ${depth.ask.toLocaleString('en')} boxes?` : '+'}</button
+    >
   </div>
   <label class="flex items-center gap-1">
     <input type="checkbox" checked={tests} onchange={(e) => ontests(e.currentTarget.checked)} />

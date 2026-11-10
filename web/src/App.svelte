@@ -13,7 +13,19 @@
   import { commitTotals, openChanged, pathToOpen } from './lib/commit';
   import { changedFiles } from './lib/files';
   import { focusActive, focusOn, NO_FOCUS, type Focus } from './lib/focus';
-  import { buildTree, collapse, levelExpanded, splitByLevel, type Tree } from './lib/expansion';
+  import {
+    buildTree,
+    collapse,
+    deeper,
+    levelExpanded,
+    mustConfirm,
+    splitByLevel,
+    stepBack,
+    stepForward,
+    type DepthStep,
+    type Tree,
+  } from './lib/expansion';
+  import { depthKey } from './lib/keys';
   import { decodeHash, encodeHash, freshHash, type Source } from './lib/hash';
   import { indexInWorker } from './lib/indexProject';
   import { inputError, summarize, type Summary } from './lib/project';
@@ -55,20 +67,39 @@
   let lastHash = '';
   let diagram: ReturnType<typeof Diagram> | undefined = $state();
 
-  const hashState = $derived(tree ? splitByLevel(tree, expanded) : null);
+  /**
+   * Nodes that the plain cut shows with every container open: without test code it drops the
+   * containers of test code only, which no level button and no "+" can make visible.
+   */
+  const shown = $derived.by(() => {
+    if (!explorer || !tree || tests) return undefined;
+    const all = JSON.parse(explorer.view([...tree.children.keys()], false, MERGE_IMPORTS)) as View;
+    return new Set(all.nodes);
+  });
+  const hashState = $derived(tree ? splitByLevel(tree, expanded, shown) : null);
   const activeLevel = $derived(hashState && hashState.open.length === 0 ? hashState.level : null);
+  const partialLevel = $derived(
+    hashState && hashState.open.length > 0 ? { level: hashState.level, extra: hashState.open.length } : null,
+  );
 
   // O4 is part of the WASM view.
   // Without a focus the plain cut; with one the focus cut of ADR 0011.
-  const view = $derived.by(() => {
-    if (!explorer || !tree) return null;
-    const ex = [...expanded];
+  function cut(ex: Explorer, open: ReadonlySet<string>): View {
     const f = focus;
+    const ids = [...open];
     const json = focusActive(f)
-      ? explorer.focusView(ex, tests, MERGE_IMPORTS, f.nodes, f.changes && graph?.diff != null, f.neighbors, f.unfolded)
-      : explorer.view(ex, tests, MERGE_IMPORTS);
+      ? ex.focusView(ids, tests, MERGE_IMPORTS, f.nodes, f.changes && graph?.diff != null, f.neighbors, f.unfolded)
+      : ex.view(ids, tests, MERGE_IMPORTS);
     return JSON.parse(json) as View;
-  });
+  }
+  const view = $derived(explorer && tree ? cut(explorer, expanded) : null);
+  /** What "+" would give; equal to `expanded` when nothing visible can open. */
+  const deeperSet = $derived(view ? deeper(view.expandable, expanded) : expanded);
+  /** "+" history, so that "−" right after it returns to the same set (see `stepBack`). */
+  let steps: DepthStep[] = [];
+  /** A "+" that waits for a second click, valid only for the set it was computed for. */
+  let asked = $state.raw<{ to: Set<string>; boxes: number } | null>(null);
+  const askBoxes = $derived(asked && asked.to === deeperSet ? asked.boxes : null);
   // O2 → O3.
   const drawn = $derived(view && tree ? edgePipeline(view.edges, tree, opts) : null);
   const diff = $derived(graph?.diff ?? null);
@@ -212,6 +243,37 @@
     fitNext = true;
   }
 
+  function stepDeeper() {
+    if (!explorer || deeperSet.size === expanded.size) return;
+    const next = deeperSet;
+    // The count comes from the WASM cut of the next set, not from a copy of the cut.
+    const boxes = askBoxes ?? cut(explorer, next).nodes.length;
+    if (mustConfirm(boxes, askBoxes !== null)) {
+      asked = { to: next, boxes };
+      return;
+    }
+    asked = null;
+    steps = stepForward(steps, expanded, next);
+    expanded = next;
+    fitNext = true;
+  }
+
+  function stepShallower() {
+    if (!tree || expanded.size === 0) return;
+    const r = stepBack(tree, steps, expanded);
+    steps = r.steps;
+    expanded = r.expanded;
+    fitNext = true;
+  }
+
+  function onKey(e: KeyboardEvent) {
+    const k = depthKey(e);
+    if (k === null) return;
+    e.preventDefault();
+    if (k === 'deeper') stepDeeper();
+    else stepShallower();
+  }
+
   function setFocus(f: Focus) {
     focus = f;
     fitNext = true;
@@ -290,6 +352,7 @@
 </script>
 
 <svelte:window
+  onkeydown={onKey}
   ondragenter={(e) => {
     if (carriesFiles(e)) dragDepth++;
   }}
@@ -314,6 +377,14 @@
 <div class="flex h-full flex-col">
   <Toolbar
     level={activeLevel}
+    partial={partialLevel}
+    depth={{
+      canDeeper: deeperSet.size > expanded.size,
+      canShallower: expanded.size > 0,
+      ask: askBoxes,
+      ondeeper: stepDeeper,
+      onshallower: stepShallower,
+    }}
     {tests}
     {busy}
     moved={offsets.size > 0}

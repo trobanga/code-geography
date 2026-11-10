@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildTree, collapse, drawable, levelExpanded, splitByLevel } from './expansion';
+import { BOX_LIMIT, buildTree, mustConfirm, collapse, deeper, drawable, shallower, stepBack, stepForward, levelExpanded, splitByLevel } from './expansion';
 import type { GraphNode } from './types';
 
 const nodes: GraphNode[] = [
@@ -37,6 +37,10 @@ describe('splitByLevel', () => {
   });
   it('falls back to modules when a level node was collapsed', () => {
     expect(splitByLevel(tree, new Set(['p1']))).toEqual({ level: 'modules', open: ['p1'] });
+  });
+  it('ignores level containers that the view does not show, e.g. ones with only test code', () => {
+    const shown = new Set(['m1', 'm2', 'p1', 't1', 't1i', 'f1', 'f2']);
+    expect(splitByLevel(tree, new Set(['m1', 'p1']), shown)).toEqual({ level: 'types', open: [] });
   });
   it('round-trips with levelExpanded', () => {
     const expanded = new Set([...levelExpanded(tree, 'packages'), 't1']);
@@ -87,5 +91,56 @@ describe('drawable with a placeholder of the focus cut', () => {
     expect(drawable(tree, { from: 'm1', to: 'rest:p1' })).toBe(false);
     expect(drawable(tree, { from: 'rest:p1', to: 't2' })).toBe(true);
     expect(drawable(tree, { from: 'rest:p1', to: 'rest:p2' })).toBe(true);
+  });
+});
+
+describe('deeper', () => {
+  it('opens every visible closed container of the view, skips placeholders', () => {
+    expect(sorted(deeper(['p1', 'p2', 'rest:m1'], new Set(['m1'])))).toEqual(['m1', 'p1', 'p2']);
+  });
+});
+
+describe('shallower', () => {
+  it('closes every open container without an open descendant', () => {
+    expect(sorted(shallower(tree, new Set(['m1', 'p1', 't1', 'p2', 'm2'])))).toEqual(['m1', 'p1']);
+  });
+  it('drops open ids below a closed container, which the cut does not show', () => {
+    expect(sorted(shallower(tree, new Set(['m1', 't1'])))).toEqual([]);
+  });
+});
+
+describe('stepBack', () => {
+  it('undoes the last "+" while the state is what it gave, which the leaf rule cannot', () => {
+    const before = new Set(['m1', 'p2']);
+    const after = deeper(['m1', 'p1', 'p2'], before);
+    expect(sorted(shallower(tree, after))).toEqual(['m1']);
+    const r = stepBack(tree, [{ before, after }], after);
+    expect(sorted(r.expanded)).toEqual(['m1', 'p2']);
+    expect(r.steps).toEqual([]);
+  });
+  it('drops a stale history and uses the leaf rule', () => {
+    const step = { before: new Set(['m1']), after: new Set(['m1', 'p1']) };
+    const r = stepBack(tree, [step], new Set(['m1', 'p2']));
+    expect(sorted(r.expanded)).toEqual(['m1']);
+    expect(r.steps).toEqual([]);
+  });
+});
+
+describe('stepForward', () => {
+  it('pushes the step onto a history that ends at its start, else starts a new one', () => {
+    const a = new Set<string>();
+    const b = new Set(['m1']);
+    const c = new Set(['m1', 'p1', 'p2']);
+    const one = stepForward([], a, b);
+    expect(stepForward(one, b, c)).toEqual([{ before: a, after: b }, { before: b, after: c }]);
+    expect(stepForward(one, new Set(['m2']), c)).toEqual([{ before: new Set(['m2']), after: c }]);
+  });
+});
+
+describe('mustConfirm', () => {
+  it('asks above the box limit unless the same step was asked already', () => {
+    expect(mustConfirm(BOX_LIMIT, false)).toBe(false);
+    expect(mustConfirm(BOX_LIMIT + 1, false)).toBe(true);
+    expect(mustConfirm(BOX_LIMIT + 1, true)).toBe(false);
   });
 });

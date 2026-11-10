@@ -69,12 +69,20 @@ export function collapse(tree: Tree, expanded: ReadonlySet<string>, id: string):
   return out;
 }
 
-/** Deepest level whose expanded set is contained in `expanded`, and the ids beyond it. */
-export function splitByLevel(tree: Tree, expanded: ReadonlySet<string>): { level: Level; open: string[] } {
+/**
+ * Deepest level whose expanded set is contained in `expanded`, and the ids beyond it. With
+ * `shown`, the nodes that the view can show (from the WASM cut), a level container that the view
+ * never shows, such as a package of test code only, does not count.
+ */
+export function splitByLevel(
+  tree: Tree,
+  expanded: ReadonlySet<string>,
+  shown?: ReadonlySet<string>,
+): { level: Level; open: string[] } {
   let best: { level: Level; base: Set<string> } = { level: 'modules', base: new Set() };
   for (const level of LEVELS) {
     const base = levelExpanded(tree, level);
-    if ([...base].every((id) => expanded.has(id))) best = { level, base };
+    if ([...base].every((id) => expanded.has(id) || (shown !== undefined && !shown.has(id)))) best = { level, base };
   }
   return { level: best.level, open: [...expanded].filter((id) => !best.base.has(id)) };
 }
@@ -101,4 +109,66 @@ export function isAncestor(tree: Tree, anc: string, id: string): boolean {
 /** An edge can be drawn when its ends differ and neither contains the other (ADR 0006). */
 export function drawable(tree: Tree, e: { from: string; to: string }): boolean {
   return e.from !== e.to && !isAncestor(tree, e.from, e.to) && !isAncestor(tree, e.to, e.from);
+}
+
+/**
+ * One layer deeper: every container that the view shows closed and that can open. Takes the
+ * view's `expandable`, so that the cut stays in WASM and a focus cut opens only what it shows.
+ */
+export function deeper(expandable: readonly string[], expanded: ReadonlySet<string>): Set<string> {
+  const out = new Set(expanded);
+  for (const id of expandable) if (!id.startsWith(REST)) out.add(id);
+  return out;
+}
+
+/**
+ * One layer less: closes every open container that has no open descendant. Open ids below a
+ * closed container are not shown by the cut and are dropped first, so each step changes the view.
+ */
+export function shallower(tree: Tree, expanded: ReadonlySet<string>): Set<string> {
+  const parent = (id: string) => tree.byId.get(id)?.parent ?? null;
+  const reached = (id: string) => {
+    for (let p = parent(id); p !== null; p = parent(p)) if (!expanded.has(p)) return false;
+    return true;
+  };
+  const open = [...expanded].filter(reached);
+  const inner = new Set(open.map(parent).filter((p) => p !== null));
+  return new Set(open.filter((id) => inner.has(id)));
+}
+
+/** A "+" step: the expanded set before it and the one it gave. */
+export interface DepthStep {
+  before: ReadonlySet<string>;
+  after: ReadonlySet<string>;
+}
+
+const sameSet = (a: ReadonlySet<string>, b: ReadonlySet<string>) => a.size === b.size && [...a].every((x) => b.has(x));
+
+/**
+ * "−": undoes the last "+" when the expanded set is still the one it gave. Otherwise the
+ * history is stale and dropped, and the leaf rule of `shallower` applies.
+ */
+export function stepBack(
+  tree: Tree,
+  steps: readonly DepthStep[],
+  expanded: ReadonlySet<string>,
+): { expanded: Set<string>; steps: DepthStep[] } {
+  const last = steps.at(-1);
+  if (last && sameSet(last.after, expanded)) return { expanded: new Set(last.before), steps: steps.slice(0, -1) };
+  return { expanded: shallower(tree, expanded), steps: [] };
+}
+
+/** Records a "+" step. A history that does not end at its start is stale and dropped. */
+export function stepForward(steps: readonly DepthStep[], before: ReadonlySet<string>, after: ReadonlySet<string>): DepthStep[] {
+  const last = steps.at(-1);
+  const kept = last && sameSet(last.after, before) ? steps : [];
+  return [...kept, { before, after }];
+}
+
+/** Above this many visible boxes "+" asks first: the layout of 892 boxes takes about 2 s. */
+export const BOX_LIMIT = 1500;
+
+/** "+" to `boxes` visible boxes waits for a second "+" above the limit. */
+export function mustConfirm(boxes: number, asked: boolean): boolean {
+  return boxes > BOX_LIMIT && !asked;
 }
