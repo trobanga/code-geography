@@ -10,6 +10,8 @@ fn node(id: &str, parent: Option<&str>, kind: NodeKind) -> Node {
         file: None,
         span: None,
         test: false,
+        hash: None,
+        change: None,
     }
 }
 
@@ -18,6 +20,7 @@ fn edge(from: &str, to: &str, kind: EdgeKind) -> Edge {
         from: from.into(),
         to: to.into(),
         kind,
+        change: None,
     }
 }
 
@@ -27,6 +30,8 @@ fn view_edge(from: &str, to: &str, kinds: &[(EdgeKind, usize)]) -> ViewEdge {
         to: to.into(),
         count: kinds.iter().map(|(_, n)| n).sum(),
         kinds: kinds.iter().copied().collect(),
+        added: 0,
+        removed: 0,
     }
 }
 
@@ -47,6 +52,7 @@ fn two_modules() -> Graph {
             edge("T2", "U", EdgeKind::TypeRef),
             edge("T1", "T2", EdgeKind::TypeRef),
         ],
+        ..Graph::default()
     }
 }
 
@@ -147,6 +153,7 @@ fn without_tests_drops_test_nodes_their_descendants_their_edges_and_emptied_cont
             edge("f", "T", EdgeKind::TypeRef),
             edge("TU", "T", EdgeKind::Extends),
         ],
+        ..Graph::default()
     };
 
     let kept = graph.without_tests();
@@ -177,7 +184,7 @@ fn a_view_edge_counts_the_aggregated_edges_by_kind_and_serializes_the_kinds_as_a
     let json = serde_json::to_string(edge).unwrap();
     assert_eq!(
         json,
-        r#"{"from":"A","to":"B","count":2,"kinds":{"extends":1,"type_ref":1}}"#
+        r#"{"from":"A","to":"B","count":2,"kinds":{"extends":1,"type_ref":1},"added":0,"removed":0}"#
     );
     assert_eq!(serde_json::from_str::<ViewEdge>(&json).unwrap(), *edge);
 }
@@ -214,6 +221,7 @@ fn an_import_is_redundant_when_the_importer_or_a_descendant_uses_the_type() {
             edge("ViaInner", "Used", EdgeKind::Imports),
             edge("ViaInner", "Used.Inner", EdgeKind::Extends),
         ],
+        ..Graph::default()
     };
 
     let merged = graph.without_redundant_imports();

@@ -138,6 +138,8 @@ pub fn index(root: &Path) -> io::Result<Graph> {
                 file: None,
                 span: None,
                 test: false,
+                hash: None,
+                change: None,
             });
         }
         let package_id = match &module {
@@ -153,6 +155,8 @@ pub fn index(root: &Path) -> io::Result<Graph> {
                 file: None,
                 span: None,
                 test: false,
+                hash: None,
+                change: None,
             });
         }
 
@@ -160,6 +164,7 @@ pub fn index(root: &Path) -> io::Result<Graph> {
         let is_test = in_test_sources(&file);
         for decl in declarations(tree.root_node(), &source, &package) {
             graph.nodes.push(Node {
+                hash: Some(own_hash(decl.node, &source)),
                 id: decl.id,
                 parent: Some(decl.parent.unwrap_or_else(|| package_id.clone())),
                 kind: decl.kind,
@@ -167,6 +172,7 @@ pub fn index(root: &Path) -> io::Result<Graph> {
                 file: Some(file.clone()),
                 span: Some(span_of(decl.node)),
                 test: is_test,
+                change: None,
             });
         }
         units.push(Unit {
@@ -191,6 +197,7 @@ pub fn index(root: &Path) -> io::Result<Graph> {
                     from: from.to_string(),
                     to,
                     kind,
+                    change: None,
                 });
             }
         };
@@ -495,6 +502,30 @@ fn in_test_sources(file: &str) -> bool {
     let dirs: Vec<&str> = file.split('/').collect();
     let dirs = &dirs[..dirs.len() - 1];
     dirs.windows(2).any(|w| w[0] == "src" && w[1] != "main")
+}
+
+/// FNV-1a over the own source text of a declaration: the text without the byte
+/// ranges of the member functions and member types, which are nodes themselves.
+/// Each run of whitespace counts as one space, and leading and trailing whitespace
+/// does not count. Written by hand because `DefaultHasher` is not stable across
+/// Rust versions.
+fn own_hash(declaration: Ts, source: &str) -> String {
+    let mut own = String::new();
+    let mut position = declaration.start_byte();
+    for member in members(declaration) {
+        if is_type_declaration(member) || is_function_declaration(member) {
+            own.push_str(&source[position..member.start_byte()]);
+            position = member.end_byte();
+        }
+    }
+    own.push_str(&source[position..declaration.end_byte()]);
+    let normalized = own.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in normalized.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}")
 }
 
 /// The lines of a declaration: 1-based, inclusive.

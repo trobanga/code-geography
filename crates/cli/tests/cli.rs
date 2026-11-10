@@ -32,3 +32,13 @@ fn index_writes_a_graph_file_that_core_reads_again() {
     );
     assert!(graph.has_edge("type:a.Sub", "type:a.Base", EdgeKind::Extends));
 }
+
+#[test]
+fn the_usage_text_names_both_commands() {
+    let output = Command::new(env!("CARGO_BIN_EXE_cg")).output().unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("cg index <repo>"), "{stderr}");
+    assert!(stderr.contains("cg diff <repo> <rev>"), "{stderr}");
+}

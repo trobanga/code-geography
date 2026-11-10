@@ -7,6 +7,4 @@ edition = "2024"
 cg-core = { version = "0.1.0", path = "../core" }
 cg-index-java = { version = "0.1.0", path = "../index-java" }
 serde_json = "1.0.154"
-
-[dev-dependencies]
 tempfile = "3.27.0"

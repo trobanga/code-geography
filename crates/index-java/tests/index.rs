@@ -618,3 +618,67 @@ fn hidden_directories_and_build_output_are_not_indexed() {
     assert_eq!(types.len(), 1);
     assert_eq!(types[0].file.as_deref(), Some("src/a/Foo.java"));
 }
+
+fn hash_of(g: &Graph, id: &str) -> Option<String> {
+    g.node(id)
+        .unwrap_or_else(|| panic!("no node {id}"))
+        .hash
+        .clone()
+}
+
+const TWO_METHODS: &str =
+    "package a;\nclass Foo {\n    int one() { return 1; }\n    int two() { return 2; }\n}\n";
+
+#[test]
+fn a_changed_method_body_changes_the_hash_of_that_function_only() {
+    let before = index(repo(&[("a/Foo.java", TWO_METHODS)]).path()).unwrap();
+    let changed = TWO_METHODS.replace("return 1;", "return 11;");
+    let after = index(repo(&[("a/Foo.java", &changed)]).path()).unwrap();
+
+    let one = "fn:a.Foo#one()";
+    assert!(hash_of(&before, one).is_some());
+    assert_ne!(hash_of(&before, one), hash_of(&after, one));
+    assert_eq!(
+        hash_of(&before, "fn:a.Foo#two()"),
+        hash_of(&after, "fn:a.Foo#two()")
+    );
+    assert_eq!(
+        hash_of(&before, "type:a.Foo"),
+        hash_of(&after, "type:a.Foo")
+    );
+}
+
+#[test]
+fn a_new_field_changes_the_hash_of_the_type_and_not_of_its_methods() {
+    let before = index(repo(&[("a/Foo.java", TWO_METHODS)]).path()).unwrap();
+    let changed = TWO_METHODS.replace("class Foo {\n", "class Foo {\n    int field;\n");
+    let after = index(repo(&[("a/Foo.java", &changed)]).path()).unwrap();
+
+    assert_ne!(
+        hash_of(&before, "type:a.Foo"),
+        hash_of(&after, "type:a.Foo")
+    );
+    for method in ["fn:a.Foo#one()", "fn:a.Foo#two()"] {
+        assert_eq!(hash_of(&before, method), hash_of(&after, method));
+    }
+}
+
+#[test]
+fn whitespace_and_position_do_not_change_any_hash() {
+    let before = index(repo(&[("a/Foo.java", TWO_METHODS)]).path()).unwrap();
+    let reformatted = "\n\n\npackage a;\n\n\nclass   Foo {\n\n        int one() {\n            return 1;\n        }\n\n\n\tint two() { return 2; }\n}\n";
+    let after = index(repo(&[("a/Foo.java", reformatted)]).path()).unwrap();
+
+    for id in ["type:a.Foo", "fn:a.Foo#one()", "fn:a.Foo#two()"] {
+        assert_eq!(hash_of(&before, id), hash_of(&after, id), "{id}");
+    }
+    assert_eq!(
+        before
+            .node("type:a.Foo")
+            .unwrap()
+            .hash
+            .as_deref()
+            .map(str::len),
+        Some(16)
+    );
+}

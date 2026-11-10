@@ -1,4 +1,4 @@
-use cg_core::{Edge, EdgeKind, Graph, Node, NodeKind, View};
+use cg_core::{Change, Edge, EdgeKind, Graph, Node, NodeKind, View};
 use cg_wasm::Explorer;
 
 fn node(id: &str, parent: Option<&str>, kind: NodeKind, test: bool) -> Node {
@@ -10,6 +10,8 @@ fn node(id: &str, parent: Option<&str>, kind: NodeKind, test: bool) -> Node {
         file: None,
         span: None,
         test,
+        hash: None,
+        change: None,
     }
 }
 
@@ -31,13 +33,16 @@ fn graph_json() -> String {
                 from: "TT".into(),
                 to: "T".into(),
                 kind: EdgeKind::Imports,
+                change: None,
             },
             Edge {
                 from: "TT".into(),
                 to: "T".into(),
                 kind: EdgeKind::TypeRef,
+                change: None,
             },
         ],
+        ..Graph::default()
     };
     serde_json::to_string(&graph).unwrap()
 }
@@ -79,4 +84,54 @@ fn merge_imports_leaves_out_the_imports_that_a_use_covers() {
 
     assert_eq!(merged.edges[0].count, 1);
     assert_eq!(merged.edges[0].kinds.get(&EdgeKind::TypeRef), Some(&1));
+}
+
+#[test]
+fn the_marks_of_a_diff_graph_reach_the_view_in_each_variant() {
+    let marked = |id: &str, parent: Option<&str>, kind, test, change| Node {
+        change: Some(change),
+        ..node(id, parent, kind, test)
+    };
+    let graph = Graph {
+        nodes: vec![
+            node("M", None, NodeKind::Module, false),
+            node("p", Some("M"), NodeKind::Package, false),
+            marked("T", Some("p"), NodeKind::Type, false, Change::Added),
+            marked("TT", Some("p"), NodeKind::Type, true, Change::Modified),
+            node("U", Some("p"), NodeKind::Type, false),
+        ],
+        edges: vec![
+            Edge {
+                from: "T".into(),
+                to: "U".into(),
+                kind: EdgeKind::Imports,
+                change: Some(Change::Added),
+            },
+            Edge {
+                from: "T".into(),
+                to: "U".into(),
+                kind: EdgeKind::TypeRef,
+                change: Some(Change::Removed),
+            },
+        ],
+        ..Graph::default()
+    };
+    let explorer = Explorer::from_json(&serde_json::to_string(&graph).unwrap()).unwrap();
+    let expanded = ["M".to_string(), "p".to_string()];
+
+    let with_tests: View =
+        serde_json::from_str(&explorer.view_json(&expanded, true, false)).unwrap();
+    assert_eq!(with_tests.changes["M"].added, 1);
+    assert_eq!(with_tests.changes["M"].modified, 1);
+    assert_eq!(
+        (with_tests.edges[0].added, with_tests.edges[0].removed),
+        (1, 1)
+    );
+
+    let without: View = serde_json::from_str(&explorer.view_json(&expanded, false, false)).unwrap();
+    assert_eq!(without.changes["M"].modified, 0);
+    assert_eq!(without.changes["T"].added, 1);
+
+    let merged: View = serde_json::from_str(&explorer.view_json(&expanded, false, true)).unwrap();
+    assert_eq!((merged.edges[0].count, merged.edges[0].removed), (1, 1));
 }
