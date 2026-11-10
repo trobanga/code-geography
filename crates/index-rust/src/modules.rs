@@ -2,7 +2,7 @@
 //! the tree is found by following `mod x;` from the root of a target.
 
 use crate::syntax::{attribute_items, attribute_path, attributes, is_test_item, named_children};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use tree_sitter::{Node as Ts, Tree};
 
 /// A parsed `.rs` file.
@@ -21,6 +21,9 @@ pub struct ModInfo<'t> {
     /// has a node of its own. The root with no node has an empty path.
     pub path: Vec<String>,
     pub parent: Option<usize>,
+    /// The mods whose `mod name;` or `mod name { }` declares this one, with the name used
+    /// there: the parent, and for a mod that several test targets share, each target.
+    pub declared_in: Vec<(usize, String)>,
     /// The file that holds the declarations of the mod.
     pub file: &'t str,
     pub source: &'t str,
@@ -31,6 +34,14 @@ pub struct ModInfo<'t> {
     pub has_node: bool,
     /// The mod is test code, see `Root::test`.
     pub test: bool,
+}
+
+impl ModInfo<'_> {
+    /// The mod whose scope `super` and `crate` start from: the parent, else the first mod
+    /// that declares this one.
+    pub fn outer(&self) -> Option<usize> {
+        self.parent.or(self.declared_in.first().map(|d| d.0))
+    }
 }
 
 /// The mods that follow from the root files, and the files that no `mod` reached.
@@ -52,7 +63,12 @@ pub struct Root<'t> {
     pub test: bool,
 }
 
-pub fn build<'t>(parsed: &'t HashMap<&'t str, Parsed<'t>>, roots: &[Root<'t>]) -> Mods<'t> {
+/// `package_dirs[p]` is the directory of package `p`.
+pub fn build<'t>(
+    parsed: &'t HashMap<&'t str, Parsed<'t>>,
+    roots: &[Root<'t>],
+    package_dirs: &[&str],
+) -> Mods<'t> {
     let mut builder = Builder {
         parsed,
         mods: Vec::new(),
@@ -73,11 +89,136 @@ pub fn build<'t>(parsed: &'t HashMap<&'t str, Parsed<'t>>, roots: &[Root<'t>]) -
         };
         builder.add_file(place, file, &dir);
     }
-    Mods {
-        mods: builder.mods,
-        reached: builder.reached,
-        path_attributes: builder.path_attributes,
+    let mut path_attributes = Vec::new();
+    for place in builder.path_attributes {
+        if !path_attributes.contains(&place) {
+            path_attributes.push(place);
+        }
     }
+    Mods {
+        mods: share(builder.mods, package_dirs),
+        reached: builder.reached,
+        path_attributes,
+    }
+}
+
+/// Cargo compiles a file that several test targets declare as a mod once per target, but
+/// it is one file: it becomes one mod below the module, named by its path in the package
+/// (`tests/common`), and each target that declares it finds it there. A mod below a
+/// target of `src/` is never shared. The `crate` and `super` paths of a shared mod are
+/// read from the first target that declares it.
+fn share<'t>(mods: Vec<ModInfo<'t>>, package_dirs: &[&str]) -> Vec<ModInfo<'t>> {
+    let root_of = |mut index: usize| {
+        while let Some(parent) = mods[index].parent {
+            index = parent;
+        }
+        index
+    };
+    // A file that is a target of its own is the root of that target, never a shared mod.
+    let root_files: HashSet<&str> = mods
+        .iter()
+        .filter(|m| m.parent.is_none())
+        .map(|m| m.file)
+        .collect();
+    let mut groups: HashMap<(usize, &str), Vec<usize>> = HashMap::new();
+    for (index, m) in mods.iter().enumerate() {
+        if let Some(parent) = m.parent
+            && mods[parent].file != m.file
+            && !root_files.contains(m.file)
+            && mods[root_of(index)].test
+        {
+            groups.entry((m.package, m.file)).or_default().push(index);
+        }
+    }
+    let mut shared = vec![false; mods.len()];
+    let mut duplicate = vec![false; mods.len()];
+    let mut copies: HashMap<usize, Vec<usize>> = HashMap::new();
+    for members in groups.values() {
+        let roots: BTreeSet<usize> = members.iter().map(|m| root_of(*m)).collect();
+        if roots.len() > 1 {
+            shared[members[0]] = true;
+            copies.insert(members[0], members[1..].to_vec());
+            for copy in &members[1..] {
+                duplicate[*copy] = true;
+            }
+        }
+    }
+    // A parent comes before its children, so one run in order sees the parent first.
+    let mut dropped = vec![false; mods.len()];
+    let mut inside = vec![false; mods.len()];
+    for (index, m) in mods.iter().enumerate() {
+        if let Some(parent) = m.parent {
+            dropped[index] = duplicate[index] || dropped[parent];
+            inside[index] = shared[index] || inside[parent];
+        }
+    }
+    let new_index: Vec<Option<usize>> = {
+        let mut next = 0;
+        dropped
+            .iter()
+            .map(|gone| {
+                (!gone).then(|| {
+                    next += 1;
+                    next - 1
+                })
+            })
+            .collect()
+    };
+    let mut declared: Vec<Vec<(usize, String)>> = mods
+        .iter()
+        .map(|m| {
+            m.declared_in
+                .iter()
+                .filter(|(p, _)| !dropped[*p])
+                .cloned()
+                .collect()
+        })
+        .collect();
+    for (canonical, copies) in &copies {
+        for copy in copies {
+            let more = declared[*copy].clone();
+            declared[*canonical].extend(more);
+        }
+    }
+    let mut kept: Vec<ModInfo<'t>> = Vec::new();
+    for (index, mut m) in mods.into_iter().enumerate() {
+        if dropped[index] {
+            continue;
+        }
+        let below_shared = m.parent.is_some_and(|p| inside[p]);
+        if shared[index] && !below_shared {
+            m.path = vec![file_path(&m, package_dirs[m.package])];
+            m.name = m.path[0].clone();
+            m.parent = None;
+        } else if inside[index] {
+            let outer = &kept[new_index[m.parent.unwrap_or(0)].unwrap_or(0)];
+            m.path = outer.path.iter().cloned().chain([m.name.clone()]).collect();
+        }
+        m.parent = m.parent.and_then(|p| new_index[p]);
+        m.declared_in = {
+            let mut list: Vec<(usize, String)> = Vec::new();
+            for (p, name) in declared[index].drain(..) {
+                let entry = (new_index[p].unwrap_or(0), name);
+                if !list.contains(&entry) {
+                    list.push(entry);
+                }
+            }
+            list
+        };
+        kept.push(m);
+    }
+    kept
+}
+
+/// The path of the file of a mod in its package, without `.rs` and without `/mod`:
+/// `tests/common` for `tests/common/mod.rs` and for `tests/common.rs`.
+fn file_path(m: &ModInfo, package_dir: &str) -> String {
+    let path = m
+        .file
+        .strip_prefix(package_dir)
+        .map_or(m.file, |rest| rest.trim_start_matches('/'));
+    let path = path.strip_suffix(".rs").unwrap_or(path);
+    path.strip_suffix("/mod").unwrap_or(path).to_string()
 }
 
 /// Where a mod sits and what it is called.
@@ -115,6 +256,11 @@ impl<'t> Builder<'t> {
     ) -> usize {
         let id = self.mods.len();
         self.mods.push(ModInfo {
+            declared_in: place
+                .parent
+                .map(|parent| (parent, place.name.clone()))
+                .into_iter()
+                .collect(),
             package: place.package,
             name: place.name,
             has_node: !place.path.is_empty(),

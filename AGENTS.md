@@ -12,7 +12,7 @@ model. Record each new decision of that weight as a new ADR.
 | Term | Meaning |
 |---|---|
 | graph | Nodes in a tree (`parent`) plus edges between any two nodes. |
-| fact level | A node kind that comes from the language or build system: `module` (unit of build: Maven module, Cargo package), `package` (namespace: Java package, Rust `mod`), `type`, `function`. |
+| fact level | A node kind that comes from the language or build system: `module` (unit of build: Maven module, Cargo package), `package` (namespace: Java package, Rust `mod`; nests in both languages, ADR 0018), `type`, `function`. |
 | group | A container that does not come from the language (directory or AI). Not built yet. |
 | edge | A dependency that the indexer can prove from the source: `extends`, `implements`, `imports`, `type_ref`, `calls` (ADR 0014). |
 | cut | The set of visible nodes for a given set of expanded containers, with each edge moved to the nearest visible ancestors of its ends. |

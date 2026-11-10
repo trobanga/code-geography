@@ -285,3 +285,40 @@ fn one_unmarked() -> Graph {
         ..Graph::default()
     }
 }
+
+#[test]
+fn a_package_without_a_hash_is_never_modified_but_added_or_removed_with_its_id() {
+    let package = |id: &str, parent: &str| node(id, Some(parent), NodeKind::Package);
+    let before = Graph {
+        nodes: vec![
+            node("m", None, NodeKind::Module),
+            package("p.q", "m"),
+            package("p.q.x", "p.q"),
+            hashed("T", "p.q.x", NodeKind::Type, "1"),
+        ],
+        ..Graph::default()
+    };
+    // `p.q` goes, `p.r` comes, `p.q.x` moves to the module and keeps its id.
+    let after = Graph {
+        nodes: vec![
+            node("m", None, NodeKind::Module),
+            package("p.r", "m"),
+            package("p.q.x", "m"),
+            hashed("T", "p.q.x", NodeKind::Type, "1"),
+        ],
+        ..Graph::default()
+    };
+
+    let union = diff(&before, &after);
+
+    assert_eq!(
+        changes(&union),
+        [
+            ("m", None),
+            ("p.r", Some(Change::Added)),
+            ("p.q.x", None),
+            ("T", None),
+            ("p.q", Some(Change::Removed)),
+        ]
+    );
+}

@@ -3,14 +3,20 @@ import { LEVELS, type GraphNode, type Level, type NodeKind } from './types';
 export interface Tree {
   byId: Map<string, GraphNode>;
   children: Map<string, string[]>;
-  /** Display label: the name, for packages without the dot-prefix shared by all packages. */
+  /** Display label: the name; a top-level package loses the dot-prefix that all top-level packages share. */
   label: Map<string, string>;
 }
 
-function sharedPackagePrefix(nodes: GraphNode[]): string[] {
+/** A package that is not inside another package. A nested package has a name relative to its parent. */
+function topPackages(nodes: GraphNode[]): Set<string> {
+  const packages = new Set(nodes.filter((n) => n.kind === 'package').map((n) => n.id));
+  return new Set(nodes.filter((n) => packages.has(n.id) && !(n.parent !== null && packages.has(n.parent))).map((n) => n.id));
+}
+
+function sharedPackagePrefix(nodes: GraphNode[], top: Set<string>): string[] {
   let prefix: string[] | null = null;
   for (const n of nodes) {
-    if (n.kind !== 'package') continue;
+    if (!top.has(n.id)) continue;
     const segs = n.name.split('.');
     if (prefix === null) prefix = segs;
     else {
@@ -26,9 +32,10 @@ export function buildTree(nodes: GraphNode[]): Tree {
   const byId = new Map<string, GraphNode>();
   const children = new Map<string, string[]>();
   const label = new Map<string, string>();
-  const prefix = sharedPackagePrefix(nodes);
+  const top = topPackages(nodes);
+  const prefix = sharedPackagePrefix(nodes, top);
   for (const n of nodes) {
-    const rest = n.kind === 'package' ? n.name.split('.').slice(prefix.length).join('.') : '';
+    const rest = top.has(n.id) ? n.name.split('.').slice(prefix.length).join('.') : '';
     label.set(n.id, rest || n.name);
     byId.set(n.id, n);
     if (n.parent !== null) {

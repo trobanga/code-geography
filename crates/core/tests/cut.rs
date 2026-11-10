@@ -236,3 +236,35 @@ fn an_import_is_redundant_when_the_importer_or_a_descendant_uses_the_type() {
         ]
     );
 }
+
+/// Module `M`, package `u` that holds `T2` and has the child package `u.f` with `T1`;
+/// `T1` uses `T2`.
+fn nested_packages() -> Graph {
+    Graph {
+        nodes: vec![
+            node("M", None, NodeKind::Module),
+            node("u", Some("M"), NodeKind::Package),
+            node("u.f", Some("u"), NodeKind::Package),
+            node("T1", Some("u.f"), NodeKind::Type),
+            node("T2", Some("u"), NodeKind::Type),
+        ],
+        edges: vec![edge("T1", "T2", EdgeKind::TypeRef)],
+        ..Graph::default()
+    }
+}
+
+#[test]
+fn an_edge_from_a_nested_package_to_its_parent_package_shows_only_while_both_ends_are_visible() {
+    let g = nested_packages();
+    let kinds = [(EdgeKind::TypeRef, 1)];
+
+    // Both ends sit in `u`: the edge is inside one box.
+    assert!(g.cut(&expanded(&[])).edges.is_empty());
+    assert!(g.cut(&expanded(&["M"])).edges.is_empty());
+    // `T2` and the closed `u.f` are siblings.
+    let view = g.cut(&expanded(&["M", "u"]));
+    assert_eq!(view.edges, [view_edge("u.f", "T2", &kinds)]);
+    // Then the edge runs between the types.
+    let view = g.cut(&expanded(&["M", "u", "u.f"]));
+    assert_eq!(view.edges, [view_edge("T1", "T2", &kinds)]);
+}

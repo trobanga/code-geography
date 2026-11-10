@@ -85,10 +85,10 @@ impl<'a, 't> World<'a, 't> {
     ) -> Self {
         let mut scopes: Vec<Scope> = mods.iter().map(|_| Scope::default()).collect();
         for (index, m) in mods.iter().enumerate() {
-            if let Some(parent) = m.parent {
-                scopes[parent]
+            for (parent, name) in &m.declared_in {
+                scopes[*parent]
                     .types
-                    .insert(m.name.clone(), Entity::Mod(index));
+                    .insert(name.clone(), Entity::Mod(index));
             }
         }
         for (index, decl) in decls.iter().enumerate() {
@@ -178,7 +178,7 @@ impl<'a, 't> World<'a, 't> {
         let start = match head {
             "crate" => Some((Entity::Mod(self.root_of(module)), 1)),
             "self" => Some((Entity::Mod(module), 1)),
-            "super" => Some((Entity::Mod(self.mods[module].parent.unwrap_or(module)), 1)),
+            "super" => Some((Entity::Mod(self.mods[module].outer().unwrap_or(module)), 1)),
             _ => None,
         };
         if let Some((entity, consumed)) = start {
@@ -220,7 +220,7 @@ impl<'a, 't> World<'a, 't> {
             };
             let segment = segments[consumed];
             entity = match segment {
-                "super" => Entity::Mod(self.mods[module].parent.unwrap_or(module)),
+                "super" => Entity::Mod(self.mods[module].outer().unwrap_or(module)),
                 "self" => entity,
                 _ => {
                     let want = if consumed + 1 == segments.len() {
@@ -241,7 +241,7 @@ impl<'a, 't> World<'a, 't> {
     }
 
     fn root_of(&self, mut module: usize) -> usize {
-        while let Some(parent) = self.mods[module].parent {
+        while let Some(parent) = self.mods[module].outer() {
             module = parent;
         }
         module

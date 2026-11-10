@@ -71,6 +71,18 @@ describe('labels', () => {
     expect(t.label.get('a')).toBe('x.y');
     expect(t.label.get('b')).toBe('z');
   });
+  it('takes the shared prefix from the top-level packages only, and leaves a nested package name as it is', () => {
+    const t = buildTree([
+      { id: 'm1', parent: null, kind: 'module', name: 'm1' },
+      { id: 'm2', parent: null, kind: 'module', name: 'm2' },
+      { id: 'a', parent: 'm1', kind: 'package', name: 'care.smith.fts.cda' },
+      { id: 'b', parent: 'a', kind: 'package', name: 'impl' },
+      { id: 'c', parent: 'm2', kind: 'package', name: 'care.smith.fts.util' },
+    ]);
+    expect(t.label.get('a')).toBe('cda');
+    expect(t.label.get('b')).toBe('impl');
+    expect(t.label.get('c')).toBe('util');
+  });
 });
 
 describe('collapse', () => {

@@ -1294,3 +1294,174 @@ fn a_type_alias_is_followed_to_its_target_with_the_arguments_substituted() {
         ["fn:my_app::S#a", "fn:my_app::S#b", "fn:my_app::make"]
     );
 }
+
+const TWO_TARGETS: [(&str, &str); 4] = [
+    APP,
+    ("tests/a.rs", "mod common;\nstruct A;\n"),
+    ("tests/b.rs", "mod common;\nstruct B;\n"),
+    (
+        "tests/common/mod.rs",
+        "pub struct Fixture;\npub fn helper() {}\n",
+    ),
+];
+
+#[test]
+fn a_mod_that_several_test_targets_declare_is_one_package_below_the_module_named_by_its_path() {
+    let g = index(&TWO_TARGETS);
+
+    let shared = node(&g, "pkg::my_app::tests/common");
+    assert_eq!(
+        (shared.kind, shared.name.as_str(), shared.test),
+        (NodeKind::Package, "tests/common", true)
+    );
+    assert_eq!(shared.parent.as_deref(), Some("mod:"));
+    let fixture = node(&g, "type:my_app::tests/common::Fixture");
+    assert_eq!(fixture.parent.as_deref(), Some("pkg::my_app::tests/common"));
+    assert_eq!(fixture.file.as_deref(), Some("tests/common/mod.rs"));
+    assert!(fixture.test);
+    assert_eq!(
+        parent_of(&g, "fn:my_app::tests/common::helper"),
+        "pkg::my_app::tests/common"
+    );
+    assert!(
+        ids(&g).iter().all(|id| !id.contains("::common")),
+        "{:?}",
+        ids(&g)
+    );
+    // The targets keep their own nodes.
+    assert_eq!(
+        parent_of(&g, "type:my_app::tests/a::A"),
+        "pkg::my_app::tests/a"
+    );
+}
+
+#[test]
+fn each_target_that_declares_the_shared_mod_has_its_edges_to_the_shared_nodes() {
+    let g = index(&[
+        APP,
+        (
+            "tests/a.rs",
+            "mod common;\nuse common::Fixture;\nfn a(f: Fixture) { common::helper(); }\n",
+        ),
+        (
+            "tests/b.rs",
+            "mod common;\nfn b() -> common::Fixture { common::helper(); common::Fixture }\n",
+        ),
+        (
+            "tests/common/mod.rs",
+            "pub struct Fixture;\npub fn helper() -> Fixture { Fixture }\n",
+        ),
+    ]);
+
+    let helper = "fn:my_app::tests/common::helper";
+    let fixture = "type:my_app::tests/common::Fixture";
+    for (from, calls) in [("tests/a::a", true), ("tests/b::b", true)] {
+        let from = format!("fn:my_app::{from}");
+        assert!(g.has_edge(&from, helper, EdgeKind::Calls), "{from} calls");
+        assert!(g.has_edge(&from, fixture, EdgeKind::TypeRef), "{from} type");
+        assert!(calls);
+    }
+    assert!(g.has_edge("pkg::my_app::tests/a", fixture, EdgeKind::Imports));
+    assert!(g.has_edge(helper, fixture, EdgeKind::TypeRef));
+    assert_eq!(
+        g.edges
+            .iter()
+            .filter(|e| e.from == helper && e.to == fixture)
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn a_mod_that_only_one_test_target_declares_stays_below_that_target() {
+    let g = index(&[
+        APP,
+        ("tests/a.rs", "mod common;\nstruct A;\n"),
+        ("tests/b.rs", "struct B;\n"),
+        ("tests/common/mod.rs", "pub struct Fixture;\n"),
+    ]);
+
+    assert_eq!(
+        parent_of(&g, "type:my_app::tests/a::common::Fixture"),
+        "pkg::my_app::tests/a::common"
+    );
+    assert!(g.node("pkg::my_app::tests/common").is_none());
+}
+
+#[test]
+fn a_mod_below_src_that_the_lib_and_the_main_both_declare_is_not_shared() {
+    let g = index(&[
+        APP,
+        ("src/lib.rs", "mod x;\n"),
+        ("src/main.rs", "mod x;\n"),
+        ("src/x.rs", "pub struct X;\n"),
+    ]);
+
+    assert!(g.node("type:my_app::x::X").is_some());
+    assert!(g.node("type:my_app::main::x::X").is_some());
+}
+
+#[test]
+fn the_mods_inside_a_shared_mod_are_shared_with_it_and_named_below_it() {
+    let g = index(&[
+        APP,
+        ("tests/a.rs", "mod common;\n"),
+        ("tests/b.rs", "mod common;\n"),
+        (
+            "tests/common/mod.rs",
+            "pub mod files;\npub mod inline { pub struct In; }\n",
+        ),
+        ("tests/common/files.rs", "pub struct F;\n"),
+    ]);
+
+    assert_eq!(
+        parent_of(&g, "type:my_app::tests/common::files::F"),
+        "pkg::my_app::tests/common::files"
+    );
+    assert_eq!(
+        parent_of(&g, "pkg::my_app::tests/common::files"),
+        "pkg::my_app::tests/common"
+    );
+    assert_eq!(
+        parent_of(&g, "type:my_app::tests/common::inline::In"),
+        "pkg::my_app::tests/common::inline"
+    );
+    assert_eq!(node(&g, "pkg::my_app::tests/common::files").name, "files");
+    let packages = g
+        .nodes
+        .iter()
+        .filter(|n| n.kind == NodeKind::Package)
+        .count();
+    assert_eq!(packages, 5, "{:?}", ids(&g));
+}
+
+#[test]
+fn a_shared_mod_of_a_package_in_a_directory_is_named_by_its_path_in_the_package() {
+    let g = index(&[
+        ("m/Cargo.toml", "[package]\nname = \"m\"\n"),
+        ("m/tests/a.rs", "mod common;\n"),
+        ("m/tests/b.rs", "mod common;\n"),
+        ("m/tests/common/mod.rs", "pub struct S;\n"),
+    ]);
+
+    assert_eq!(parent_of(&g, "pkg:m:m::tests/common"), "mod:m");
+    assert_eq!(
+        parent_of(&g, "type:m::tests/common::S"),
+        "pkg:m:m::tests/common"
+    );
+}
+
+#[test]
+fn a_test_target_that_another_target_declares_as_a_mod_is_not_merged_with_the_copies() {
+    let g = index(&[
+        APP,
+        ("tests/a.rs", "mod support;\n"),
+        ("tests/b.rs", "mod support;\n"),
+        ("tests/support.rs", "pub struct S;\n"),
+    ]);
+
+    let mut seen = std::collections::HashSet::new();
+    assert!(g.nodes.iter().all(|n| seen.insert(&n.id)), "{:?}", ids(&g));
+    assert!(g.node("type:my_app::tests/support::S").is_some());
+    assert!(g.node("type:my_app::tests/a::support::S").is_some());
+}

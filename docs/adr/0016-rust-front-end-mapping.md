@@ -73,9 +73,17 @@ and the edges that ADR 1 allows. Call edges are stage 2.
 - Declarations behind different `#[cfg(..)]` with the same qualified name give one
   node, the first in source order; so do `impl W<u8> { fn new }` and `impl W<u16> { fn
   new }`. Edges that only the dropped one would have given are missing.
-- A file that several targets include through `mod` (for example `tests/common/mod.rs`
-  in each test target, or `mod x;` in `main.rs` and `lib.rs`) is one mod in each, as
-  Cargo compiles it: its nodes appear once per target.
+- A file that several targets include through `mod` (for example `mod x;` in `main.rs`
+  and `lib.rs`) is one mod in each, as Cargo compiles it: its nodes appear once per
+  target. For the test targets this is changed: a file that several of `tests/`,
+  `benches/` and `examples/` declare (usually `tests/common/mod.rs`) is one package
+  below the module, named by its path in the package (`tests/common`, id
+  `pkg:<dir>:<crate>::tests/common`), with the mods inside it below it; each target that
+  declares it finds it under the name of its `mod` item, so its edges go to the shared
+  nodes. A file that only one target declares, a file below `src/`, and a file that is a
+  target itself are not shared. `crate` and `super` in a shared mod are read from the
+  first target in path order, so an edge that only another target's `crate::` would give
+  is missing. On `momenthafen/api`: 2,700 nodes become 1,408, test nodes 2,002 to 710.
 - `where Self: Trait` is not read as a supertrait. A unit struct used as a value
   (`let x = Marker;`) gives no `type_ref`; a tuple-struct constructor (`Wrapper(1)`)
   does.

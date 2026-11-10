@@ -1621,3 +1621,194 @@ fn the_module_in_the_root_is_named_after_the_root() {
         (NodeKind::Module, "my-repo")
     );
 }
+
+fn java_types(packages: &[&str]) -> TempDir {
+    let files: Vec<(String, String)> = packages
+        .iter()
+        .map(|p| {
+            let dir = p.replace('.', "/");
+            (
+                format!("src/main/java/{dir}/T.java"),
+                format!("package {p};\nclass T {{}}\n"),
+            )
+        })
+        .collect();
+    let files: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(p, c)| (p.as_str(), c.as_str()))
+        .collect();
+    repo(&[&[("pom.xml", "<project/>")], files.as_slice()].concat())
+}
+
+fn packages(g: &Graph) -> Vec<(String, Option<String>, String)> {
+    g.nodes
+        .iter()
+        .filter(|n| n.kind == NodeKind::Package)
+        .map(|n| (n.id.clone(), n.parent.clone(), n.name.clone()))
+        .collect()
+}
+
+fn package<'a>(g: &'a Graph, name: &str) -> (&'a str, &'a str) {
+    let node = g
+        .node(&format!("pkg::{name}"))
+        .unwrap_or_else(|| panic!("no package {name}"));
+    let parent = g.node(node.parent.as_deref().unwrap()).unwrap();
+    (parent.id.as_str(), node.name.as_str())
+}
+
+#[test]
+fn a_prefix_where_packages_branch_is_a_package_node_that_holds_them() {
+    let dir = java_types(&["a.b.c.x", "a.b.c.y", "a.b.d.z"]);
+
+    let g = index(dir.path()).unwrap();
+
+    assert_eq!(package(&g, "a.b.c"), ("mod:", "a.b.c"));
+    assert_eq!(package(&g, "a.b.c.x"), ("pkg::a.b.c", "x"));
+    assert_eq!(package(&g, "a.b.c.y"), ("pkg::a.b.c", "y"));
+    assert_eq!(package(&g, "a.b.d.z"), ("mod:", "a.b.d.z"));
+    let ids: Vec<String> = packages(&g).into_iter().map(|p| p.0).collect();
+    for absent in ["pkg::a", "pkg::a.b", "pkg::a.b.d"] {
+        assert!(!ids.iter().any(|id| id == absent), "{absent}");
+    }
+}
+
+#[test]
+fn a_package_below_another_package_that_holds_types_is_its_child() {
+    let dir = java_types(&["a.b", "a.b.c"]);
+
+    let g = index(dir.path()).unwrap();
+
+    assert_eq!(package(&g, "a.b"), ("mod:", "a.b"));
+    assert_eq!(package(&g, "a.b.c"), ("pkg::a.b", "c"));
+    assert_eq!(packages(&g).len(), 2);
+}
+
+#[test]
+fn one_package_gives_one_node_without_a_chain_of_its_segments() {
+    let dir = java_types(&["a.b.c"]);
+
+    let g = index(dir.path()).unwrap();
+
+    assert_eq!(package(&g, "a.b.c"), ("mod:", "a.b.c"));
+    assert_eq!(packages(&g).len(), 1);
+}
+
+#[test]
+fn the_common_prefix_of_all_packages_of_a_module_is_no_node_unless_it_holds_types() {
+    let siblings = java_types(&["x.y.cda.impl", "x.y.cda.rest"]);
+    let with_types = java_types(&["x.y.util", "x.y.util.fhir", "x.y.util.auth"]);
+
+    let g = index(siblings.path()).unwrap();
+    assert_eq!(package(&g, "x.y.cda.impl"), ("mod:", "x.y.cda.impl"));
+    assert_eq!(package(&g, "x.y.cda.rest"), ("mod:", "x.y.cda.rest"));
+    assert_eq!(packages(&g).len(), 2);
+
+    let g = index(with_types.path()).unwrap();
+    assert_eq!(package(&g, "x.y.util"), ("mod:", "x.y.util"));
+    assert_eq!(package(&g, "x.y.util.fhir"), ("pkg::x.y.util", "fhir"));
+    assert_eq!(package(&g, "x.y.util.auth"), ("pkg::x.y.util", "auth"));
+}
+
+#[test]
+fn nesting_goes_through_several_levels_and_each_package_names_itself_relative_to_its_parent() {
+    let dir = java_types(&["a.b", "a.b.c.d", "a.b.c.e", "a.b.f.g.h", "a.b.f.g.i"]);
+
+    let g = index(dir.path()).unwrap();
+
+    assert_eq!(package(&g, "a.b.c.d"), ("pkg::a.b.c", "d"));
+    assert_eq!(package(&g, "a.b.c"), ("pkg::a.b", "c"));
+    assert_eq!(package(&g, "a.b.f.g"), ("pkg::a.b", "f.g"));
+    assert_eq!(package(&g, "a.b.f.g.h"), ("pkg::a.b.f.g", "h"));
+    assert!(g.node("pkg::a.b.f").is_none());
+}
+
+#[test]
+fn package_ids_keep_the_module_directory_and_the_full_name() {
+    let dir = repo(&[
+        ("m/pom.xml", "<project/>"),
+        (
+            "m/src/main/java/a/b/c/X.java",
+            "package a.b.c;\nclass X {}\n",
+        ),
+        (
+            "m/src/main/java/a/b/d/Y.java",
+            "package a.b.d;\nclass Y {}\n",
+        ),
+        ("m/src/main/java/a/e/Z.java", "package a.e;\nclass Z {}\n"),
+    ]);
+
+    let g = index(dir.path()).unwrap();
+
+    assert_eq!(parent(&g, "type:a.b.c.X").id, "pkg:m:a.b.c");
+    assert_eq!(parent(&g, "pkg:m:a.b.c").id, "pkg:m:a.b");
+    assert_eq!(parent(&g, "pkg:m:a.b").id, "mod:m");
+    assert_eq!(g.node("pkg:m:a.b").unwrap().name, "a.b");
+    assert_eq!(g.node("pkg:m:a.b.c").unwrap().name, "c");
+}
+
+#[test]
+fn packages_of_different_modules_do_not_share_prefix_nodes() {
+    let dir = repo(&[
+        ("m1/pom.xml", "<project/>"),
+        ("m1/src/main/java/a/x/X.java", "package a.x;\nclass X {}\n"),
+        ("m1/src/main/java/a/y/Y.java", "package a.y;\nclass Y {}\n"),
+        ("m2/pom.xml", "<project/>"),
+        ("m2/src/main/java/a/z/Z.java", "package a.z;\nclass Z {}\n"),
+    ]);
+
+    let g = index(dir.path()).unwrap();
+
+    assert_eq!(parent(&g, "pkg:m1:a.x").id, "mod:m1");
+    assert_eq!(parent(&g, "pkg:m2:a.z").id, "mod:m2");
+    assert!(g.node("pkg:m1:a").is_none() && g.node("pkg:m2:a").is_none());
+}
+
+#[test]
+fn a_prefix_node_is_test_code_only_if_every_package_below_it_is() {
+    let dir = repo(&[
+        ("pom.xml", "<project/>"),
+        ("src/main/java/a/p/x/X.java", "package a.p.x;\nclass X {}\n"),
+        ("src/main/java/a/p/y/Y.java", "package a.p.y;\nclass Y {}\n"),
+        ("src/test/java/a/q/x/T.java", "package a.q.x;\nclass T {}\n"),
+        ("src/test/java/a/q/y/U.java", "package a.q.y;\nclass U {}\n"),
+        ("src/main/java/a/r/x/V.java", "package a.r.x;\nclass V {}\n"),
+        ("src/test/java/a/r/y/W.java", "package a.r.y;\nclass W {}\n"),
+    ]);
+
+    let g = index(dir.path()).unwrap();
+
+    let prefix = |name: &str| g.node(&format!("pkg::{name}")).unwrap();
+    assert!(!prefix("a.p").test);
+    assert!(prefix("a.q").test);
+    assert!(!prefix("a.r").test);
+    for n in ["a.p", "a.q", "a.r"] {
+        let node = prefix(n);
+        assert_eq!(
+            (node.file.as_ref(), node.span, node.hash.as_ref()),
+            (None, None, None)
+        );
+    }
+    assert!(g.without_tests().node("pkg::a.q").is_none());
+    assert!(g.without_tests().node("pkg::a.r").is_some());
+}
+
+#[test]
+fn a_file_without_a_type_gives_no_package_node_and_the_default_package_does_not_nest() {
+    let dir = repo(&[
+        ("pom.xml", "<project/>"),
+        (
+            "src/main/java/a/b/package-info.java",
+            "/** Docs. */\npackage a.b;\n",
+        ),
+        ("src/main/java/a/c/C.java", "package a.c;\nclass C {}\n"),
+        ("src/main/java/a/d/D.java", "package a.d;\nclass D {}\n"),
+        ("src/main/java/Top.java", "class Top {}\n"),
+    ]);
+
+    let g = index(dir.path()).unwrap();
+
+    assert!(g.node("pkg::a.b").is_none());
+    assert_eq!(package(&g, "a.c"), ("mod:", "a.c"));
+    assert_eq!(parent(&g, "type:Top").id, "pkg::");
+    assert_eq!(g.node("pkg::").unwrap().parent.as_deref(), Some("mod:"));
+}

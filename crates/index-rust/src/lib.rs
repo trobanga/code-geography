@@ -123,7 +123,8 @@ pub fn index_sources(_root_name: &str, files: &[SourceFile]) -> (Graph, Report) 
         .enumerate()
         .flat_map(|(package, p)| targets(package, &p.dir, &rs_files))
         .collect();
-    let tree = modules::build(&parsed, &roots);
+    let package_dirs: Vec<&str> = packages.iter().map(|p| p.dir.as_str()).collect();
+    let tree = modules::build(&parsed, &roots, &package_dirs);
     let mods = tree.mods;
     let mut report = Report {
         unreached_files: files
