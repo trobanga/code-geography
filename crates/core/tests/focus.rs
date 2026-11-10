@@ -352,3 +352,156 @@ fn a_modified_type_still_folds_its_unchanged_functions() {
 
     assert_eq!(view.nodes, vec!["M", "p", "T", "g", "rest:T", "rest:p"]);
 }
+
+/// Module `M` with package `p` (sub-package `q` with type `Q1`, and types `T1`, `T2`)
+/// and a leaf package `s` with type `S1`.
+fn nested() -> Graph {
+    Graph {
+        nodes: vec![
+            node("M", None, NodeKind::Module),
+            node("p", Some("M"), NodeKind::Package),
+            node("q", Some("p"), NodeKind::Package),
+            node("Q1", Some("q"), NodeKind::Type),
+            node("T1", Some("p"), NodeKind::Type),
+            node("T2", Some("p"), NodeKind::Type),
+            node("s", Some("M"), NodeKind::Package),
+            node("S1", Some("s"), NodeKind::Type),
+        ],
+        edges: vec![
+            edge("T1", "Q1", EdgeKind::TypeRef),
+            edge("T2", "S1", EdgeKind::TypeRef),
+            edge("Q1", "S1", EdgeKind::TypeRef),
+            edge("Q1", "T1", EdgeKind::TypeRef),
+            edge("T1", "T2", EdgeKind::TypeRef),
+        ],
+        ..Graph::default()
+    }
+}
+
+#[test]
+fn a_container_with_packages_and_other_children_folds_the_other_children_by_kind() {
+    let focus = Focus {
+        fold_mixed: true,
+        ..Focus::default()
+    };
+    let view = nested().cut_focused(&set(&["M", "p"]), &focus);
+
+    assert_eq!(view.nodes, vec!["M", "p", "q", "rest:p", "s"]);
+    assert_eq!(view.rest, [("p".to_string(), 2)].into());
+    assert_eq!(
+        view.edges,
+        vec![
+            view_edge("q", "rest:p", &[(EdgeKind::TypeRef, 1)]),
+            view_edge("q", "s", &[(EdgeKind::TypeRef, 1)]),
+            view_edge("rest:p", "q", &[(EdgeKind::TypeRef, 1)]),
+            view_edge("rest:p", "s", &[(EdgeKind::TypeRef, 1)]),
+        ]
+    );
+}
+
+fn mixed() -> Focus {
+    Focus {
+        fold_mixed: true,
+        ..Focus::default()
+    }
+}
+
+#[test]
+fn an_unfolded_container_shows_all_children_in_spite_of_the_kind_fold() {
+    let focus = Focus {
+        unfolded: set(&["p"]),
+        ..mixed()
+    };
+    let view = nested().cut_focused(&set(&["M", "p"]), &focus);
+
+    assert_eq!(view.nodes, vec!["M", "p", "q", "T1", "T2", "s"]);
+    assert!(view.rest.is_empty());
+}
+
+#[test]
+fn leaf_packages_types_and_pure_package_containers_do_not_kind_fold() {
+    // `s` holds only a type, `M` only packages, `Q1`'s container `q` only a type.
+    let view = nested().cut_focused(&set(&["M", "s", "p", "q"]), &mixed());
+
+    assert_eq!(view.nodes, vec!["M", "p", "q", "Q1", "rest:p", "s", "S1"]);
+    assert_eq!(view.rest, [("p".to_string(), 2)].into());
+}
+
+#[test]
+fn a_container_with_a_child_of_interest_follows_the_plain_fold() {
+    // `T1` is of interest: `p` keeps `T1` and folds `q` and `T2`, as without the kind fold.
+    let focus = Focus {
+        nodes: set(&["T1"]),
+        ..mixed()
+    };
+    let view = nested().cut_focused(&set(&["M", "p"]), &focus);
+
+    assert_eq!(view.nodes, vec!["M", "p", "T1", "rest:p", "rest:M"]);
+    assert_eq!(
+        view.rest,
+        [("p".to_string(), 2), ("M".to_string(), 1)].into()
+    );
+}
+
+#[test]
+fn a_node_of_interest_inside_a_sub_package_keeps_that_package_and_folds_the_types() {
+    let focus = Focus {
+        nodes: set(&["Q1"]),
+        ..mixed()
+    };
+    let view = nested().cut_focused(&set(&["M", "p"]), &focus);
+
+    assert_eq!(view.nodes, vec!["M", "p", "q", "rest:p", "rest:M"]);
+}
+
+#[test]
+fn nodes_below_an_explicit_node_are_not_protected_from_the_kind_fold() {
+    let focus = Focus {
+        nodes: set(&["M"]),
+        ..mixed()
+    };
+    let view = nested().cut_focused(&set(&["M", "p"]), &focus);
+
+    assert_eq!(view.nodes, vec!["M", "p", "q", "rest:p", "s"]);
+    assert_eq!(view.rest, [("p".to_string(), 2)].into());
+
+    // An explicit type in `p` makes `p` follow the plain rule; below the explicit `M`
+    // that keeps all children.
+    let focus = Focus {
+        nodes: set(&["M", "T1"]),
+        ..mixed()
+    };
+    let view = nested().cut_focused(&set(&["M", "p"]), &focus);
+    assert_eq!(view.nodes, vec!["M", "p", "q", "T1", "T2", "s"]);
+    assert!(view.rest.is_empty());
+}
+
+#[test]
+fn the_kind_fold_works_without_any_focus_and_leaves_the_plain_cut_alone_when_off() {
+    let graph = nested();
+    let open = set(&["M", "p"]);
+    assert_eq!(
+        graph.cut_focused(&open, &Focus::default()),
+        graph.cut(&open)
+    );
+    assert_eq!(graph.cut(&open).nodes, vec!["M", "p", "q", "T1", "T2", "s"]);
+    assert_eq!(
+        graph.cut_focused(&open, &mixed()).nodes,
+        vec!["M", "p", "q", "rest:p", "s"]
+    );
+}
+
+#[test]
+fn a_kind_placeholder_is_not_expandable_and_visible_ancestors_keep_their_change_counts() {
+    let mut graph = nested();
+    graph.nodes[4].change = Some(cg_core::Change::Added); // T1, folded
+    graph.nodes[3].change = Some(cg_core::Change::Modified); // Q1 below visible q
+    let view = graph.cut_focused(&set(&["M", "p"]), &mixed());
+
+    assert!(!view.expandable.contains(&"rest:p".to_string()));
+    assert!(view.expandable.contains(&"q".to_string()));
+    assert_eq!(view.changes["p"].added, 1);
+    assert_eq!(view.changes["M"].added, 1);
+    assert_eq!(view.changes["q"].modified, 1);
+    assert!(!view.changes.contains_key("rest:p"));
+}

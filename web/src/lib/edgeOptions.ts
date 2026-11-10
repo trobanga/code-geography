@@ -51,8 +51,12 @@ function pathTo(tree: Tree, id: string): string[] {
   return out.reverse();
 }
 
-/** O3: draw each edge between the children of the lowest common ancestor of its ends. */
-export function liftEdges(edges: ViewEdge[], tree: Tree): Lifted {
+/**
+ * O3: draw each edge between the children of the lowest common ancestor of its ends. With
+ * `dropBackground` (an active focus) a placeholder line that would be lifted is dropped; without
+ * it `rest:<c>` lifts like a child of `c`, so that a package keeps the lines of its own types.
+ */
+export function liftEdges(edges: ViewEdge[], tree: Tree, dropBackground = true): Lifted {
   const merged = new Map<string, ViewEdge>();
   const badges = new Map<string, Badge>();
   const lifted: ViewEdge[] = [];
@@ -72,7 +76,7 @@ export function liftEdges(edges: ViewEdge[], tree: Tree): Lifted {
     const to = i < pa.length && i < pb.length ? pb[i] : e.to;
     if (from !== e.from || to !== e.to) {
       // A placeholder line merged into a real bundle would read as a dependency.
-      if (background(tree, e)) {
+      if (dropBackground && background(tree, e)) {
         dropped++;
         continue;
       }
@@ -121,10 +125,10 @@ export interface Drawn extends Lifted {
 }
 
 /** Drawable view edges → O2 → O3. O4 is in the WASM view, O1 only decides what is painted. */
-export function edgePipeline(viewEdges: ViewEdge[], tree: Tree, o: EdgeOptions): Drawn {
+export function edgePipeline(viewEdges: ViewEdge[], tree: Tree, o: EdgeOptions, focused = false): Drawn {
   const all = viewEdges.filter((e) => drawable(tree, e));
   const kept = filterEdges(all, o.kinds);
-  const l = o.lift ? liftEdges(kept, tree) : { edges: kept, badges: new Map<string, Badge>(), lifted: [], dropped: 0 };
+  const l = o.lift ? liftEdges(kept, tree, focused) : { edges: kept, badges: new Map<string, Badge>(), lifted: [], dropped: 0 };
   return { ...l, total: all.length };
 }
 

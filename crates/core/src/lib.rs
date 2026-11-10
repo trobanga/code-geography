@@ -395,6 +395,10 @@ pub struct Focus {
     pub neighbors: bool,
     /// Containers that show all their children in spite of the focus.
     pub unfolded: std::collections::HashSet<String>,
+    /// Kind fold (ADR 0019): an expanded container with a package child and a child
+    /// of another kind, and no child that the interest keeps, shows its packages and
+    /// folds the other children into `rest:<id>`.
+    pub fold_mixed: bool,
 }
 
 impl Graph {
@@ -460,11 +464,40 @@ impl Graph {
                 current = parents.get(id).copied().flatten();
             }
         }
+        let interest_kept = kept.clone();
         // Each descendant of an explicit node is kept as well.
         kept.extend(self.nodes.iter().map(|n| n.id.as_str()).filter(|id| {
             std::iter::successors(Some(*id), |id| parents.get(id).copied().flatten())
                 .any(|a| explicit.contains(a))
         }));
+        if focus.fold_mixed {
+            // Kind fold: a container with packages and other children, and no child
+            // that the interest keeps, keeps its packages and folds the rest.
+            let kinds: HashMap<&str, NodeKind> =
+                self.nodes.iter().map(|n| (n.id.as_str(), n.kind)).collect();
+            let mut children: HashMap<&str, Vec<&str>> = HashMap::new();
+            for node in &self.nodes {
+                if let Some(parent) = node.parent.as_deref() {
+                    children.entry(parent).or_default().push(node.id.as_str());
+                }
+            }
+            for (container, children) in &children {
+                let is_package = |id: &&str| kinds.get(id) == Some(&NodeKind::Package);
+                if children.iter().any(is_package)
+                    && !children.iter().all(is_package)
+                    && !focus.unfolded.contains(*container)
+                    && !children.iter().any(|c| interest_kept.contains(c))
+                {
+                    for child in children {
+                        if is_package(child) {
+                            kept.insert(child);
+                        } else {
+                            kept.remove(child);
+                        }
+                    }
+                }
+            }
+        }
         let kept_parents: HashSet<&str> = kept
             .iter()
             .filter_map(|id| parents.get(id).copied().flatten())

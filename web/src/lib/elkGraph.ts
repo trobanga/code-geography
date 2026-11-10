@@ -70,7 +70,7 @@ function containerDirection(depth: number): string {
   return depth % 2 === 0 ? 'DOWN' : 'RIGHT';
 }
 
-export function toElkGraph(view: View, tree: Tree, nodeCount = view.nodes.length): ElkNode {
+export function toElkGraph(view: View, tree: Tree, nodeCount = view.nodes.length, shown?: ReadonlySet<string>): ElkNode {
   const root: ElkNode = { id: 'root', layoutOptions: rootOptions(nodeCount), children: [], edges: [] };
   const visible = new Set(view.nodes);
   const kept = view.edges.filter((e) => visible.has(e.from) && visible.has(e.to) && drawable(tree, e));
@@ -113,7 +113,7 @@ export function toElkGraph(view: View, tree: Tree, nodeCount = view.nodes.length
   };
 
   for (const id of view.nodes) {
-    const name = labelOf(tree, view, id);
+    const name = labelOf(tree, view, id, shown);
     const w = labelWidth(name, expandable.has(id)) + (tree.byId.get(id)?.change ? BOX.markW : 0);
     const node: ElkNode = hasVisibleChild.has(id)
       ? {

@@ -55,6 +55,7 @@ impl Explorer {
         focus_changes: bool,
         neighbors: bool,
         unfolded: &[String],
+        fold_mixed: bool,
     ) -> String {
         let graph = &self.variants[variant(include_tests, merge_imports)];
         let expanded: HashSet<String> = expanded.iter().cloned().collect();
@@ -63,6 +64,7 @@ impl Explorer {
             changes: focus_changes,
             neighbors,
             unfolded: unfolded.iter().cloned().collect(),
+            fold_mixed,
         };
         serde_json::to_string(&graph.cut_focused(&expanded, &focus))
             .expect("a view serializes to JSON")
@@ -143,6 +145,7 @@ impl JsExplorer {
         focus_changes: bool,
         neighbors: bool,
         unfolded: Vec<String>,
+        fold_mixed: bool,
     ) -> String {
         self.0.focus_view_json(
             &expanded,
@@ -152,6 +155,7 @@ impl JsExplorer {
             focus_changes,
             neighbors,
             &unfolded,
+            fold_mixed,
         )
     }
 }

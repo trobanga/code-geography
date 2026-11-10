@@ -6,6 +6,7 @@
     tree,
     focus,
     rest,
+    unfolded,
     onneighbors,
     onclear,
   }: {
@@ -13,6 +14,8 @@
     focus: Focus;
     /** Folded children per container, from the view. */
     rest: Record<string, number> | undefined;
+    /** Number of containers that show all children. */
+    unfolded: number;
     onneighbors: (v: boolean) => void;
     onclear: () => void;
   } = $props();
@@ -29,8 +32,8 @@
   <span class="text-[var(--muted)]">focus</span>
   <span class="truncate" title={focus.nodes.join(', ')}>{what}</span>
   <span class="text-[var(--muted)]"
-    >{folded} folded in {boxes} {boxes === 1 ? 'box' : 'boxes'}{focus.unfolded.length > 0
-      ? `, ${focus.unfolded.length} unfolded`
+    >{folded} folded in {boxes} {boxes === 1 ? 'box' : 'boxes'}{unfolded > 0
+      ? `, ${unfolded} unfolded`
       : ''}</span
   >
   <label class="flex items-center gap-1 border-l border-[var(--line)] pl-3">

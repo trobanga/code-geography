@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ElkNode } from 'elkjs/lib/elk-api';
 import { buildTree } from './expansion';
 import { labelWidth, rootOptions, toElkGraph } from './elkGraph';
+import { labelOf } from './focus';
 import type { GraphNode, View } from './types';
 
 const nodes: GraphNode[] = [
@@ -132,9 +133,9 @@ describe('toElkGraph with a placeholder of the focus cut', () => {
   };
   const g = toElkGraph(focused, tree);
 
-  it('puts the placeholder into its container as a leaf labelled "N more"', () => {
+  it('puts the placeholder into its container as a leaf labelled with its folded kinds', () => {
     expect(find(g, 'm1')!.children!.map((c) => c.id)).toEqual(['p1', 'rest:m1']);
-    expect(find(g, 'rest:m1')!.width).toBe(labelWidth('12 more', false));
+    expect(find(g, 'rest:m1')!.width).toBe(labelWidth(labelOf(tree, focused, 'rest:m1'), false));
     expect(g.edges!.map((e) => [e.sources[0], e.targets[0]])).toEqual([['rest:m1', 'm2']]);
   });
 });

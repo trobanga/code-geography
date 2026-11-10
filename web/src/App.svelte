@@ -18,10 +18,12 @@
     collapse,
     deeper,
     levelExpanded,
+    levelUnfolded,
     mustConfirm,
     splitByLevel,
     stepBack,
     stepForward,
+    type Depth,
     type DepthStep,
     type Tree,
   } from './lib/expansion';
@@ -36,6 +38,8 @@
 
   // An import that a use covers is a duplicate, so the view never counts it (ADR 13).
   const MERGE_IMPORTS = true;
+  // A container with packages and other children shows its packages and one placeholder (ADR 19).
+  const FOLD_MIXED = true;
 
   let error = $state<string | null>(null);
   let graph = $state.raw<Graph | null>(null);
@@ -52,6 +56,8 @@
   let explorer = $state.raw<Explorer | null>(null);
   let tree = $state.raw<Tree | null>(null);
   let expanded = $state.raw<Set<string>>(new Set());
+  /** Containers that show all children in spite of the kind fold or the focus (ADR 0019, 0011). */
+  let unfolded = $state.raw<Set<string>>(new Set());
   let tests = $state(false);
   let focus = $state.raw<Focus>(NO_FOCUS);
   // Deep state: each consumer tracks only the fields it reads, so O1 does not trigger a layout.
@@ -76,32 +82,40 @@
     const all = JSON.parse(explorer.view([...tree.children.keys()], false, MERGE_IMPORTS)) as View;
     return new Set(all.nodes);
   });
-  const hashState = $derived(tree ? splitByLevel(tree, expanded, shown) : null);
-  const activeLevel = $derived(hashState && hashState.open.length === 0 ? hashState.level : null);
-  const partialLevel = $derived(
-    hashState && hashState.open.length > 0 ? { level: hashState.level, extra: hashState.open.length } : null,
-  );
+  const hashState = $derived(tree ? splitByLevel(tree, expanded, shown, unfolded) : null);
+  const extra = $derived(hashState ? hashState.open.length + hashState.unfold.length : 0);
+  const activeLevel = $derived(hashState && extra === 0 ? hashState.level : null);
+  const partialLevel = $derived(hashState && extra > 0 ? { level: hashState.level, extra } : null);
 
   // O4 is part of the WASM view.
-  // Without a focus the plain cut; with one the focus cut of ADR 0011.
-  function cut(ex: Explorer, open: ReadonlySet<string>): View {
+  // Always the focus cut of ADR 0011 with the kind fold of ADR 0019; with an empty focus it
+  // folds by kind only.
+  function cut(ex: Explorer, d: Depth): View {
     const f = focus;
-    const ids = [...open];
-    const json = focusActive(f)
-      ? ex.focusView(ids, tests, MERGE_IMPORTS, f.nodes, f.changes && graph?.diff != null, f.neighbors, f.unfolded)
-      : ex.view(ids, tests, MERGE_IMPORTS);
+    const json = ex.focusView(
+      [...d.expanded],
+      tests,
+      MERGE_IMPORTS,
+      f.nodes,
+      f.changes && graph?.diff != null,
+      f.neighbors,
+      [...d.unfolded],
+      FOLD_MIXED,
+    );
     return JSON.parse(json) as View;
   }
-  const view = $derived(explorer && tree ? cut(explorer, expanded) : null);
-  /** What "+" would give; equal to `expanded` when nothing visible can open. */
-  const deeperSet = $derived(view && tree ? deeper(tree, view.expandable, expanded, shown) : expanded);
+  const depth = $derived<Depth>({ expanded, unfolded });
+  const view = $derived(explorer && tree ? cut(explorer, depth) : null);
+  /** What "+" would give; equal to `depth` when nothing visible can open or unfold. */
+  const deeperSet = $derived(view && tree ? deeper(tree, view, depth, shown) : depth);
+  const canDeeper = $derived(deeperSet.expanded.size > expanded.size || deeperSet.unfolded.size > unfolded.size);
   /** "+" history, so that "−" right after it returns to the same set (see `stepBack`). */
   let steps: DepthStep[] = [];
   /** A "+" that waits for a second click, valid only for the set it was computed for. */
-  let asked = $state.raw<{ to: Set<string>; boxes: number } | null>(null);
+  let asked = $state.raw<{ to: Depth; boxes: number } | null>(null);
   const askBoxes = $derived(asked && asked.to === deeperSet ? asked.boxes : null);
   // O2 → O3.
-  const drawn = $derived(view && tree ? edgePipeline(view.edges, tree, opts) : null);
+  const drawn = $derived(view && tree ? edgePipeline(view.edges, tree, opts, focusActive(focus)) : null);
   const diff = $derived(graph?.diff ?? null);
   // Without a commit graph the option has no effect, even when the hash carries it.
   const changesOnly = $derived(diff !== null && opts.changesOnly);
@@ -141,7 +155,8 @@
     const s = decodeHash(hash);
     tests = s.tests;
     Object.assign(opts, s.edges);
-    expanded = new Set([...levelExpanded(tree, s.level), ...s.open]);
+    expanded = new Set([...levelExpanded(tree, s.level, shown), ...s.open]);
+    unfolded = new Set([...levelUnfolded(tree, s.level, shown), ...(s.unfold ?? [])]);
     focus = s.focus ?? NO_FOCUS;
     fitNext = true;
   }
@@ -239,12 +254,13 @@
 
   function setLevel(l: Level) {
     if (!tree) return;
-    expanded = levelExpanded(tree, l);
+    expanded = levelExpanded(tree, l, shown);
+    unfolded = levelUnfolded(tree, l, shown);
     fitNext = true;
   }
 
   function stepDeeper() {
-    if (!explorer || deeperSet.size === expanded.size) return;
+    if (!explorer || !canDeeper) return;
     const next = deeperSet;
     // The count comes from the WASM cut of the next set, not from a copy of the cut.
     const boxes = askBoxes ?? cut(explorer, next).nodes.length;
@@ -253,16 +269,18 @@
       return;
     }
     asked = null;
-    steps = stepForward(steps, expanded, next);
-    expanded = next;
+    steps = stepForward(steps, depth, next);
+    expanded = new Set(next.expanded);
+    unfolded = new Set(next.unfolded);
     fitNext = true;
   }
 
   function stepShallower() {
     if (!tree || expanded.size === 0) return;
-    const r = stepBack(tree, steps, expanded);
+    const r = stepBack(tree, steps, depth, shown);
     steps = r.steps;
-    expanded = r.expanded;
+    expanded = new Set(r.depth.expanded);
+    unfolded = new Set(r.depth.unfolded);
     fitNext = true;
   }
 
@@ -300,7 +318,7 @@
     const my = ++seq;
     busy = true;
     const t0 = performance.now();
-    runLayout(toElkGraph({ ...v, edges: d.edges }, tree))
+    runLayout(toElkGraph({ ...v, edges: d.edges }, tree, undefined, shown))
       .then(async (l) => {
         if (my !== seq) return;
         console.info(`layout ${v.nodes.length} nodes ${l.edges.length} edges ${Math.round(performance.now() - t0)} ms`);
@@ -327,6 +345,7 @@
       level: hashState.level,
       tests,
       open: hashState.open,
+      unfold: hashState.unfold,
       edges: opts,
       focus: focusActive(focus) ? focus : undefined,
     });
@@ -379,7 +398,7 @@
     level={activeLevel}
     partial={partialLevel}
     depth={{
-      canDeeper: deeperSet.size > expanded.size,
+      canDeeper,
       canShallower: expanded.size > 0,
       ask: askBoxes,
       ondeeper: stepDeeper,
@@ -418,7 +437,8 @@
       onopen={() => {
         if (!tree) return;
         expanded = openChanged(tree, tests);
-        setFocus({ nodes: [], changes: true, neighbors: focus.neighbors, unfolded: [] });
+        unfolded = new Set();
+        setFocus({ nodes: [], changes: true, neighbors: focus.neighbors });
       }}
     />
   {/if}
@@ -427,6 +447,7 @@
       {tree}
       {focus}
       rest={view?.rest}
+      unfolded={unfolded.size}
       onneighbors={(v) => setFocus({ ...focus, neighbors: v })}
       onclear={() => setFocus(NO_FOCUS)}
     />
@@ -451,7 +472,9 @@
         {selected}
         {fileCounts}
         onselect={(id) => (selected = id)}
-        onunfold={(c) => (focus = { ...focus, unfolded: [...focus.unfolded, c] })}
+        onunfold={(c) => (unfolded = new Set([...unfolded, c]))}
+        {shown}
+        focused={focusActive(focus)}
         ontoggle={toggle}
         onoffset={(id, o) => (offsets = new Map(offsets).set(id, o))}
       />
@@ -468,6 +491,7 @@
           if (!tree) return;
           const r = focusOn(tree, id);
           expanded = r.expanded;
+          unfolded = new Set();
           setFocus(r.focus);
         }}
       />

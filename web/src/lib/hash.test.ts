@@ -39,9 +39,9 @@ describe('hash', () => {
 
   it('round-trips the focus with special characters', () => {
     const base = { level: 'types' as const, tests: false, open: [], edges: DEFAULT_EDGE_OPTIONS };
-    const focus = { nodes: ['type:a.B', 'x,y&z=1'], changes: true, neighbors: true, unfolded: ['pkg:a', 'mod:x,y'] };
+    const focus = { nodes: ['type:a.B', 'x,y&z=1'], changes: true, neighbors: true };
     expect(decodeHash(encodeHash({ ...base, focus })).focus).toEqual(focus);
-    const changes = { nodes: [], changes: true, neighbors: false, unfolded: [] };
+    const changes = { nodes: [], changes: true, neighbors: false };
     expect(decodeHash(encodeHash({ ...base, focus: changes })).focus).toEqual(changes);
   });
 
@@ -72,6 +72,16 @@ describe('hash', () => {
     expect(DEFAULT_EDGE_OPTIONS.lift).toBe(true);
     expect(encodeHash({ ...base, edges: off })).toBe('#level=modules&tests=0&lift=0');
     expect(decodeHash(encodeHash({ ...base, edges: off })).edges).toEqual(off);
+  });
+
+  it('round-trips the unfolded containers without a focus, and reads them from an old focus hash', () => {
+    const base = { level: 'packages' as const, tests: false, open: [], edges: DEFAULT_EDGE_OPTIONS };
+    const s = decodeHash(encodeHash({ ...base, unfold: ['pkg:a', 'mod:x,y'] }));
+    expect(s.unfold).toEqual(['pkg:a', 'mod:x,y']);
+    expect(s.focus).toBeUndefined();
+    const old = decodeHash('#level=types&focus=type%3Aa.B&unfold=pkg%3Aa');
+    expect(old.unfold).toEqual(['pkg:a']);
+    expect(old.focus).toEqual({ nodes: ['type:a.B'], changes: false, neighbors: false });
   });
 
   it('loads an old hash with removed keys', () => {

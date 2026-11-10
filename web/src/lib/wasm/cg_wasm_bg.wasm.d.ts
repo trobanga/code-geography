@@ -3,7 +3,7 @@
 export const memory: WebAssembly.Memory;
 export const memcmp: (a: number, b: number, c: number) => number;
 export const __wbg_explorer_free: (a: number, b: number) => void;
-export const explorer_focusView: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => [number, number];
+export const explorer_focusView: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number];
 export const explorer_new: (a: number, b: number) => [number, number, number];
 export const explorer_view: (a: number, b: number, c: number, d: number, e: number) => [number, number];
 export const indexSources: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];

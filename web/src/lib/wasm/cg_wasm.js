@@ -22,9 +22,10 @@ export class Explorer {
      * @param {boolean} focus_changes
      * @param {boolean} neighbors
      * @param {string[]} unfolded
+     * @param {boolean} fold_mixed
      * @returns {string}
      */
-    focusView(expanded, include_tests, merge_imports, focus_nodes, focus_changes, neighbors, unfolded) {
+    focusView(expanded, include_tests, merge_imports, focus_nodes, focus_changes, neighbors, unfolded, fold_mixed) {
         let deferred4_0;
         let deferred4_1;
         try {
@@ -34,7 +35,7 @@ export class Explorer {
             const len1 = WASM_VECTOR_LEN;
             const ptr2 = passArrayJsValueToWasm0(unfolded, wasm.__wbindgen_malloc);
             const len2 = WASM_VECTOR_LEN;
-            const ret = wasm.explorer_focusView(this.__wbg_ptr, ptr0, len0, include_tests, merge_imports, ptr1, len1, focus_changes, neighbors, ptr2, len2);
+            const ret = wasm.explorer_focusView(this.__wbg_ptr, ptr0, len0, include_tests, merge_imports, ptr1, len1, focus_changes, neighbors, ptr2, len2, fold_mixed);
             deferred4_0 = ret[0];
             deferred4_1 = ret[1];
             return getStringFromWasm0(ret[0], ret[1]);

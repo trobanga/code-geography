@@ -18,6 +18,7 @@ model. Record each new decision of that weight as a new ADR.
 | cut | The set of visible nodes for a given set of expanded containers, with each edge moved to the nearest visible ancestors of its ends. |
 | view | The result of a cut: visible nodes, nodes that can open, aggregated edges with counts. |
 | focus cut | A cut that folds the children that are not of interest into one placeholder `rest:<container id>` (ADR 0011). |
+| kind fold | A focus cut option (`fold_mixed`): a container with packages and other children, none of interest, shows the packages and folds the rest into `rest:<container id>` (ADR 0019). The viewer always sets it; a click on the placeholder or "+" puts the container into `unfolded`. |
 | overlay | The diff graph of a commit: the union of two graphs with `change` marks, plus the list of changed files (ADR 0009, 0012). |
 | front end | The part that turns the sources of one language into a graph (Java, Rust). `cg-index` runs all of them. |
 | test code | Code in a source set other than `src/main`. Hidden by default. |

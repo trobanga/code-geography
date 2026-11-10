@@ -29,6 +29,8 @@
     ontoggle,
     onoffset,
     onunfold,
+    shown,
+    focused,
   }: {
     tree: Tree;
     view: View;
@@ -51,6 +53,10 @@
     onoffset: (id: string, o: Offset) => void;
     /** Show all children of the container of a placeholder. */
     onunfold: (container: string) => void;
+    /** Nodes that the view can show (test filter), for the labels of placeholders. */
+    shown: ReadonlySet<string> | undefined;
+    /** A focus is active: lines of placeholders are background (ADR 0011); of the kind fold they are not. */
+    focused: boolean;
   } = $props();
 
   let wrap: HTMLDivElement;
@@ -92,7 +98,7 @@
           lab: labelAnchor(pts),
           ch: edgeChange(ve),
           // A changed edge at a placeholder keeps its change color.
-          bg: !edgeChange(ve) && background(tree, ve),
+          bg: !edgeChange(ve) && focused && background(tree, ve),
         };
       })
       .filter((e) => e.show),
@@ -109,7 +115,7 @@
       return { key, ve, touches: true, d: pathOf(pts), w: width(ve.count), lab: labelAnchor(pts), ch: edgeChange(ve), bg: false };
     });
   });
-  const nameOf = (id: string) => labelOf(tree, view, id);
+  const nameOf = (id: string) => labelOf(tree, view, id, shown);
   const placeholders = $derived(placed.nodes.filter((n) => restOf(tree, n.id) !== null));
 
   /** Overlay look of an edge: color by the larger of added and removed, dashed when all removed. */
@@ -331,7 +337,7 @@
     onclick={() => onunfold(c)}
     onkeydown={() => {}}
   >
-    <title>{view.rest?.[c] ?? 0} folded children of {tree.label.get(c) ?? c}; click to show all</title>
+    <title>{nameOf(n.id)} of {tree.label.get(c) ?? c} folded; click to show all</title>
     <rect x={n.x} y={n.y} width={n.w} height={n.h} fill="var(--bg)" stroke="var(--muted)" stroke-width="0.6" stroke-dasharray="3 2" />
     <text x={n.x + BOX.pad + BOX.kindW} y={n.y + n.h / 2 + 4} font-size={BOX.font} fill="var(--muted)" font-style="italic"
       >{nameOf(n.id)}</text

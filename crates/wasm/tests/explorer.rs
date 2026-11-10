@@ -150,6 +150,7 @@ fn focus_view_json_folds_in_the_chosen_variant_and_passes_each_option() {
             changes,
             neighbors,
             unfolded,
+            false,
         ))
         .unwrap()
     };
@@ -169,6 +170,40 @@ fn focus_view_json_folds_in_the_chosen_variant_and_passes_each_option() {
 
     let unfolded = focus_view(true, false, false, &["p".to_string()]);
     assert_eq!(unfolded.nodes, ["M", "p", "T", "TT", "TM"]);
+}
+
+#[test]
+fn focus_view_json_passes_the_kind_fold() {
+    // Package `p` holds the sub-package `q` and the type `T`.
+    let graph = Graph {
+        nodes: vec![
+            node("M", None, NodeKind::Module, false),
+            node("p", Some("M"), NodeKind::Package, false),
+            node("q", Some("p"), NodeKind::Package, false),
+            node("T", Some("p"), NodeKind::Type, false),
+        ],
+        ..Graph::default()
+    };
+    let explorer = Explorer::from_json(&serde_json::to_string(&graph).unwrap()).unwrap();
+    let expanded = ["M".to_string(), "p".to_string()];
+    let view = |fold_mixed| -> View {
+        serde_json::from_str(&explorer.focus_view_json(
+            &expanded,
+            true,
+            false,
+            &[],
+            false,
+            false,
+            &[],
+            fold_mixed,
+        ))
+        .unwrap()
+    };
+
+    assert_eq!(view(false).nodes, ["M", "p", "q", "T"]);
+    let folded = view(true);
+    assert_eq!(folded.nodes, ["M", "p", "q", "rest:p"]);
+    assert_eq!(folded.rest["p"], 1);
 }
 
 fn strings(items: &[&str]) -> Vec<String> {

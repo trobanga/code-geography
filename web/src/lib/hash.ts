@@ -14,6 +14,8 @@ export interface HashState {
   edges: EdgeOptions;
   /** Absent: no focus. */
   focus?: Focus;
+  /** Containers that show all children (ADR 0011, 0019) beyond those of the level. Absent: none. */
+  unfold?: string[];
 }
 
 const FLAGS = [
@@ -36,7 +38,7 @@ export function encodeHash(s: HashState): string {
   if (f?.nodes.length) parts.push(`focus=${ids(f.nodes)}`);
   if (f?.changes) parts.push('fchanges=1');
   if (f?.neighbors) parts.push('fnear=1');
-  if (f?.unfolded.length) parts.push(`unfold=${ids(f.unfolded)}`);
+  if (s.unfold?.length) parts.push(`unfold=${ids(s.unfold)}`);
   return '#' + parts.join('&');
 }
 
@@ -49,7 +51,7 @@ function decodeKinds(value: string): Record<EdgeKind, boolean> | null {
 export function decodeHash(hash: string): HashState {
   const edges: EdgeOptions = { ...DEFAULT_EDGE_OPTIONS, kinds: { ...DEFAULT_EDGE_OPTIONS.kinds } };
   const state: HashState = { level: 'modules', tests: false, open: [], edges };
-  const focus = (): Focus => (state.focus ??= { nodes: [], changes: false, neighbors: false, unfolded: [] });
+  const focus = (): Focus => (state.focus ??= { nodes: [], changes: false, neighbors: false });
   const ids = (value: string) => value.split(',').map(decodeURIComponent);
   for (const part of hash.replace(/^#/, '').split('&')) {
     const eq = part.indexOf('=');
@@ -63,7 +65,8 @@ export function decodeHash(hash: string): HashState {
     else if (key === 'focus' && value !== '') focus().nodes = ids(value);
     else if (key === 'fchanges' && value === '1') focus().changes = true;
     else if (key === 'fnear' && value === '1') focus().neighbors = true;
-    else if (key === 'unfold' && value !== '') focus().unfolded = ids(value);
+    // Before ADR 0019 the key belonged to the focus; it is read the same way.
+    else if (key === 'unfold' && value !== '') state.unfold = ids(value);
     else if (key === 'kinds') edges.kinds = decodeKinds(value) ?? edges.kinds;
     else {
       const flag = FLAGS.find(([k]) => k === key);
