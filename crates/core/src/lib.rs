@@ -1,6 +1,10 @@
 //! Language-neutral model of a code base: a tree of containers with edges
 //! between its nodes. No I/O, so the crate builds for native and wasm32.
 
+mod input;
+
+pub use input::{SourceFile, holds_no_sources, outside_excluded_directories, text_hash};
+
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 

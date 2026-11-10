@@ -26,10 +26,7 @@ fn index_writes_a_graph_file_that_core_reads_again() {
 
     assert!(status.success());
     let graph: Graph = serde_json::from_str(&fs::read_to_string(&output).unwrap()).unwrap();
-    assert_eq!(
-        graph,
-        cg_index_java::index(&dir.path().join("repo")).unwrap()
-    );
+    assert_eq!(graph, cg_index::index(&dir.path().join("repo")).unwrap());
     assert!(graph.has_edge("type:a.Sub", "type:a.Base", EdgeKind::Extends));
 }
 
@@ -66,6 +63,37 @@ fn index_prints_how_the_calls_were_resolved() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("calls: 1 to function, 0 to type, 1 external, 1 unresolved\n"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn index_prints_what_the_rust_front_end_could_not_follow() {
+    let dir = TempDir::new().unwrap();
+    let source = dir.path().join("repo");
+    fs::create_dir_all(source.join("src")).unwrap();
+    fs::write(source.join("Cargo.toml"), "[package]\nname = \"tool\"\n").unwrap();
+    fs::write(
+        source.join("src/lib.rs"),
+        "use crate::gone::G;\nuse std::fmt::Debug;\npub struct S;\npub fn f(s: S) {}\n",
+    )
+    .unwrap();
+    fs::write(source.join("src/orphan.rs"), "pub struct O;\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_cg"))
+        .arg("index")
+        .arg(&source)
+        .arg("-o")
+        .arg(dir.path().join("graph.json"))
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(
+            "rust: 1 paths resolved, 1 external, 1 unresolved; 1 files not reached, 0 #[path] attributes\n"
+        ),
         "{stderr}"
     );
 }

@@ -1,3 +1,3 @@
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/index-java", "crates/cli", "crates/wasm"]
+members = ["crates/core", "crates/index-java", "crates/index-rust", "crates/index", "crates/cli", "crates/wasm"]

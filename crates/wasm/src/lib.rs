@@ -69,44 +69,50 @@ impl Explorer {
     }
 }
 
-/// Whether the Java indexer wants the file at `path`. See `cg_index_java::is_input`.
+/// Whether some indexer (Java, Rust) wants the file at `path`. See `cg_index::is_input`.
 pub fn is_input(path: &str) -> bool {
-    cg_index_java::is_input(path)
+    cg_index::is_input(path)
 }
 
-/// Indexes Java sources that are given as data: `paths[i]` (relative to the root, with
-/// `/`) holds `texts[i]`. Returns the JSON `{"graph": ..., "report": ...}`.
-pub fn index_java(paths: &[String], texts: &[String], root_name: &str) -> Result<String, String> {
+/// Indexes sources that are given as data: `paths[i]` (relative to the root, with `/`)
+/// holds `texts[i]`. Returns the JSON `{"graph": ..., "report": {"calls": ..., "rust":
+/// ...}}`.
+pub fn index_sources(
+    paths: &[String],
+    texts: &[String],
+    root_name: &str,
+) -> Result<String, String> {
     if paths.len() != texts.len() {
         return Err(format!("{} paths but {} texts", paths.len(), texts.len()));
     }
-    let files: Vec<cg_index_java::SourceFile> = paths
+    let files: Vec<cg_index::SourceFile> = paths
         .iter()
         .zip(texts)
-        .map(|(path, text)| cg_index_java::SourceFile {
+        .map(|(path, text)| cg_index::SourceFile {
             path: path.clone(),
             text: text.clone(),
         })
         .collect();
-    let (graph, report) = cg_index_java::index_sources(root_name, &files);
+    let (graph, report) = cg_index::index_sources(root_name, &files);
     serde_json::to_string(&serde_json::json!({ "graph": graph, "report": report }))
         .map_err(|e| e.to_string())
 }
 
-/// `isInput(path)`: true for a `.java` file or a `pom.xml` that the indexer wants.
+/// `isInput(path)`: true for a `.java` file, a `pom.xml`, a `.rs` file or a `Cargo.toml`
+/// that an indexer wants.
 #[wasm_bindgen(js_name = isInput)]
 pub fn js_is_input(path: &str) -> bool {
     is_input(path)
 }
 
-/// `indexJava(paths, texts, rootName)`: JSON of `{graph, report}`; throws on an error.
-#[wasm_bindgen(js_name = indexJava)]
-pub fn js_index_java(
+/// `indexSources(paths, texts, rootName)`: JSON of `{graph, report}`; throws on an error.
+#[wasm_bindgen(js_name = indexSources)]
+pub fn js_index_sources(
     paths: Vec<String>,
     texts: Vec<String>,
     root_name: &str,
 ) -> Result<String, JsError> {
-    index_java(&paths, &texts, root_name).map_err(|message| JsError::new(&message))
+    index_sources(&paths, &texts, root_name).map_err(|message| JsError::new(&message))
 }
 
 /// The JavaScript class `Explorer`: only forwards to the plain type above.

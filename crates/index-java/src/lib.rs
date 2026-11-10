@@ -6,7 +6,8 @@
 
 mod calls;
 
-use cg_core::{Edge, EdgeKind, Graph, Node, NodeKind, Span};
+pub use cg_core::SourceFile;
+use cg_core::{Edge, EdgeKind, Graph, Node, NodeKind, Span, holds_no_sources};
 use serde::Serialize;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
@@ -140,29 +141,12 @@ pub struct Report {
     pub calls: CallReport,
 }
 
-/// One file of the input of `index_sources`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SourceFile {
-    /// Relative to the root of the repository, with `/` as separator.
-    pub path: String,
-    /// The content. Only the place of a `pom.xml` counts, so its text may be empty.
-    pub text: String,
-}
-
 /// Whether the indexer wants the file at `path` (relative to the root, `/` as separator):
-/// a `.java` file or a `pom.xml`, not below a directory that `holds_no_sources`.
+/// a `.java` file or a `pom.xml`, not below a directory that `cg_core::holds_no_sources`.
 pub fn is_input(path: &str) -> bool {
-    let mut parts = path.split('/').rev();
-    let Some(name) = parts.next() else {
-        return false;
-    };
+    let name = path.rsplit('/').next().unwrap_or(path);
     let wanted = name == "pom.xml" || (name.len() > ".java".len() && name.ends_with(".java"));
-    wanted && parts.all(|dir| !holds_no_sources(dir))
-}
-
-/// Hidden directories, Maven build output and npm packages hold copies, not sources.
-fn holds_no_sources(dir: &str) -> bool {
-    dir.starts_with('.') || dir == "target" || dir == "node_modules"
+    wanted && cg_core::outside_excluded_directories(path)
 }
 
 pub fn index(root: &Path) -> io::Result<Graph> {
@@ -613,11 +597,8 @@ fn slash_path(path: &Path) -> String {
         .join("/")
 }
 
-/// FNV-1a over the own source text of a declaration: the text without the byte
+/// The hash of the own source text of a declaration: the text without the byte
 /// ranges of the member functions and member types, which are nodes themselves.
-/// Each run of whitespace counts as one space, and leading and trailing whitespace
-/// does not count. Written by hand because `DefaultHasher` is not stable across
-/// Rust versions.
 fn own_hash(declaration: Ts, source: &str) -> String {
     let mut own = String::new();
     let mut position = declaration.start_byte();
@@ -628,13 +609,7 @@ fn own_hash(declaration: Ts, source: &str) -> String {
         }
     }
     own.push_str(&source[position..declaration.end_byte()]);
-    let normalized = own.split_whitespace().collect::<Vec<_>>().join(" ");
-    let mut hash: u64 = 0xcbf29ce484222325;
-    for byte in normalized.bytes() {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    format!("{hash:016x}")
+    cg_core::text_hash(&own)
 }
 
 /// The lines of a declaration: 1-based, inclusive.

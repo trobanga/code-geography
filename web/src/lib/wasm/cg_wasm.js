@@ -80,13 +80,13 @@ export class Explorer {
 if (Symbol.dispose) Explorer.prototype[Symbol.dispose] = Explorer.prototype.free;
 
 /**
- * `indexJava(paths, texts, rootName)`: JSON of `{graph, report}`; throws on an error.
+ * `indexSources(paths, texts, rootName)`: JSON of `{graph, report}`; throws on an error.
  * @param {string[]} paths
  * @param {string[]} texts
  * @param {string} root_name
  * @returns {string}
  */
-export function indexJava(paths, texts, root_name) {
+export function indexSources(paths, texts, root_name) {
     let deferred5_0;
     let deferred5_1;
     try {
@@ -96,7 +96,7 @@ export function indexJava(paths, texts, root_name) {
         const len1 = WASM_VECTOR_LEN;
         const ptr2 = passStringToWasm0(root_name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len2 = WASM_VECTOR_LEN;
-        const ret = wasm.indexJava(ptr0, len0, ptr1, len1, ptr2, len2);
+        const ret = wasm.indexSources(ptr0, len0, ptr1, len1, ptr2, len2);
         var ptr4 = ret[0];
         var len4 = ret[1];
         if (ret[3]) {
@@ -112,7 +112,8 @@ export function indexJava(paths, texts, root_name) {
 }
 
 /**
- * `isInput(path)`: true for a `.java` file or a `pom.xml` that the indexer wants.
+ * `isInput(path)`: true for a `.java` file, a `pom.xml`, a `.rs` file or a `Cargo.toml`
+ * that an indexer wants.
  * @param {string} path
  * @returns {boolean}
  */

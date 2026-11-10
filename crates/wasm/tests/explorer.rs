@@ -176,7 +176,7 @@ fn strings(items: &[&str]) -> Vec<String> {
 }
 
 #[test]
-fn index_java_returns_the_graph_and_the_report_of_the_sources_as_json() {
+fn index_sources_returns_the_graph_and_the_report_of_the_sources_as_json() {
     let paths = strings(&[
         "pom.xml",
         "src/main/java/a/Foo.java",
@@ -188,7 +188,7 @@ fn index_java_returns_the_graph_and_the_report_of_the_sources_as_json() {
         "package b;\npublic class Bar {}\n",
     ]);
 
-    let json = cg_wasm::index_java(&paths, &texts, "repo").unwrap();
+    let json = cg_wasm::index_sources(&paths, &texts, "repo").unwrap();
 
     let indexed: serde_json::Value = serde_json::from_str(&json).unwrap();
     let graph: Graph = serde_json::from_value(indexed["graph"].clone()).unwrap();
@@ -202,13 +202,14 @@ fn index_java_returns_the_graph_and_the_report_of_the_sources_as_json() {
                 == ("type:a.Foo", "type:b.Bar", EdgeKind::Extends))
     );
     assert_eq!(indexed["report"]["calls"]["unresolved"], 0);
+    assert_eq!(indexed["report"]["rust"]["paths"]["unresolved"], 0);
     // The graph of the result goes into an `Explorer`.
     assert!(Explorer::from_json(&indexed["graph"].to_string()).is_ok());
 }
 
 #[test]
-fn index_java_refuses_paths_and_texts_of_different_length() {
-    let Err(message) = cg_wasm::index_java(&strings(&["A.java"]), &[], "repo") else {
+fn index_sources_refuses_paths_and_texts_of_different_length() {
+    let Err(message) = cg_wasm::index_sources(&strings(&["A.java"]), &[], "repo") else {
         panic!("expected an error");
     };
 
@@ -219,4 +220,7 @@ fn index_java_refuses_paths_and_texts_of_different_length() {
 fn is_input_is_the_rule_of_the_indexer() {
     assert!(cg_wasm::is_input("a/Foo.java"));
     assert!(!cg_wasm::is_input("a/target/Foo.java"));
+    assert!(cg_wasm::is_input("src/lib.rs"));
+    assert!(cg_wasm::is_input("Cargo.toml"));
+    assert!(!cg_wasm::is_input("a/target/lib.rs"));
 }

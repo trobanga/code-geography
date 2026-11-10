@@ -44,7 +44,7 @@ name = "cg"
 version = "0.1.0"
 dependencies = [
  "cg-core",
- "cg-index-java",
+ "cg-index",
  "serde_json",
  "tempfile",
 ]
@@ -55,6 +55,17 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "cg-index"
+version = "0.1.0"
+dependencies = [
+ "cg-core",
+ "cg-index-java",
+ "cg-index-rust",
+ "serde",
+ "tempfile",
 ]
 
 [[package]]
@@ -69,11 +80,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "cg-index-rust"
+version = "0.1.0"
+dependencies = [
+ "cg-core",
+ "serde",
+ "tree-sitter",
+ "tree-sitter-rust",
+]
+
+[[package]]
 name = "cg-wasm"
 version = "0.1.0"
 dependencies = [
  "cg-core",
- "cg-index-java",
+ "cg-index",
  "serde_json",
  "wasm-bindgen",
 ]
@@ -361,6 +382,16 @@ name = "tree-sitter-language"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0af592be68c579aa78a16846bd19422978c3c52e438523d45ff5d1bff1f9d4a"
+
+[[package]]
+name = "tree-sitter-rust"
+version = "0.24.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "439e577dbe07423ec2582ac62c7531120dbfccfa6e5f92406f93dd271a120e45"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
 
 [[package]]
 name = "unicode-ident"

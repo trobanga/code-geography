@@ -36,7 +36,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
     let graph = match (command.as_deref(), positional.as_slice()) {
         (Some("index"), [repo]) => {
             let repo = PathBuf::from(repo);
-            let (graph, found) = cg_index_java::index_with_report(&repo)
+            let (graph, found) = cg_index::index_with_report(&repo)
                 .map_err(|e| format!("{}: {e}", repo.display()))?;
             report = Some(found);
             graph
@@ -52,10 +52,19 @@ fn run(args: Vec<String>) -> Result<(), String> {
         graph.edges.len(),
         output.display()
     );
-    if let Some(cg_index_java::Report { calls }) = report {
+    if let Some(cg_index::Report { calls, rust }) = report {
         eprintln!(
             "calls: {} to function, {} to type, {} external, {} unresolved",
             calls.to_function, calls.to_type, calls.external, calls.unresolved
+        );
+        let paths = rust.paths;
+        eprintln!(
+            "rust: {} paths resolved, {} external, {} unresolved; {} files not reached, {} #[path] attributes",
+            paths.resolved,
+            paths.external,
+            paths.unresolved,
+            rust.unreached_files.len(),
+            rust.path_attributes.len()
         );
     }
     Ok(())
@@ -179,5 +188,5 @@ fn index_revision(repo: &Path, revision: &str) -> Result<cg_core::Graph, String>
     if !tar.status.success() {
         return Err(String::from_utf8_lossy(&tar.stderr).trim_end().into());
     }
-    cg_index_java::index(dir.path()).map_err(|e| format!("{revision}: {e}"))
+    cg_index::index(dir.path()).map_err(|e| format!("{revision}: {e}"))
 }

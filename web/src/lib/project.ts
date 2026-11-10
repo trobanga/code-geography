@@ -24,7 +24,7 @@ export function chooseInputs<T>(files: Iterable<T>, relativeOf: (f: T) => string
   return { root, inputs };
 }
 
-/** The call report of `indexJava`. */
+/** The call report of `indexSources`: the Java part of its report. */
 export interface CallReport {
   to_function: number;
   to_type: number;
@@ -51,7 +51,7 @@ export function summarize(
   report: { calls: CallReport },
 ): Summary {
   const c = report.calls;
-  const sources = paths.filter((p) => p.endsWith('.java')).length;
+  const sources = paths.filter(isSourceFile).length;
   const resolved = c.to_function + c.to_type;
   const text =
     `${name}: ${sources} source files, ${graph.nodes.length} nodes, ${graph.edges.length} edges, ` +
@@ -66,8 +66,13 @@ export function summarize(
   return { name, sources, nodes: graph.nodes.length, edges: graph.edges.length, resolved, unresolved: c.unresolved, text, tooltip };
 }
 
+/** A source file, as opposed to a build file (`pom.xml`, `Cargo.toml`). */
+function isSourceFile(path: string): boolean {
+  return path.endsWith('.java') || path.endsWith('.rs');
+}
+
 /** Why the chosen files cannot be indexed, or null. */
 export function inputError(chosen: Chosen<unknown>): string | null {
-  if (chosen.inputs.some((i) => i.path.endsWith('.java'))) return null;
-  return `no Java sources found in ${chosen.root || 'the directory'} (only Java is supported now)`;
+  if (chosen.inputs.some((i) => isSourceFile(i.path))) return null;
+  return `no Java or Rust sources found in ${chosen.root || 'the directory'} (only Java and Rust are supported now)`;
 }

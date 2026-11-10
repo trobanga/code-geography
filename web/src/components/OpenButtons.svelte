@@ -31,7 +31,7 @@
 <button
   type="button"
   class="{btn} cursor-pointer"
-  title="Index a Java project in this browser. Not stored: a reload returns to graph.json."
+  title="Index a Java or Rust project in this browser. Not stored: a reload returns to graph.json."
   onclick={() => (picker ? pick() : dirInput?.click())}
 >
   open directory

@@ -144,7 +144,7 @@
     if (graph) missing = false;
   }
 
-  /** Indexes the Java sources of a chosen directory in a worker (ADR 0015). Only inputs are read. */
+  /** Indexes the Java and Rust sources of a chosen directory in a worker (ADR 0015). Only inputs are read. */
   async function openDirectory(collect: Collect) {
     const my = ++openSeq;
     try {
@@ -403,7 +403,7 @@
     {:else if missing}
       <div class="flex flex-1 items-center justify-center">
         <div class="flex max-w-md flex-col gap-3" data-start>
-          <p>No <code>graph.json</code> here. Open a project directory, or drop one anywhere on this page, to index it in this browser (Java only for now). Or open a graph file made by <code>cg index</code>.</p>
+          <p>No <code>graph.json</code> here. Open a project directory, or drop one anywhere on this page, to index it in this browser (Java and Rust). Or open a graph file made by <code>cg index</code>.</p>
           <p class="text-[var(--muted)]">Nothing is stored: a reload returns to this screen.</p>
           <div class="flex gap-2">
             <OpenButtons

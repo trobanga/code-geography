@@ -35,6 +35,11 @@ describe('summarize', () => {
     expect(s.text).toBe('repo: 2 source files, 3 nodes, 2 edges, calls: 7 resolved, 3 unresolved');
   });
 
+  it('counts .rs files as source files too, but not Cargo.toml', () => {
+    const s = summarize('repo', ['Cargo.toml', 'src/lib.rs', 'src/a.rs', 'a/B.java'], graph, report);
+    expect(s.sources).toBe(3);
+  });
+
   it('gives the four call numbers in the tooltip', () => {
     const s = summarize('repo', [], graph, report);
     expect(s.tooltip).toContain('to a function: 5');
@@ -45,13 +50,19 @@ describe('summarize', () => {
 });
 
 describe('inputError', () => {
-  it('says that only Java is supported when no input is found', () => {
-    expect(inputError({ root: 'docs', inputs: [] })).toBe('no Java sources found in docs (only Java is supported now)');
+  it('says that only Java and Rust are supported when no input is found', () => {
+    expect(inputError({ root: 'docs', inputs: [] })).toBe(
+      'no Java or Rust sources found in docs (only Java and Rust are supported now)',
+    );
+  });
+
+  it('accepts a directory with a Rust source file', () => {
+    expect(inputError({ root: 'p', inputs: [{ path: 'src/lib.rs', file: null }] })).toBeNull();
   });
 });
 
 describe('inputError with build files only', () => {
-  it('counts a directory with pom.xml files but no .java file as without sources', () => {
-    expect(inputError({ root: 'p', inputs: [{ path: 'pom.xml', file: null }] })).toMatch(/no Java sources found in p/);
+  it('counts a directory with pom.xml and Cargo.toml files but no source file as without sources', () => {
+    expect(inputError({ root: 'p', inputs: [{ path: 'pom.xml', file: null }, { path: 'Cargo.toml', file: null }] })).toMatch(/no Java or Rust sources found in p/);
   });
 });

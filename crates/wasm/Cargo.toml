@@ -8,7 +8,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 cg-core = { version = "0.1.0", path = "../core" }
-cg-index-java = { version = "0.1.0", path = "../index-java" }
+cg-index = { version = "0.1.0", path = "../index" }
 serde_json = "1.0.154"
 # Must be the same version as the installed `wasm-bindgen` CLI.
 wasm-bindgen = "=0.2.123"

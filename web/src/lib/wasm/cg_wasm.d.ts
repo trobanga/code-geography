@@ -13,12 +13,13 @@ export class Explorer {
 }
 
 /**
- * `indexJava(paths, texts, rootName)`: JSON of `{graph, report}`; throws on an error.
+ * `indexSources(paths, texts, rootName)`: JSON of `{graph, report}`; throws on an error.
  */
-export function indexJava(paths: string[], texts: string[], root_name: string): string;
+export function indexSources(paths: string[], texts: string[], root_name: string): string;
 
 /**
- * `isInput(path)`: true for a `.java` file or a `pom.xml` that the indexer wants.
+ * `isInput(path)`: true for a `.java` file, a `pom.xml`, a `.rs` file or a `Cargo.toml`
+ * that an indexer wants.
  */
 export function isInput(path: string): boolean;
 
@@ -31,12 +32,15 @@ export interface InitOutput {
     readonly explorer_focusView: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => [number, number];
     readonly explorer_new: (a: number, b: number) => [number, number, number];
     readonly explorer_view: (a: number, b: number, c: number, d: number, e: number) => [number, number];
-    readonly indexJava: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
+    readonly indexSources: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
     readonly isInput: (a: number, b: number) => number;
-    readonly strlen: (a: number) => number;
-    readonly abort: () => void;
     readonly calloc: (a: number, b: number) => number;
     readonly free: (a: number) => void;
+    readonly iswspace: (a: number) => number;
+    readonly iswdigit: (a: number) => number;
+    readonly iswalpha: (a: number) => number;
+    readonly strlen: (a: number) => number;
+    readonly abort: () => void;
     readonly malloc: (a: number) => number;
     readonly realloc: (a: number, b: number) => number;
     readonly strncmp: (a: number, b: number, c: number) => number;
@@ -49,13 +53,10 @@ export interface InitOutput {
     readonly strncat: (a: number, b: number, c: number) => number;
     readonly strncpy: (a: number, b: number, c: number) => number;
     readonly iswalnum: (a: number) => number;
-    readonly iswdigit: (a: number) => number;
-    readonly iswalpha: (a: number) => number;
     readonly iswblank: (a: number) => number;
     readonly iswlower: (a: number) => number;
     readonly towupper: (a: number) => number;
     readonly iswpunct: (a: number) => number;
-    readonly iswspace: (a: number) => number;
     readonly iswupper: (a: number) => number;
     readonly towlower: (a: number) => number;
     readonly iswxdigit: (a: number) => number;
