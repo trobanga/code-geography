@@ -21,7 +21,7 @@ describe('hash', () => {
       open: [],
       edges: {
         onSelection: true,
-        kinds: { extends: true, implements: false, imports: false, type_ref: true },
+        kinds: { extends: true, implements: false, imports: false, type_ref: true, calls: true },
         lift: false,
         changesOnly: true,
       },
@@ -52,7 +52,7 @@ describe('hash', () => {
   });
 
   it('round-trips all kinds off', () => {
-    const edges = { ...DEFAULT_EDGE_OPTIONS, kinds: { extends: false, implements: false, imports: false, type_ref: false } };
+    const edges = { ...DEFAULT_EDGE_OPTIONS, kinds: { extends: false, implements: false, imports: false, type_ref: false, calls: false } };
     expect(decodeHash(encodeHash({ level: 'modules', tests: false, open: [], edges })).edges).toEqual(edges);
   });
 

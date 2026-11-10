@@ -32,10 +32,14 @@ fn run(args: Vec<String>) -> Result<(), String> {
         }
     }
 
+    let mut report = None;
     let graph = match (command.as_deref(), positional.as_slice()) {
         (Some("index"), [repo]) => {
             let repo = PathBuf::from(repo);
-            cg_index_java::index(&repo).map_err(|e| format!("{}: {e}", repo.display()))?
+            let (graph, found) = cg_index_java::index_with_report(&repo)
+                .map_err(|e| format!("{}: {e}", repo.display()))?;
+            report = Some(found);
+            graph
         }
         (Some("diff"), [repo, rev]) => diff(Path::new(repo), rev)?,
         _ => return Err(USAGE.into()),
@@ -48,6 +52,12 @@ fn run(args: Vec<String>) -> Result<(), String> {
         graph.edges.len(),
         output.display()
     );
+    if let Some(cg_index_java::Report { calls }) = report {
+        eprintln!(
+            "calls: {} to function, {} to type, {} external, {} unresolved",
+            calls.to_function, calls.to_type, calls.external, calls.unresolved
+        );
+    }
     Ok(())
 }
 

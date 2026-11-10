@@ -13,7 +13,7 @@ const e = (from: string, to: string, kinds: ViewEdge['kinds'], added = 0, remove
 });
 
 describe('filterEdges (O2)', () => {
-  const all = { extends: true, implements: true, imports: true, type_ref: true };
+  const all = { extends: true, implements: true, imports: true, type_ref: true, calls: true };
 
   it('keeps every edge with all kinds on', () => {
     const edges = [e('a', 'b', { imports: 1 }), e('b', 'c', { type_ref: 2, extends: 1 })];

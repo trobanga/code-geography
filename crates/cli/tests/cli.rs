@@ -42,3 +42,30 @@ fn the_usage_text_names_both_commands() {
     assert!(stderr.contains("cg index <repo>"), "{stderr}");
     assert!(stderr.contains("cg diff <repo> <rev>"), "{stderr}");
 }
+
+#[test]
+fn index_prints_how_the_calls_were_resolved() {
+    let dir = TempDir::new().unwrap();
+    let source = dir.path().join("repo/a");
+    fs::create_dir_all(&source).unwrap();
+    fs::write(
+        source.join("T.java"),
+        "package a;\nclass T {\n    void m() {}\n    void n(T t) { t.m(); Math.abs(1); t.gone.x(); }\n}\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_cg"))
+        .arg("index")
+        .arg(dir.path().join("repo"))
+        .arg("-o")
+        .arg(dir.path().join("graph.json"))
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("calls: 1 to function, 0 to type, 1 external, 1 unresolved\n"),
+        "{stderr}"
+    );
+}

@@ -110,7 +110,7 @@ export interface EdgeOptions {
 
 export const DEFAULT_EDGE_OPTIONS: EdgeOptions = Object.freeze({
   onSelection: false,
-  kinds: Object.freeze({ extends: true, implements: true, imports: true, type_ref: true }),
+  kinds: Object.freeze({ extends: true, implements: true, imports: true, type_ref: true, calls: true }),
   lift: true,
   changesOnly: false,
 });

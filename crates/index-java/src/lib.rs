@@ -4,6 +4,8 @@
 //! Pass 2 resolves the type names in each file against the declared types and
 //! adds the edges. A generic type parameter hides a declared type of the same name.
 
+mod calls;
+
 use cg_core::{Edge, EdgeKind, Graph, Node, NodeKind, Span};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
@@ -35,6 +37,8 @@ struct Scope<'a> {
     on_demand: Vec<&'a str>,
     /// Qualified names of the types named by the static imports.
     static_holders: Vec<&'a str>,
+    /// The static imports as (type, member); no member for `import static p.T.*;`.
+    static_members: Vec<(&'a str, Option<&'a str>)>,
 }
 
 impl<'a> Scope<'a> {
@@ -45,6 +49,7 @@ impl<'a> Scope<'a> {
             explicit: HashMap::new(),
             on_demand: Vec::new(),
             static_holders: Vec::new(),
+            static_members: Vec::new(),
         };
         for import in children(unit.tree.root_node()).filter(|c| c.kind() == "import_declaration") {
             let is_static = (0..import.child_count())
@@ -63,6 +68,11 @@ impl<'a> Scope<'a> {
                     path.rsplit_once('.').map(|(h, _)| h)
                 };
                 scope.static_holders.extend(holder);
+                if wildcard {
+                    scope.static_members.push((path, None));
+                } else if let Some((holder, member)) = path.rsplit_once('.') {
+                    scope.static_members.push((holder, Some(member)));
+                }
             } else if wildcard {
                 scope.on_demand.push(path);
             } else {
@@ -109,7 +119,32 @@ impl<'a> Scope<'a> {
     }
 }
 
+/// How the call sites of the sources were resolved. Counts of call sites, before the
+/// removal of duplicate edges.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CallReport {
+    /// The call reaches one function of the repository.
+    pub to_function: usize,
+    /// The call reaches the type of the receiver: several overloads fit, or none is declared.
+    pub to_type: usize,
+    /// The type of the receiver is known and not in the repository.
+    pub external: usize,
+    /// The type of the receiver is not known.
+    pub unresolved: usize,
+}
+
+/// What the indexer could not resolve.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Report {
+    pub calls: CallReport,
+}
+
 pub fn index(root: &Path) -> io::Result<Graph> {
+    index_with_report(root).map(|(graph, _)| graph)
+}
+
+pub fn index_with_report(root: &Path) -> io::Result<(Graph, Report)> {
+    let mut report = Report::default();
     let mut parser = Parser::new();
     parser
         .set_language(&tree_sitter_java::LANGUAGE.into())
@@ -188,9 +223,14 @@ pub fn index(root: &Path) -> io::Result<Graph> {
         .filter(|n| n.kind == NodeKind::Type)
         .map(|n| n.id.clone())
         .collect();
+    let scopes: Vec<Scope> = units.iter().map(|u| Scope::new(u, &declared)).collect();
+    let all_decls: Vec<Vec<Decl>> = units
+        .iter()
+        .map(|u| declarations(u.tree.root_node(), &u.source, &u.package))
+        .collect();
+    let model = calls::Model::build(&units, &scopes, &all_decls);
     let mut edges = BTreeSet::new();
-    for unit in &units {
-        let scope = Scope::new(unit, &declared);
+    for ((unit, scope), decls) in units.iter().zip(&scopes).zip(all_decls) {
         let mut edge = |from: &str, to: Option<String>, kind| {
             if let Some(to) = to.filter(|to| to != from) {
                 edges.insert(Edge {
@@ -201,7 +241,6 @@ pub fn index(root: &Path) -> io::Result<Graph> {
                 });
             }
         };
-        let decls = declarations(unit.tree.root_node(), &unit.source, &unit.package);
         let top_level = decls
             .iter()
             .filter(|d| d.kind == NodeKind::Type && d.parent.is_none());
@@ -233,10 +272,15 @@ pub fn index(root: &Path) -> io::Result<Graph> {
                     .filter(|to| decl.kind == NodeKind::Type || Some(to) != decl.parent.as_ref());
                 edge(&decl.id, to, EdgeKind::TypeRef);
             }
+            let mut found = Vec::new();
+            calls::Walker::run(&model, unit, scope, &decl, &mut report.calls, &mut found);
+            for (from, to) in found {
+                edge(&from, Some(to), EdgeKind::Calls);
+            }
         }
     }
     graph.edges = edges.into_iter().collect();
-    Ok(graph)
+    Ok((graph, report))
 }
 
 /// The supertypes that a type declaration names, with the kind of the relation.

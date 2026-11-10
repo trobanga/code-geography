@@ -1,5 +1,5 @@
 use cg_core::{EdgeKind, Graph, NodeKind, Span};
-use cg_index_java::index;
+use cg_index_java::{CallReport, index, index_with_report};
 use std::fs;
 use tempfile::TempDir;
 
@@ -372,6 +372,7 @@ fn a_type_reference_gives_an_edge_from_the_innermost_declaration() {
     let g = index(dir.path()).unwrap();
 
     let mut from_function = edges_from(&g, "fn:a.Foo#bar(P)");
+    from_function.retain(|(_, kind)| *kind == EdgeKind::TypeRef);
     from_function.sort();
     let expected_function: Vec<_> = ["Arg", "Cast", "Local", "Made", "P", "Ret", "Thrown"]
         .iter()
@@ -681,4 +682,809 @@ fn whitespace_and_position_do_not_change_any_hash() {
             .map(str::len),
         Some(16)
     );
+}
+
+/// The targets of the `calls` edges that leave `from`.
+fn calls_from<'a>(g: &'a Graph, from: &str) -> Vec<&'a str> {
+    g.edges
+        .iter()
+        .filter(|e| e.from == from && e.kind == EdgeKind::Calls)
+        .map(|e| e.to.as_str())
+        .collect()
+}
+
+#[test]
+fn new_t_calls_the_one_constructor_of_t_with_that_number_of_arguments() {
+    let dir = repo(&[
+        (
+            "a/T.java",
+            "package a;\nclass T {\n    T() {}\n    T(int x) {}\n}\n",
+        ),
+        (
+            "a/User.java",
+            "package a;\nclass User {\n    void one() { new T(1); }\n    void none() { new T(); }\n}\n",
+        ),
+    ]);
+
+    let g = index(dir.path()).unwrap();
+
+    assert_eq!(calls_from(&g, "fn:a.User#one()"), ["fn:a.T#T(int)"]);
+    assert_eq!(calls_from(&g, "fn:a.User#none()"), ["fn:a.T#T()"]);
+}
+
+#[test]
+fn new_t_calls_the_type_when_several_constructors_fit_or_none_is_declared() {
+    let dir = repo(&[
+        (
+            "a/Two.java",
+            "package a;\nclass Two {\n    Two(int x) {}\n    Two(String s) {}\n    Two(int... xs) {}\n}\n",
+        ),
+        ("a/Implicit.java", "package a;\nclass Implicit {}\n"),
+        (
+            "a/User.java",
+            "package a;\n\
+             import java.util.ArrayList;\n\
+             class User<G> {\n\
+             \x20   void overloads() { new Two(1); }\n\
+             \x20   void varargs() { new Two(1, 2, 3); }\n\
+             \x20   void none() { new Implicit(); }\n\
+             \x20   void external() { new ArrayList<String>(); new java.io.File(\"x\"); new int[3]; }\n\
+             \x20   <P> void parameter() { new G(); new P(); }\n\
+             }\n",
+        ),
+    ]);
+
+    let g = index(dir.path()).unwrap();
+
+    assert_eq!(calls_from(&g, "fn:a.User#overloads()"), ["type:a.Two"]);
+    assert_eq!(
+        calls_from(&g, "fn:a.User#varargs()"),
+        ["fn:a.Two#Two(int...)"]
+    );
+    assert_eq!(calls_from(&g, "fn:a.User#none()"), ["type:a.Implicit"]);
+    assert!(calls_from(&g, "fn:a.User#external()").is_empty());
+    assert!(calls_from(&g, "fn:a.User#parameter()").is_empty());
+}
+
+#[test]
+fn a_call_in_a_field_initializer_or_an_initializer_block_comes_from_the_type() {
+    let dir = repo(&[
+        ("a/T.java", "package a;\nclass T {\n    T(int x) {}\n}\n"),
+        ("a/U.java", "package a;\nclass U {\n    U(String s) {}\n}\n"),
+        ("a/V.java", "package a;\nclass V {\n    V(long s) {}\n}\n"),
+        (
+            "a/Holder.java",
+            "package a;\n\
+             class Holder {\n\
+             \x20   T field = new T(1);\n\
+             \x20   static { new U(\"s\"); }\n\
+             \x20   { new V(2L); }\n\
+             \x20   class Inner {\n\
+             \x20       T inner = new T(2);\n\
+             \x20       void f() { new V(3L); }\n\
+             \x20   }\n\
+             }\n",
+        ),
+    ]);
+
+    let g = index(dir.path()).unwrap();
+
+    let mut own = calls_from(&g, "type:a.Holder");
+    own.sort();
+    assert_eq!(own, ["fn:a.T#T(int)", "fn:a.U#U(String)", "fn:a.V#V(long)"]);
+    assert_eq!(calls_from(&g, "type:a.Holder.Inner"), ["fn:a.T#T(int)"]);
+    assert_eq!(calls_from(&g, "fn:a.Holder.Inner#f()"), ["fn:a.V#V(long)"]);
+}
+
+#[test]
+fn a_call_edge_follows_the_conventions_of_the_other_edges() {
+    let dir = repo(&[
+        ("a/T.java", "package a;\nclass T {\n    T(int x) {}\n}\n"),
+        ("a/U.java", "package a;\nclass U {\n    U(int x) {}\n}\n"),
+        (
+            "a/Outer.java",
+            "package a;\n\
+             class Outer {\n\
+             \x20   void self() { new Outer(); }\n\
+             \x20   void twice() { new T(1); new T(2); }\n\
+             \x20   void inLambda() { Runnable r = () -> new T(1); }\n\
+             \x20   void inAnonymous() { new Object() { void g() { new U(1); } }; }\n\
+             \x20   class Inner {\n\
+             \x20       void up() { new Outer(); }\n\
+             \x20   }\n\
+             }\n",
+        ),
+        (
+            "a/Rec.java",
+            "package a;\nclass Rec {\n    Rec(int n) { new Rec(n - 1); }\n}\n",
+        ),
+    ]);
+
+    let g = index(dir.path()).unwrap();
+
+    assert!(
+        calls_from(&g, "fn:a.Outer#self()").is_empty(),
+        "a function does not call its own type"
+    );
+    assert_eq!(calls_from(&g, "fn:a.Outer#twice()"), ["fn:a.T#T(int)"]);
+    assert_eq!(calls_from(&g, "fn:a.Outer#inLambda()"), ["fn:a.T#T(int)"]);
+    assert_eq!(
+        calls_from(&g, "fn:a.Outer#inAnonymous()"),
+        ["fn:a.U#U(int)"]
+    );
+    assert_eq!(
+        calls_from(&g, "fn:a.Outer.Inner#up()"),
+        ["type:a.Outer"],
+        "to the outer type: not the own type of the function"
+    );
+    assert!(
+        calls_from(&g, "fn:a.Rec#Rec(int)").is_empty(),
+        "a function that calls itself gives no edge"
+    );
+}
+
+#[test]
+fn t_dot_m_calls_the_method_of_the_type_that_fits_by_name_and_number_of_arguments() {
+    let dir = repo(&[
+        (
+            "a/Util.java",
+            "package a;\n\
+             class Util {\n\
+             \x20   static int one(int a) { return a; }\n\
+             \x20   static int two(int a) { return a; }\n\
+             \x20   static int two(String s) { return 0; }\n\
+             \x20   static void zero() {}\n\
+             \x20   static void many(String s, int... rest) {}\n\
+             }\n",
+        ),
+        (
+            "a/User.java",
+            "package a;\n\
+             class User {\n\
+             \x20   void one() { Util.one(1); }\n\
+             \x20   void overloaded() { Util.two(1); }\n\
+             \x20   void zero() { Util.zero(); }\n\
+             \x20   void varargs() { Util.many(\"s\"); Util.many(\"s\", 1, 2); }\n\
+             \x20   void undeclared() { Util.missing(); Util.one(1, 2); }\n\
+             \x20   void external() { Math.max(1, 2); java.util.List.of(); }\n\
+             }\n",
+        ),
+    ]);
+
+    let g = index(dir.path()).unwrap();
+
+    assert_eq!(calls_from(&g, "fn:a.User#one()"), ["fn:a.Util#one(int)"]);
+    assert_eq!(calls_from(&g, "fn:a.User#overloaded()"), ["type:a.Util"]);
+    assert_eq!(calls_from(&g, "fn:a.User#zero()"), ["fn:a.Util#zero()"]);
+    assert_eq!(
+        calls_from(&g, "fn:a.User#varargs()"),
+        ["fn:a.Util#many(String,int...)"]
+    );
+    assert_eq!(calls_from(&g, "fn:a.User#undeclared()"), ["type:a.Util"]);
+    assert!(calls_from(&g, "fn:a.User#external()").is_empty());
+}
+
+#[test]
+fn m_without_receiver_looks_in_the_enclosing_types_and_their_supertypes() {
+    let dir = repo(&[
+        (
+            "a/Base.java",
+            "package a;\nclass Base {\n    void inherited() {}\n    void shadowed() {}\n}\n",
+        ),
+        (
+            "a/Mid.java",
+            "package a;\nclass Mid extends Base {\n    void shadowed() {}\n}\n",
+        ),
+        (
+            "a/Iface.java",
+            "package a;\ninterface Iface {\n    default void viaInterface() {}\n}\n",
+        ),
+        (
+            "a/Leaf.java",
+            "package a;\n\
+             class Leaf extends Mid implements Iface {\n\
+             \x20   void own() {}\n\
+             \x20   void f() { own(); inherited(); shadowed(); viaInterface(); }\n\
+             \x20   void g() { absent(); String.valueOf(1); }\n\
+             }\n",
+        ),
+        (
+            "a/Outer.java",
+            "package a;\n\
+             class Outer {\n\
+             \x20   void outerMethod() {}\n\
+             \x20   void both() {}\n\
+             \x20   class Inner {\n\
+             \x20       void both() {}\n\
+             \x20       void g() { outerMethod(); both(); }\n\
+             \x20   }\n\
+             }\n",
+        ),
+    ]);
+
+    let g = index(dir.path()).unwrap();
+
+    assert_eq!(
+        calls_from(&g, "fn:a.Leaf#f()"),
+        [
+            "fn:a.Base#inherited()",
+            "fn:a.Iface#viaInterface()",
+            "fn:a.Leaf#own()",
+            "fn:a.Mid#shadowed()",
+        ]
+    );
+    assert!(calls_from(&g, "fn:a.Leaf#g()").is_empty());
+    assert_eq!(
+        calls_from(&g, "fn:a.Outer.Inner#g()"),
+        ["fn:a.Outer#outerMethod()", "fn:a.Outer.Inner#both()"],
+        "the innermost type that has the method wins"
+    );
+}
+
+#[test]
+fn this_dot_m_looks_in_the_innermost_type_and_its_supertypes() {
+    let dir = repo(&[
+        (
+            "a/Base.java",
+            "package a;\nclass Base {\n    void inherited() {}\n}\n",
+        ),
+        (
+            "a/Outer.java",
+            "package a;\n\
+             class Outer extends Base {\n\
+             \x20   void own() {}\n\
+             \x20   void outerOnly() {}\n\
+             \x20   void f() { this.own(); this.inherited(); }\n\
+             \x20   class Inner {\n\
+             \x20       void g() { this.outerOnly(); }\n\
+             \x20   }\n\
+             }\n",
+        ),
+    ]);
+
+    let g = index(dir.path()).unwrap();
+
+    assert_eq!(
+        calls_from(&g, "fn:a.Outer#f()"),
+        ["fn:a.Base#inherited()", "fn:a.Outer#own()"]
+    );
+    assert!(
+        calls_from(&g, "fn:a.Outer.Inner#g()").is_empty(),
+        "`this` is the inner object, which has no `outerOnly`: its own type, no edge"
+    );
+}
+
+#[test]
+fn m_without_receiver_falls_back_to_a_static_import() {
+    let dir = repo(&[
+        (
+            "a/Util.java",
+            "package a;\n\
+             public class Util {\n\
+             \x20   public static void helper() {}\n\
+             \x20   public static void other() {}\n\
+             \x20   public static void twice(int x) {}\n\
+             \x20   public static void twice(String x) {}\n\
+             }\n",
+        ),
+        (
+            "b/User.java",
+            "package b;\n\
+             import static a.Util.helper;\n\
+             import static a.Util.twice;\n\
+             import static a.Util.*;\n\
+             import static org.junit.Assert.assertEquals;\n\
+             class User {\n\
+             \x20   void helper() {}\n\
+             \x20   void f() { helper(); other(); twice(1); assertEquals(1, 2); }\n\
+             }\n",
+        ),
+    ]);
+
+    let g = index(dir.path()).unwrap();
+
+    assert_eq!(
+        calls_from(&g, "fn:b.User#f()"),
+        ["fn:a.Util#other()", "fn:b.User#helper()", "type:a.Util"],
+        "a method of the type wins over the import; two overloads of the import give the type"
+    );
+}
+
+#[test]
+fn super_dot_m_looks_in_the_superclass_and_not_in_the_own_type() {
+    let dir = repo(&[
+        (
+            "a/Base.java",
+            "package a;\nclass Base {\n    void m() {}\n    void n(int a) {}\n}\n",
+        ),
+        (
+            "a/Mid.java",
+            "package a;\nclass Mid extends Base {\n    void inherited() {}\n}\n",
+        ),
+        (
+            "a/Sub.java",
+            "package a;\n\
+             class Sub extends Mid {\n\
+             \x20   void m() { super.m(); }\n\
+             \x20   void h() { super.n(1); super.inherited(); }\n\
+             \x20   void external() { super.toString(); }\n\
+             }\n",
+        ),
+        (
+            "a/Ext.java",
+            "package a;\nclass Ext extends java.util.ArrayList<String> {\n    void m() { super.add(\"x\"); }\n}\n",
+        ),
+    ]);
+
+    let g = index(dir.path()).unwrap();
+
+    assert_eq!(calls_from(&g, "fn:a.Sub#m()"), ["fn:a.Base#m()"]);
+    assert_eq!(
+        calls_from(&g, "fn:a.Sub#h()"),
+        ["fn:a.Base#n(int)", "fn:a.Mid#inherited()"]
+    );
+    assert!(calls_from(&g, "fn:a.Sub#external()").is_empty());
+    assert!(calls_from(&g, "fn:a.Ext#m()").is_empty());
+}
+
+#[test]
+fn x_dot_m_uses_the_declared_type_of_a_local_variable_or_a_parameter() {
+    let dir = repo(&[
+        (
+            "a/A.java",
+            "package a;\nclass A {\n    void a() {}\n    void shared() {}\n}\n",
+        ),
+        (
+            "a/B.java",
+            "package a;\nclass B {\n    void b() {}\n    void shared() {}\n}\n",
+        ),
+        (
+            "a/User.java",
+            "package a;\n\
+             import java.util.List;\n\
+             class User {\n\
+             \x20   User(A fromConstructor) { fromConstructor.a(); }\n\
+             \x20   void local() { A x = null; x.a(); }\n\
+             \x20   void parameter(B p) { p.b(); }\n\
+             \x20   void generic() { java.util.List<A> l = null; l.add(null); }\n\
+             \x20   void innermost() {\n\
+             \x20       A x = null;\n\
+             \x20       { B x = null; x.b(); }\n\
+             \x20       x.a();\n\
+             \x20   }\n\
+             \x20   void leaves() {\n\
+             \x20       { B y = null; }\n\
+             \x20       y.b();\n\
+             \x20   }\n\
+             \x20   void multiple() { A p = null, q = null; q.a(); }\n\
+             \x20   void loop() { for (A i = null; i != null;) { i.a(); } }\n\
+             }\n",
+        ),
+    ]);
+
+    let g = index(dir.path()).unwrap();
+
+    assert_eq!(calls_from(&g, "fn:a.User#User(A)"), ["fn:a.A#a()"]);
+    let a = "fn:a.A#a()";
+    assert_eq!(calls_from(&g, "fn:a.User#local()"), [a]);
+    assert_eq!(calls_from(&g, "fn:a.User#parameter(B)"), ["fn:a.B#b()"]);
+    assert!(calls_from(&g, "fn:a.User#generic()").is_empty());
+    assert_eq!(
+        calls_from(&g, "fn:a.User#innermost()"),
+        [a, "fn:a.B#b()"],
+        "the inner `x` hides the outer one only inside its block"
+    );
+    assert!(calls_from(&g, "fn:a.User#leaves()").is_empty());
+    assert_eq!(calls_from(&g, "fn:a.User#multiple()"), [a]);
+    assert_eq!(calls_from(&g, "fn:a.User#loop()"), [a]);
+}
+
+#[test]
+fn x_dot_m_uses_the_type_of_a_catch_for_resource_and_lambda_parameter_and_of_a_pattern() {
+    let dir = repo(&[
+        (
+            "a/A.java",
+            "package a;\nclass A {\n    void a() {}\n    void shared() {}\n}\n",
+        ),
+        (
+            "a/B.java",
+            "package a;\nclass B {\n    void b() {}\n    void shared() {}\n}\n",
+        ),
+        (
+            "a/User.java",
+            "package a;\n\
+             import java.util.List;\n\
+             import java.util.function.Consumer;\n\
+             class User {\n\
+             \x20   void each(List<A> l) { for (A i : l) { i.a(); } }\n\
+             \x20   void caught() { try { run(); } catch (B e) { e.b(); } }\n\
+             \x20   void multi() { try { run(); } catch (A | B e) { e.shared(); } }\n\
+             \x20   void resource() throws Exception { try (A r = null; A s = null) { r.a(); s.shared(); } }\n\
+             \x20   void typed() { Consumer<A> c = (A p) -> p.a(); }\n\
+             \x20   void untyped() { Consumer<A> c = p -> p.a(); }\n\
+             \x20   void pattern(Object o) { if (o instanceof A x && x.a()) { x.shared(); } }\n\
+             \x20   void switched(Object o) { switch (o) { case B y -> y.b(); default -> {} } }\n\
+             \x20   void run() {}\n\
+             }\n",
+        ),
+    ]);
+
+    let g = index(dir.path()).unwrap();
+
+    assert_eq!(calls_from(&g, "fn:a.User#each(List<A>)"), ["fn:a.A#a()"]);
+    assert_eq!(
+        calls_from(&g, "fn:a.User#caught()"),
+        ["fn:a.B#b()", "fn:a.User#run()"]
+    );
+    assert_eq!(
+        calls_from(&g, "fn:a.User#multi()"),
+        ["fn:a.User#run()"],
+        "the type of a multi-catch variable is not one type"
+    );
+    assert_eq!(
+        calls_from(&g, "fn:a.User#resource()"),
+        ["fn:a.A#a()", "fn:a.A#shared()"]
+    );
+    assert_eq!(calls_from(&g, "fn:a.User#typed()"), ["fn:a.A#a()"]);
+    assert!(
+        calls_from(&g, "fn:a.User#untyped()").is_empty(),
+        "a lambda parameter without a written type is unresolved"
+    );
+    assert_eq!(
+        calls_from(&g, "fn:a.User#pattern(Object)"),
+        ["fn:a.A#a()", "fn:a.A#shared()"]
+    );
+    assert_eq!(calls_from(&g, "fn:a.User#switched(Object)"), ["fn:a.B#b()"]);
+}
+
+#[test]
+fn var_has_the_type_of_a_new_expression_and_is_unresolved_otherwise() {
+    let dir = repo(&[
+        (
+            "a/A.java",
+            "package a;\nclass A {\n    A() {}\n    void a() {}\n    A self() { return this; }\n}\n",
+        ),
+        (
+            "a/User.java",
+            "package a;\n\
+             class User {\n\
+             \x20   void created() { var x = new A(); x.a(); }\n\
+             \x20   void other(A p) { var y = p.self(); y.a(); }\n\
+             \x20   void each(java.util.List<A> l) { for (var i : l) { i.a(); } }\n\
+             }\n",
+        ),
+    ]);
+
+    let g = index(dir.path()).unwrap();
+
+    assert_eq!(
+        calls_from(&g, "fn:a.User#created()"),
+        ["fn:a.A#A()", "fn:a.A#a()"]
+    );
+    assert_eq!(
+        calls_from(&g, "fn:a.User#other(A)"),
+        ["fn:a.A#self()"],
+        "`y` is `var` with an initializer that is not a `new` expression"
+    );
+    assert!(calls_from(&g, "fn:a.User#each(java.util.List<A>)").is_empty());
+}
+
+#[test]
+fn x_dot_m_uses_the_type_of_a_field_of_an_enclosing_type_or_of_its_supertypes() {
+    let dir = repo(&[
+        ("a/A.java", "package a;\nclass A {\n    void a() {}\n}\n"),
+        ("a/B.java", "package a;\nclass B {\n    void b() {}\n}\n"),
+        (
+            "a/Base.java",
+            "package a;\nclass Base {\n    A inheritedField;\n    static A constant;\n}\n",
+        ),
+        (
+            "a/User.java",
+            "package a;\n\
+             import java.util.function.Consumer;\n\
+             class User extends Base {\n\
+             \x20   A field;\n\
+             \x20   B hidden;\n\
+             \x20   void viaField() { field.a(); }\n\
+             \x20   void viaInherited() { inheritedField.a(); constant.a(); }\n\
+             \x20   void viaThis() { this.field.a(); }\n\
+             \x20   void localWins() { A hidden = null; hidden.a(); }\n\
+             \x20   void parameterWins(A hidden) { hidden.a(); }\n\
+             \x20   void lambdaHides() { Consumer<B> c = field -> field.b(); }\n\
+             \x20   void variableWinsOverType() { B A = null; A.b(); }\n\
+             \x20   class Inner {\n\
+             \x20       void g() { field.a(); }\n\
+             \x20   }\n\
+             }\n",
+        ),
+    ]);
+
+    let g = index(dir.path()).unwrap();
+
+    let a = ["fn:a.A#a()"];
+    assert_eq!(calls_from(&g, "fn:a.User#viaField()"), a);
+    assert_eq!(calls_from(&g, "fn:a.User#viaInherited()"), a);
+    assert_eq!(calls_from(&g, "fn:a.User#viaThis()"), a);
+    assert_eq!(calls_from(&g, "fn:a.User#localWins()"), a);
+    assert_eq!(calls_from(&g, "fn:a.User#parameterWins(A)"), a);
+    assert!(calls_from(&g, "fn:a.User#lambdaHides()").is_empty());
+    assert_eq!(
+        calls_from(&g, "fn:a.User#variableWinsOverType()"),
+        ["fn:a.B#b()"]
+    );
+    assert_eq!(calls_from(&g, "fn:a.User.Inner#g()"), a);
+}
+
+#[test]
+fn this_dot_f_dot_m_and_a_dot_f_dot_m_use_the_declared_type_of_the_field() {
+    let dir = repo(&[
+        (
+            "a/Leaf.java",
+            "package a;\nclass Leaf {\n    void leaf() {}\n    static Leaf INSTANCE;\n}\n",
+        ),
+        (
+            "a/Mid.java",
+            "package a;\nclass Mid {\n    Leaf leaf;\n    java.util.List<Leaf> list;\n    Leaf[] array;\n    class Nested { static void n() {} }\n}\n",
+        ),
+        (
+            "a/Top.java",
+            "package a;\n\
+             class Top {\n\
+             \x20   Mid mid;\n\
+             \x20   void fromThis() { this.mid.leaf.leaf(); }\n\
+             \x20   void fromVariable(Mid m) { m.leaf.leaf(); }\n\
+             \x20   void fromStatic() { Leaf.INSTANCE.leaf(); a.Leaf.INSTANCE.leaf(); }\n\
+             \x20   void fromNested() { Mid.Nested.n(); a.Mid.Nested.n(); }\n\
+             \x20   void unresolved(Mid m) { m.list.get(0).leaf(); m.array.length(); m.absent.leaf(); }\n\
+             }\n",
+        ),
+    ]);
+
+    let g = index(dir.path()).unwrap();
+
+    assert_eq!(calls_from(&g, "fn:a.Top#fromThis()"), ["fn:a.Leaf#leaf()"]);
+    assert_eq!(
+        calls_from(&g, "fn:a.Top#fromVariable(Mid)"),
+        ["fn:a.Leaf#leaf()"]
+    );
+    assert_eq!(
+        calls_from(&g, "fn:a.Top#fromStatic()"),
+        ["fn:a.Leaf#leaf()"]
+    );
+    assert_eq!(
+        calls_from(&g, "fn:a.Top#fromNested()"),
+        ["fn:a.Mid.Nested#n()"]
+    );
+    assert!(calls_from(&g, "fn:a.Top#unresolved(Mid)").is_empty());
+}
+
+#[test]
+fn a_dot_b_dot_c_follows_the_declared_return_type_of_a_unique_function() {
+    let dir = repo(&[
+        (
+            "a/B.java",
+            "package a;\nclass B {\n    void c() {}\n    B self() { return this; }\n}\n",
+        ),
+        (
+            "a/A.java",
+            "package a;\n\
+             class A {\n\
+             \x20   B b() { return null; }\n\
+             \x20   String name() { return \"\"; }\n\
+             \x20   <T> T generic() { return null; }\n\
+             \x20   B over(int i) { return null; }\n\
+             \x20   B over(String s) { return null; }\n\
+             }\n",
+        ),
+        (
+            "a/User.java",
+            "package a;\n\
+             class User {\n\
+             \x20   void chain(A x) { x.b().c(); }\n\
+             \x20   void longer(A x) { x.b().self().self().c(); }\n\
+             \x20   void created() { new A().b().c(); }\n\
+             \x20   void external(A x) { x.name().length(); }\n\
+             \x20   void generic(A x) { x.generic().c(); }\n\
+             \x20   void overloaded(A x) { x.over(1).c(); }\n\
+             \x20   void parenthesized(A x) { ((A) null).b().c(); (x).b().c(); }\n\
+             }\n",
+        ),
+    ]);
+
+    let g = index(dir.path()).unwrap();
+
+    let chain = ["fn:a.A#b()", "fn:a.B#c()"];
+    assert_eq!(calls_from(&g, "fn:a.User#chain(A)"), chain);
+    assert_eq!(
+        calls_from(&g, "fn:a.User#longer(A)"),
+        ["fn:a.A#b()", "fn:a.B#c()", "fn:a.B#self()"]
+    );
+    assert_eq!(
+        calls_from(&g, "fn:a.User#created()"),
+        ["fn:a.A#b()", "fn:a.B#c()", "type:a.A"]
+    );
+    assert_eq!(calls_from(&g, "fn:a.User#external(A)"), ["fn:a.A#name()"]);
+    assert_eq!(calls_from(&g, "fn:a.User#generic(A)"), ["fn:a.A#generic()"]);
+    assert_eq!(
+        calls_from(&g, "fn:a.User#overloaded(A)"),
+        ["type:a.A"],
+        "several overloads fit: the return type is not known"
+    );
+    assert_eq!(calls_from(&g, "fn:a.User#parenthesized(A)"), chain);
+}
+
+#[test]
+fn a_method_reference_is_a_call_with_an_unknown_number_of_arguments() {
+    let dir = repo(&[
+        (
+            "a/Util.java",
+            "package a;\n\
+             class Util {\n\
+             \x20   Util() {}\n\
+             \x20   static void one(int a) {}\n\
+             \x20   static void two(int a) {}\n\
+             \x20   static void two(String s) {}\n\
+             }\n",
+        ),
+        (
+            "a/Plain.java",
+            "package a;\nclass Plain {\n    void p() {}\n}\n",
+        ),
+        (
+            "a/User.java",
+            "package a;\n\
+             class User extends Plain {\n\
+             \x20   void own() {}\n\
+             \x20   void unique() { Object o = Util::one; }\n\
+             \x20   void overloaded() { Object o = Util::two; }\n\
+             \x20   void constructor() { Object o = Util::new; }\n\
+             \x20   void implicit() { Object o = Plain::new; }\n\
+             \x20   void onThis() { Object o = this::own; }\n\
+             \x20   void onVariable(Plain x) { Object o = x::p; }\n\
+             \x20   void onSuper() { Object o = super::p; }\n\
+             \x20   void external() { Object o = String::valueOf; Object n = java.util.ArrayList<String>::new; Object a = int[]::new; }\n\
+             }\n",
+        ),
+    ]);
+
+    let g = index(dir.path()).unwrap();
+
+    assert_eq!(calls_from(&g, "fn:a.User#unique()"), ["fn:a.Util#one(int)"]);
+    assert_eq!(calls_from(&g, "fn:a.User#overloaded()"), ["type:a.Util"]);
+    assert_eq!(
+        calls_from(&g, "fn:a.User#constructor()"),
+        ["fn:a.Util#Util()"]
+    );
+    assert_eq!(calls_from(&g, "fn:a.User#implicit()"), ["type:a.Plain"]);
+    assert_eq!(calls_from(&g, "fn:a.User#onThis()"), ["fn:a.User#own()"]);
+    assert_eq!(
+        calls_from(&g, "fn:a.User#onVariable(Plain)"),
+        ["fn:a.Plain#p()"]
+    );
+    assert_eq!(calls_from(&g, "fn:a.User#onSuper()"), ["fn:a.Plain#p()"]);
+    assert!(calls_from(&g, "fn:a.User#external()").is_empty());
+}
+
+#[test]
+fn the_report_counts_the_call_sites_by_how_they_were_resolved() {
+    let dir = repo(&[
+        ("a/T.java", "package a;\nclass T {\n    void m() {}\n}\n"),
+        (
+            "a/Two.java",
+            "package a;\nclass Two {\n    Two(int a) {}\n    Two(String s) {}\n}\n",
+        ),
+        (
+            "a/User.java",
+            "package a;\n\
+             class User {\n\
+             \x20   void f(T t) {\n\
+             \x20       t.m();\n\
+             \x20       t.m();\n\
+             \x20       new Two(1);\n\
+             \x20       new java.io.File(\"x\");\n\
+             \x20       Math.max(1, 2);\n\
+             \x20       unknown.call();\n\
+             \x20   }\n\
+             }\n",
+        ),
+    ]);
+
+    let (g, report) = index_with_report(dir.path()).unwrap();
+
+    assert_eq!(
+        report.calls,
+        CallReport {
+            to_function: 2,
+            to_type: 1,
+            external: 2,
+            unresolved: 1,
+        },
+        "duplicates count: the sites are counted, not the edges"
+    );
+    assert_eq!(g, index(dir.path()).unwrap());
+}
+
+#[test]
+fn a_call_on_a_literal_or_of_a_method_of_object_is_external() {
+    let dir = repo(&[(
+        "a/User.java",
+        "package a;\n\
+         class User {\n\
+         \x20   void f() {\n\
+         \x20       \"x\".length();\n\
+         \x20       User.class.getName();\n\
+         \x20       getClass();\n\
+         \x20       hashCode();\n\
+         \x20   }\n\
+         }\n",
+    )]);
+
+    let (g, report) = index_with_report(dir.path()).unwrap();
+
+    assert_eq!(
+        report.calls,
+        CallReport {
+            to_function: 0,
+            to_type: 0,
+            external: 4,
+            unresolved: 0,
+        }
+    );
+    assert!(calls_from(&g, "fn:a.User#f()").is_empty());
+}
+
+#[test]
+fn a_member_of_an_anonymous_class_hides_the_method_of_the_enclosing_type() {
+    let dir = repo(&[
+        (
+            "a/Base.java",
+            "package a;\nclass Base {\n    void inherited() {}\n}\n",
+        ),
+        (
+            "a/User.java",
+            "package a;\n\
+             class User {\n\
+             \x20   void helper() {}\n\
+             \x20   void clash() {}\n\
+             \x20   void f() {\n\
+             \x20       new Base() {\n\
+             \x20           void own() {}\n\
+             \x20           void clash() {}\n\
+             \x20           void g() { helper(); clash(); own(); inherited(); this.helper(); }\n\
+             \x20       };\n\
+             \x20   }\n\
+             }\n",
+        ),
+    ]);
+
+    let g = index(dir.path()).unwrap();
+
+    assert_eq!(
+        calls_from(&g, "fn:a.User#f()"),
+        ["fn:a.Base#inherited()", "fn:a.User#helper()", "type:a.Base"],
+        "`clash()` and `own()` are the members of the anonymous class, `this.helper()` is not known"
+    );
+}
+
+#[test]
+fn this_and_super_with_arguments_call_a_constructor_of_the_own_type_or_the_superclass() {
+    let dir = repo(&[
+        (
+            "a/Base.java",
+            "package a;\nclass Base {\n    Base(int x) {}\n}\n",
+        ),
+        (
+            "a/Sub.java",
+            "package a;\n\
+             class Sub extends Base {\n\
+             \x20   Sub() { this(1); }\n\
+             \x20   Sub(int x) { super(x); }\n\
+             }\n",
+        ),
+    ]);
+
+    let g = index(dir.path()).unwrap();
+
+    assert_eq!(calls_from(&g, "fn:a.Sub#Sub()"), ["fn:a.Sub#Sub(int)"]);
+    assert_eq!(calls_from(&g, "fn:a.Sub#Sub(int)"), ["fn:a.Base#Base(int)"]);
 }

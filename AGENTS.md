@@ -14,7 +14,7 @@ model. Record each new decision of that weight as a new ADR.
 | graph | Nodes in a tree (`parent`) plus edges between any two nodes. |
 | fact level | A node kind that comes from the language or build system: `module` (unit of build), `package` (namespace), `type`, `function`. |
 | group | A container that does not come from the language (directory or AI). Not built yet. |
-| edge | A dependency that the indexer can prove from the source: `extends`, `implements`, `imports`, `type_ref`. |
+| edge | A dependency that the indexer can prove from the source: `extends`, `implements`, `imports`, `type_ref`, `calls` (ADR 0014). |
 | cut | The set of visible nodes for a given set of expanded containers, with each edge moved to the nearest visible ancestors of its ends. |
 | view | The result of a cut: visible nodes, nodes that can open, aggregated edges with counts. |
 | focus cut | A cut that folds the children that are not of interest into one placeholder `rest:<container id>` (ADR 0011). |
@@ -71,7 +71,11 @@ pnpm dev                                     # http://localhost:5173/
 
 ## Known gaps
 
-- No call edges. A static call `Foo.bar()` gives no edge.
+- Call edges (ADR 0014) need a receiver type that the declarations prove. No edge for a
+  chain through an external type, a lambda parameter without a written type, a `var` that
+  is not `var x = new T()`, members that Lombok generates, or overloads that differ only
+  by type (the edge then goes to the type). `cg index` prints how many call sites fell
+  into each class.
 - No Rust front end, no AI grouping, no GitHub connection.
 - Local classes and members of anonymous classes get no node.
 - A rename of a type or method looks like one removal and one addition.
