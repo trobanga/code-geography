@@ -8,6 +8,8 @@ export interface Point {
 }
 export interface LaidNode {
   id: string;
+  /** Id of the enclosing visible node, null at top level. */
+  parent: string | null;
   x: number;
   y: number;
   w: number;
@@ -50,9 +52,10 @@ export async function runLayout(graph: ElkNode): Promise<Layout> {
   const res = await Promise.race([e.layout(graph), workerError!]);
   const nodes: LaidNode[] = [];
   const walk = (n: ElkNode, depth: number) => {
+    const parent = depth === 0 ? null : n.id;
     for (const c of n.children ?? []) {
       const container = (c.children?.length ?? 0) > 0;
-      nodes.push({ id: c.id, x: c.x ?? 0, y: c.y ?? 0, w: c.width ?? 0, h: c.height ?? 0, container, depth });
+      nodes.push({ id: c.id, parent, x: c.x ?? 0, y: c.y ?? 0, w: c.width ?? 0, h: c.height ?? 0, container, depth });
       walk(c, depth + 1);
     }
   };

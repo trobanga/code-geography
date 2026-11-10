@@ -78,3 +78,17 @@ export function splitByLevel(tree: Tree, expanded: ReadonlySet<string>): { level
   }
   return { level: best.level, open: [...expanded].filter((id) => !best.base.has(id)) };
 }
+
+export function isAncestor(tree: Tree, anc: string, id: string): boolean {
+  for (let p = tree.byId.get(id)?.parent ?? null; p !== null; p = tree.byId.get(p)?.parent ?? null) {
+    if (p === anc) return true;
+  }
+  return false;
+}
+
+/** `nodeCount` sets the spacing; defaults to the number of visible nodes. */
+
+/** An edge can be drawn when its ends differ and neither contains the other (ADR 0006). */
+export function drawable(tree: Tree, e: { from: string; to: string }): boolean {
+  return e.from !== e.to && !isAncestor(tree, e.from, e.to) && !isAncestor(tree, e.to, e.from);
+}

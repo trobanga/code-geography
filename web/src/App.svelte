@@ -2,7 +2,10 @@
   import { onMount, tick, untrack } from 'svelte';
   import DetailPanel from './components/DetailPanel.svelte';
   import Diagram from './components/Diagram.svelte';
+  import EdgeBar from './components/EdgeBar.svelte';
   import Toolbar from './components/Toolbar.svelte';
+  import type { Offset } from './lib/drag';
+  import { DEFAULT_EDGE_OPTIONS, edgePipeline, painted, type Drawn, type EdgeOptions } from './lib/edgeOptions';
   import { toElkGraph } from './lib/elkGraph';
   import { buildTree, collapse, levelExpanded, splitByLevel, type Tree } from './lib/expansion';
   import { decodeHash, encodeHash } from './lib/hash';
@@ -15,9 +18,13 @@
   let tree = $state.raw<Tree | null>(null);
   let expanded = $state.raw<Set<string>>(new Set());
   let tests = $state(false);
+  // Deep state: each consumer tracks only the fields it reads, so O1 does not trigger a layout.
+  let opts = $state<EdgeOptions>({ ...DEFAULT_EDGE_OPTIONS, kinds: { ...DEFAULT_EDGE_OPTIONS.kinds } });
   let selected = $state<string | null>(null);
-  let view = $state.raw<View | null>(null);
-  let layout = $state.raw<Layout | null>(null);
+  let hoverNode = $state<string | null>(null);
+  let offsets = $state.raw<Map<string, Offset>>(new Map());
+  /** A layout together with the edge list it was computed for. */
+  let laid = $state.raw<{ layout: Layout; drawn: Drawn } | null>(null);
   let busy = $state(false);
   let fitNext = true;
   let seq = 0;
@@ -27,6 +34,19 @@
   const hashState = $derived(tree ? splitByLevel(tree, expanded) : null);
   const activeLevel = $derived(hashState && hashState.open.length === 0 ? hashState.level : null);
 
+  // O4 is part of the WASM view.
+  const view = $derived(
+    explorer && tree ? (JSON.parse(explorer.view([...expanded], tests, opts.mergeImports)) as View) : null,
+  );
+  // O2 → O3 → O5.
+  const drawn = $derived(view && tree ? edgePipeline(view.edges, tree, opts) : null);
+  const paintedCount = $derived(
+    laid
+      ? laid.layout.edges.filter((le) => painted(laid!.drawn.edges[le.index], opts.onSelection, selected, hoverNode))
+          .length
+      : 0,
+  );
+
   async function load(text: string) {
     try {
       await init();
@@ -35,6 +55,7 @@
       explorer?.free();
       explorer = ex;
       tree = buildTree(graph.nodes);
+      offsets = new Map();
       error = null;
       applyHash(location.hash);
     } catch (e) {
@@ -46,6 +67,7 @@
     if (!tree) return;
     const s = decodeHash(hash);
     tests = s.tests;
+    Object.assign(opts, s.edges);
     expanded = new Set([...levelExpanded(tree, s.level), ...s.open]);
     fitNext = true;
   }
@@ -62,22 +84,26 @@
     else if (view?.expandable.includes(id)) expanded = new Set([...expanded, id]);
   }
 
-  // View from the wasm cut; layout from ELK in a worker. Stale results are dropped.
   $effect(() => {
-    if (!explorer || !tree) return;
-    const v = JSON.parse(explorer.view([...expanded], tests, false)) as View;
-    view = v;
+    const v = view;
     untrack(() => {
-      if (selected && !v.nodes.includes(selected)) selected = null;
+      if (v && selected && !v.nodes.includes(selected)) selected = null;
     });
+  });
+
+  // Layout from ELK in a worker. Stale results are dropped.
+  $effect(() => {
+    if (!view || !tree || !drawn) return;
+    const d = drawn;
+    const v = view;
     const my = ++seq;
     busy = true;
     const t0 = performance.now();
-    runLayout(toElkGraph(v, tree))
+    runLayout(toElkGraph({ ...v, edges: d.edges }, tree))
       .then(async (l) => {
         if (my !== seq) return;
         console.info(`layout ${v.nodes.length} nodes ${l.edges.length} edges ${Math.round(performance.now() - t0)} ms`);
-        layout = l;
+        laid = { layout: l, drawn: d };
         busy = false;
         if (fitNext) {
           fitNext = false;
@@ -95,7 +121,7 @@
   // Hash follows the state.
   $effect(() => {
     if (!hashState) return;
-    const h = encodeHash({ level: hashState.level, tests, open: hashState.open });
+    const h = encodeHash({ level: hashState.level, tests, open: hashState.open, edges: opts });
     if (h !== location.hash) history.replaceState(null, '', h);
     lastHash = h;
   });
@@ -118,28 +144,36 @@
     level={activeLevel}
     {tests}
     {busy}
+    moved={offsets.size > 0}
     onlevel={setLevel}
     ontests={(v) => (tests = v)}
     onfit={() => diagram?.fit()}
+    onreset={() => (offsets = new Map())}
     onfile={(f) => {
       selected = null;
       f.text().then(load);
     }}
   />
+  <EdgeBar {opts} onchange={(patch) => Object.assign(opts, patch)} drawn={paintedCount} total={drawn?.total ?? 0} />
   {#if error}
     <div class="border-b border-[var(--line)] px-3 py-1 text-[var(--accent)]">{error}</div>
   {/if}
   <div class="flex min-h-0 flex-1">
-    {#if tree && view && layout}
+    {#if tree && view && laid}
       <Diagram
         bind:this={diagram}
+        bind:hoverNode
         {tree}
         {view}
-        {layout}
+        layout={laid.layout}
+        drawn={laid.drawn}
+        onSelection={opts.onSelection}
+        {offsets}
         {expanded}
         {selected}
         onselect={(id) => (selected = id)}
         ontoggle={toggle}
+        onoffset={(id, o) => (offsets = new Map(offsets).set(id, o))}
       />
       <DetailPanel {tree} {view} {selected} {tests} onselect={(id) => (selected = id)} />
     {:else}

@@ -6,17 +6,21 @@
     level,
     tests,
     busy,
+    moved,
     onlevel,
     ontests,
     onfit,
+    onreset,
     onfile,
   }: {
     level: Level | null;
     tests: boolean;
     busy: boolean;
+    moved: boolean;
     onlevel: (l: Level) => void;
     ontests: (t: boolean) => void;
     onfit: () => void;
+    onreset: () => void;
     onfile: (f: File) => void;
   } = $props();
 
@@ -38,6 +42,7 @@
     test code
   </label>
   <button class={btn} onclick={onfit}>fit</button>
+  <button class="{btn} disabled:opacity-40" disabled={!moved} onclick={onreset}>reset positions</button>
   <label class="{btn} cursor-pointer">
     open file
     <input

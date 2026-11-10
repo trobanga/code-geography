@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fitTransform, polylineMidpoint, zoomAt } from './viewport';
+import { fitTransform, labelAnchor, polylineMidpoint, zoomAt } from './viewport';
 
 describe('fitTransform', () => {
   it('scales the content into the viewport with a margin and centers it', () => {
@@ -31,5 +31,21 @@ describe('zoomAt', () => {
     const world = (t: typeof t0) => [(100 - t.x) / t.k, (80 - t.y) / t.k];
     expect(t1.k).toBe(1);
     expect(world(t1)).toEqual(world(t0));
+  });
+});
+
+describe('labelAnchor', () => {
+  it('puts the label on the middle of the longest segment', () => {
+    const a = labelAnchor([
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 10, y: 100 },
+      { x: 40, y: 100 },
+    ]);
+    expect(a).toEqual({ x: 10, y: 50, horizontal: false });
+  });
+
+  it('marks horizontal segments', () => {
+    expect(labelAnchor([{ x: 0, y: 5 }, { x: 80, y: 5 }])).toEqual({ x: 40, y: 5, horizontal: true });
   });
 });

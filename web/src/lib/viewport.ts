@@ -39,3 +39,16 @@ export function zoomAt(t: Transform, px: number, py: number, factor: number): Tr
   const k = t.k * factor;
   return { k, x: px - (px - t.x) * factor, y: py - (py - t.y) * factor };
 }
+
+/** Middle of the longest segment; parallel routes are farthest apart there. */
+export function labelAnchor(pts: { x: number; y: number }[]): { x: number; y: number; horizontal: boolean } {
+  let best = 0;
+  let len = -1;
+  for (let i = 0; i + 1 < pts.length; i++) {
+    const l = Math.hypot(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y);
+    if (l > len) [best, len] = [i, l];
+  }
+  const a = pts[best];
+  const b = pts[Math.min(best + 1, pts.length - 1)];
+  return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, horizontal: Math.abs(b.x - a.x) >= Math.abs(b.y - a.y) };
+}

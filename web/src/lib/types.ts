@@ -1,5 +1,6 @@
 export type NodeKind = 'module' | 'package' | 'type' | 'function';
-export type EdgeKind = 'extends' | 'implements' | 'imports' | 'type_ref';
+export const EDGE_KINDS = ['extends', 'implements', 'imports', 'type_ref'] as const;
+export type EdgeKind = (typeof EDGE_KINDS)[number];
 
 export interface GraphNode {
   id: string;
