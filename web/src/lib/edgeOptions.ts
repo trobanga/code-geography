@@ -104,8 +104,6 @@ export interface EdgeOptions {
   kinds: KindSwitch;
   /** O3 */
   lift: boolean;
-  /** O4: passed to the WASM view. */
-  mergeImports: boolean;
   /** Commit overlay: paint only changed edges. */
   changesOnly: boolean;
 }
@@ -114,7 +112,6 @@ export const DEFAULT_EDGE_OPTIONS: EdgeOptions = Object.freeze({
   onSelection: false,
   kinds: Object.freeze({ extends: true, implements: true, imports: true, type_ref: true }),
   lift: true,
-  mergeImports: true,
   changesOnly: false,
 });
 

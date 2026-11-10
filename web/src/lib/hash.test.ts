@@ -23,7 +23,6 @@ describe('hash', () => {
         onSelection: true,
         kinds: { extends: true, implements: false, imports: false, type_ref: true },
         lift: false,
-        mergeImports: false,
         changesOnly: true,
       },
     };
@@ -69,14 +68,14 @@ describe('hash', () => {
 
   it('writes a default-on option only when it is off', () => {
     const base = { level: 'modules' as const, tests: false, open: [] };
-    const off = { ...DEFAULT_EDGE_OPTIONS, lift: false, mergeImports: false };
-    expect(DEFAULT_EDGE_OPTIONS.lift && DEFAULT_EDGE_OPTIONS.mergeImports).toBe(true);
-    expect(encodeHash({ ...base, edges: off })).toBe('#level=modules&tests=0&lift=0&merge=0');
+    const off = { ...DEFAULT_EDGE_OPTIONS, lift: false };
+    expect(DEFAULT_EDGE_OPTIONS.lift).toBe(true);
+    expect(encodeHash({ ...base, edges: off })).toBe('#level=modules&tests=0&lift=0');
     expect(decodeHash(encodeHash({ ...base, edges: off })).edges).toEqual(off);
   });
 
   it('loads an old hash with removed keys', () => {
-    expect(decodeHash('#level=packages&min=3&reduce=1&lift=1').edges).toEqual(DEFAULT_EDGE_OPTIONS);
+    expect(decodeHash('#level=packages&min=3&reduce=1&merge=0&lift=1').edges).toEqual(DEFAULT_EDGE_OPTIONS);
   });
 
   it('accepts a hash with leading # and missing fields', () => {

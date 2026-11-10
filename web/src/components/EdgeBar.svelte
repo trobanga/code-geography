@@ -17,7 +17,7 @@
     onchange: (patch: Partial<EdgeOptions>) => void;
   } = $props();
 
-  const flag = (key: 'onSelection' | 'lift' | 'mergeImports') => (e: Event) =>
+  const flag = (key: 'onSelection' | 'lift') => (e: Event) =>
     onchange({ [key]: (e.currentTarget as HTMLInputElement).checked });
 </script>
 
@@ -39,9 +39,6 @@
   </span>
   <label class="flex items-center gap-1 border-l border-[var(--line)] pl-3">
     <input type="checkbox" checked={opts.lift} onchange={flag('lift')} />lift
-  </label>
-  <label class="flex items-center gap-1">
-    <input type="checkbox" checked={opts.mergeImports} onchange={flag('mergeImports')} />merge imports
   </label>
   <span class="ml-auto tabular-nums text-[var(--muted)]">{linesText(drawn, total, dropped)}</span>
 </div>

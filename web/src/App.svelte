@@ -18,6 +18,9 @@
   import type { Graph, Level, View } from './lib/types';
   import init, { Explorer } from './lib/wasm/cg_wasm.js';
 
+  // An import that a use covers is a duplicate, so the view never counts it (ADR 13).
+  const MERGE_IMPORTS = true;
+
   let error = $state<string | null>(null);
   let graph = $state.raw<Graph | null>(null);
   /** null: a file opened from disk. */
@@ -51,8 +54,8 @@
     const ex = [...expanded];
     const f = focus;
     const json = focusActive(f)
-      ? explorer.focusView(ex, tests, opts.mergeImports, f.nodes, f.changes && graph?.diff != null, f.neighbors, f.unfolded)
-      : explorer.view(ex, tests, opts.mergeImports);
+      ? explorer.focusView(ex, tests, MERGE_IMPORTS, f.nodes, f.changes && graph?.diff != null, f.neighbors, f.unfolded)
+      : explorer.view(ex, tests, MERGE_IMPORTS);
     return JSON.parse(json) as View;
   });
   // O2 → O3.

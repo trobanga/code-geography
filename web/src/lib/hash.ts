@@ -19,7 +19,6 @@ export interface HashState {
 const FLAGS = [
   ['sel', 'onSelection'],
   ['lift', 'lift'],
-  ['merge', 'mergeImports'],
   ['changes', 'changesOnly'],
 ] as const;
 
