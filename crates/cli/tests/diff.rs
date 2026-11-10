@@ -215,3 +215,104 @@ fn a_revision_that_looks_like_an_option_is_refused() {
     assert!(stderr.contains("not a revision"), "{stderr}");
     assert!(!output.exists());
 }
+
+fn files(graph: &Graph) -> Vec<(&str, Change, Option<&str>)> {
+    graph
+        .diff
+        .as_ref()
+        .expect("diff info")
+        .files
+        .iter()
+        .map(|f| (f.path.as_str(), f.change, f.module.as_deref()))
+        .collect()
+}
+
+#[test]
+fn a_commit_without_declarations_lists_its_files_and_marks_no_node() {
+    let dir = TempDir::new().unwrap();
+    let repo = dir.path();
+    git(repo, &["init", "-q"]);
+    write(repo, "app/pom.xml", "<project/>\n");
+    write(
+        repo,
+        "app/src/main/java/a/Foo.java",
+        "package a;\nclass Foo {}\n",
+    );
+    write(repo, "README.md", "one\n");
+    commit(repo, "first");
+    write(repo, "app/pom.xml", "<project>\n</project>\n");
+    write(repo, "README.md", "two\n");
+    commit(repo, "second");
+    let output = repo.join("diff.json");
+
+    let run = cg_diff(repo, &["HEAD"], &output);
+
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let graph = read(&output);
+    assert_eq!(node_changes(&graph), []);
+    assert_eq!(
+        files(&graph),
+        [
+            ("README.md", Change::Modified, None),
+            ("app/pom.xml", Change::Modified, Some("mod:app")),
+        ]
+    );
+}
+
+#[test]
+fn the_files_of_a_commit_include_java_files_with_added_removed_and_modified() {
+    let dir = two_commits();
+    let output = dir.path().join("diff.json");
+
+    cg_diff(dir.path(), &["HEAD"], &output);
+
+    assert_eq!(
+        files(&read(&output)),
+        [
+            ("a/Base.java", Change::Modified, None),
+            ("a/Gone.java", Change::Removed, None),
+            ("a/Sub.java", Change::Added, None),
+        ]
+    );
+}
+
+#[test]
+fn the_files_of_a_root_commit_are_all_added() {
+    let dir = two_commits();
+    let output = dir.path().join("diff.json");
+
+    cg_diff(dir.path(), &["HEAD~1"], &output);
+
+    assert_eq!(
+        files(&read(&output)),
+        [
+            ("a/Base.java", Change::Added, None),
+            ("a/Gone.java", Change::Added, None),
+            ("a/Keep.java", Change::Added, None),
+        ]
+    );
+}
+
+#[test]
+fn the_files_of_a_range_compare_its_two_ends() {
+    let dir = two_commits();
+    write(dir.path(), "docs/notes.txt", "x\n");
+    commit(dir.path(), "third");
+    let output = dir.path().join("diff.json");
+
+    cg_diff(dir.path(), &["HEAD~2..HEAD"], &output);
+
+    assert_eq!(
+        files(&read(&output)),
+        [
+            ("a/Base.java", Change::Modified, None),
+            ("a/Gone.java", Change::Removed, None),
+            ("a/Sub.java", Change::Added, None),
+            ("docs/notes.txt", Change::Added, None),
+        ]
+    );
+}

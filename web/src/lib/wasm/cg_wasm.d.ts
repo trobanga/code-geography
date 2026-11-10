@@ -7,6 +7,7 @@
 export class Explorer {
     free(): void;
     [Symbol.dispose](): void;
+    focusView(expanded: string[], include_tests: boolean, merge_imports: boolean, focus_nodes: string[], focus_changes: boolean, neighbors: boolean, unfolded: string[]): string;
     constructor(graph_json: string);
     view(expanded: string[], include_tests: boolean, merge_imports: boolean): string;
 }
@@ -16,14 +17,15 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly __wbg_explorer_free: (a: number, b: number) => void;
+    readonly explorer_focusView: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => [number, number];
     readonly explorer_new: (a: number, b: number) => [number, number, number];
     readonly explorer_view: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;
-    readonly __externref_table_dealloc: (a: number) => void;
     readonly __externref_table_alloc: () => number;
     readonly __wbindgen_free: (a: number, b: number, c: number) => void;
+    readonly __externref_table_dealloc: (a: number) => void;
     readonly __wbindgen_start: () => void;
 }
 

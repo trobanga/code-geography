@@ -17,6 +17,8 @@ model. Record each new decision of that weight as a new ADR.
 | edge | A dependency that the indexer can prove from the source: `extends`, `implements`, `imports`, `type_ref`. |
 | cut | The set of visible nodes for a given set of expanded containers, with each edge moved to the nearest visible ancestors of its ends. |
 | view | The result of a cut: visible nodes, nodes that can open, aggregated edges with counts. |
+| focus cut | A cut that folds the children that are not of interest into one placeholder `rest:<container id>` (ADR 0011). |
+| overlay | The diff graph of a commit: the union of two graphs with `change` marks, plus the list of changed files (ADR 0009, 0012). |
 | front end | The part that turns the sources of one language into a graph. |
 | test code | Code in a source set other than `src/main`. Hidden by default. |
 
@@ -25,7 +27,7 @@ model. Record each new decision of that weight as a new ADR.
 ```
 crates/core        graph model, cut, filters. No I/O. Builds for native and wasm32.
 crates/index-java  Java front end on tree-sitter: index(root) -> Graph
-crates/cli         cg index <repo> -o graph.json
+crates/cli         cg index <repo> -o graph.json; cg diff <repo> <rev|A..B> -o diff.json
 crates/wasm        wasm-bindgen binding of core: class Explorer
 scripts/build-wasm.sh   builds crates/wasm into web/src/lib/wasm (generated, committed)
 web/               viewer: Svelte 5, Tailwind 4, ELK layout in a web worker, plain SVG

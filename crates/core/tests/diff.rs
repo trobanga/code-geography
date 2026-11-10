@@ -50,6 +50,7 @@ fn marks_and_diff_info_are_in_the_json_only_when_set() {
         diff: Some(DiffInfo {
             base: "v1".into(),
             head: "v2".into(),
+            files: vec![],
         }),
         ..Graph::default()
     };

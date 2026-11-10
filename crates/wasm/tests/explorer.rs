@@ -135,3 +135,38 @@ fn the_marks_of_a_diff_graph_reach_the_view_in_each_variant() {
     let merged: View = serde_json::from_str(&explorer.view_json(&expanded, false, true)).unwrap();
     assert_eq!((merged.edges[0].count, merged.edges[0].removed), (1, 1));
 }
+
+#[test]
+fn focus_view_json_folds_in_the_chosen_variant_and_passes_each_option() {
+    let explorer = Explorer::from_json(&graph_json()).unwrap();
+    let expanded = ["M".to_string(), "p".to_string()];
+    let focus = ["T".to_string()];
+    let focus_view = |include_tests, changes, neighbors, unfolded: &[String]| -> View {
+        serde_json::from_str(&explorer.focus_view_json(
+            &expanded,
+            include_tests,
+            false,
+            &focus,
+            changes,
+            neighbors,
+            unfolded,
+        ))
+        .unwrap()
+    };
+
+    let folded = focus_view(true, false, false, &[]);
+    assert_eq!(folded.nodes, ["M", "p", "T", "rest:p", "TM"]);
+    assert_eq!(folded.rest["p"], 1);
+
+    // Without tests `TT` does not exist, so nothing folds.
+    let without = focus_view(false, false, false, &[]);
+    assert_eq!(without.nodes, ["M", "p", "T"]);
+    assert!(without.rest.is_empty());
+
+    // `TT` uses `T`: a neighbor, so kept.
+    let near = focus_view(true, false, true, &[]);
+    assert_eq!(near.nodes, ["M", "p", "T", "TT", "TM"]);
+
+    let unfolded = focus_view(true, false, false, &["p".to_string()]);
+    assert_eq!(unfolded.nodes, ["M", "p", "T", "TT", "TM"]);
+}

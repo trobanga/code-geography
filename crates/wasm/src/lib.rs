@@ -1,7 +1,7 @@
 //! Browser binding of the graph cut. `Explorer` holds one graph and answers
 //! `view` calls with the JSON of a `cg_core::View`.
 
-use cg_core::Graph;
+use cg_core::{Focus, Graph};
 use std::collections::HashSet;
 use wasm_bindgen::prelude::*;
 
@@ -42,6 +42,31 @@ impl Explorer {
         let expanded: HashSet<String> = expanded.iter().cloned().collect();
         serde_json::to_string(&graph.cut(&expanded)).expect("a view serializes to JSON")
     }
+
+    /// Like `view_json`, but the expanded containers fold the children that the
+    /// focus does not name. See `cg_core::Graph::cut_focused`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn focus_view_json(
+        &self,
+        expanded: &[String],
+        include_tests: bool,
+        merge_imports: bool,
+        focus_nodes: &[String],
+        focus_changes: bool,
+        neighbors: bool,
+        unfolded: &[String],
+    ) -> String {
+        let graph = &self.variants[variant(include_tests, merge_imports)];
+        let expanded: HashSet<String> = expanded.iter().cloned().collect();
+        let focus = Focus {
+            nodes: focus_nodes.iter().cloned().collect(),
+            changes: focus_changes,
+            neighbors,
+            unfolded: unfolded.iter().cloned().collect(),
+        };
+        serde_json::to_string(&graph.cut_focused(&expanded, &focus))
+            .expect("a view serializes to JSON")
+    }
 }
 
 /// The JavaScript class `Explorer`: only forwards to the plain type above.
@@ -59,5 +84,28 @@ impl JsExplorer {
 
     pub fn view(&self, expanded: Vec<String>, include_tests: bool, merge_imports: bool) -> String {
         self.0.view_json(&expanded, include_tests, merge_imports)
+    }
+
+    #[wasm_bindgen(js_name = focusView)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn focus_view(
+        &self,
+        expanded: Vec<String>,
+        include_tests: bool,
+        merge_imports: bool,
+        focus_nodes: Vec<String>,
+        focus_changes: bool,
+        neighbors: bool,
+        unfolded: Vec<String>,
+    ) -> String {
+        self.0.focus_view_json(
+            &expanded,
+            include_tests,
+            merge_imports,
+            &focus_nodes,
+            focus_changes,
+            neighbors,
+            &unfolded,
+        )
     }
 }

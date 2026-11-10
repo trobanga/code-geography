@@ -2,6 +2,7 @@
 //! between its nodes. No I/O, so the crate builds for native and wasm32.
 
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -78,6 +79,62 @@ pub struct Edge {
 pub struct DiffInfo {
     pub base: String,
     pub head: String,
+    /// Each file that the commit changed, whether or not it holds declarations.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<FileChange>,
+}
+
+/// A file that a commit changed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileChange {
+    /// Relative to the repository root, with `/` as separator.
+    pub path: String,
+    pub change: Change,
+    /// Id of the module node whose directory is the longest prefix of the path.
+    pub module: Option<String>,
+    /// The file is in test sources, see `in_test_sources`.
+    pub test: bool,
+}
+
+/// Whether a directory `src` of a `/`-separated file path is followed by a directory
+/// other than `main`: `src/test`, `src/e2e`, `src/it`, ...
+pub fn in_test_sources(file: &str) -> bool {
+    let dirs: Vec<&str> = file.split('/').collect();
+    let dirs = &dirs[..dirs.len() - 1];
+    dirs.windows(2).any(|w| w[0] == "src" && w[1] != "main")
+}
+
+/// The changed files of a commit, in the given order, each with the module of
+/// `graph` that contains it. Module ids are `mod:<directory>`; the directory of the
+/// repository root is empty.
+pub fn file_changes(graph: &Graph, changed: &[(String, Change)]) -> Vec<FileChange> {
+    let modules: Vec<(&str, &str)> = graph
+        .nodes
+        .iter()
+        .filter(|n| n.kind == NodeKind::Module)
+        .filter_map(|n| Some((n.id.as_str(), n.id.strip_prefix("mod:")?)))
+        .collect();
+    changed
+        .iter()
+        .map(|(path, change)| {
+            let module = modules
+                .iter()
+                .filter(|(_, dir)| {
+                    dir.is_empty()
+                        || path
+                            .strip_prefix(dir)
+                            .is_some_and(|rest| rest.starts_with('/'))
+                })
+                .max_by_key(|(_, dir)| dir.len())
+                .map(|(id, _)| id.to_string());
+            FileChange {
+                path: path.clone(),
+                change: *change,
+                module,
+                test: in_test_sources(path),
+            }
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -290,6 +347,10 @@ pub struct View {
     /// For each visible node: how many nodes in its subtree, itself included,
     /// carry each mark. Nodes without marks have no entry.
     pub changes: std::collections::BTreeMap<String, ChangeCount>,
+    /// For each container that folds children into a placeholder `rest:<id>`: how
+    /// many direct children are folded. Only set by `Graph::cut_focused`.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub rest: std::collections::BTreeMap<String, usize>,
 }
 
 /// The number of marked nodes of each kind of change.
@@ -314,18 +375,96 @@ pub struct ViewEdge {
     pub removed: usize,
 }
 
-impl Graph {
-    /// Cuts the container tree. A node is visible if each of its ancestors is
-    /// expanded. Each edge moves to the nearest visible ancestors of its ends,
-    /// and an edge with both ends below the same visible node is not shown.
-    pub fn cut(&self, expanded: &std::collections::HashSet<String>) -> View {
-        use std::collections::{BTreeMap, HashMap};
+/// What a focused cut keeps in view. See `Graph::cut_focused`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Focus {
+    /// Explicit nodes of interest. Each of their descendants is kept too.
+    pub nodes: std::collections::HashSet<String>,
+    /// Also of interest: each node with a change mark and both ends of each edge
+    /// with a change mark.
+    pub changes: bool,
+    /// Also of interest: the other end of each edge that has one end at a node of
+    /// interest or at a descendant of one. One step only.
+    pub neighbors: bool,
+    /// Containers that show all their children in spite of the focus.
+    pub unfolded: std::collections::HashSet<String>,
+}
 
+impl Graph {
+    /// Like `cut`, but an expanded container with children of interest shows only
+    /// those and one placeholder `rest:<id>` for the others.
+    pub fn cut_focused(&self, expanded: &HashSet<String>, focus: &Focus) -> View {
         let parents: HashMap<&str, Option<&str>> = self
             .nodes
             .iter()
             .map(|n| (n.id.as_str(), n.parent.as_deref()))
             .collect();
+        let explicit: HashSet<&str> = focus
+            .nodes
+            .iter()
+            .map(String::as_str)
+            .filter(|id| parents.contains_key(id))
+            .collect();
+        let mut interest = explicit.clone();
+        if focus.changes {
+            interest.extend(
+                self.nodes
+                    .iter()
+                    .filter(|n| n.change.is_some())
+                    .map(|n| n.id.as_str()),
+            );
+            for edge in self.edges.iter().filter(|e| e.change.is_some()) {
+                interest.extend(
+                    [edge.from.as_str(), edge.to.as_str()]
+                        .into_iter()
+                        .filter(|id| parents.contains_key(id)),
+                );
+            }
+        }
+        if focus.neighbors {
+            // The other end of each edge with one end at or below a node of interest.
+            let inside = |id: &str| {
+                std::iter::successors(Some(id), |id| parents.get(id).copied().flatten())
+                    .any(|a| interest.contains(a))
+            };
+            let mut neighbors: Vec<&str> = Vec::new();
+            for edge in &self.edges {
+                let (from, to) = (edge.from.as_str(), edge.to.as_str());
+                if !parents.contains_key(from) || !parents.contains_key(to) {
+                    continue;
+                }
+                if inside(from) {
+                    neighbors.push(to);
+                }
+                if inside(to) {
+                    neighbors.push(from);
+                }
+            }
+            interest.extend(neighbors);
+        }
+        // Nodes whose subtree, itself included, holds a node of interest.
+        let mut kept: HashSet<&str> = HashSet::new();
+        for id in &interest {
+            let mut current = Some(*id);
+            while let Some(id) = current {
+                if !kept.insert(id) {
+                    break;
+                }
+                current = parents.get(id).copied().flatten();
+            }
+        }
+        // Each descendant of an explicit node is kept as well.
+        kept.extend(self.nodes.iter().map(|n| n.id.as_str()).filter(|id| {
+            std::iter::successors(Some(*id), |id| parents.get(id).copied().flatten())
+                .any(|a| explicit.contains(a))
+        }));
+        let kept_parents: HashSet<&str> = kept
+            .iter()
+            .filter_map(|id| parents.get(id).copied().flatten())
+            .collect();
+        // Containers that fold: they have a kept child and are not unfolded.
+        let folds = |id: &str| kept_parents.contains(id) && !focus.unfolded.contains(id);
+
         // Nearest visible ancestor-or-self.
         let anchor = |id: &str| -> Option<&str> {
             let mut path = vec![*parents.get_key_value(id)?.0];
@@ -342,18 +481,58 @@ impl Graph {
             }
             Some(visible)
         };
+        // The container whose placeholder stands for `id`, if `id` is folded.
+        let folded_into = |id: &str| -> Option<&str> {
+            let mut path = vec![*parents.get_key_value(id)?.0];
+            while let Some(Some(parent)) = parents.get(path[path.len() - 1]) {
+                path.push(parent);
+            }
+            let mut visible = path.pop()?;
+            while let Some(child) = path.pop() {
+                if !expanded.contains(visible) {
+                    return None;
+                }
+                if folds(visible) && !kept.contains(child) {
+                    return Some(visible);
+                }
+                visible = child;
+            }
+            None
+        };
 
         let nodes: Vec<String> = self
             .nodes
             .iter()
-            .filter(|n| anchor(&n.id) == Some(n.id.as_str()))
+            .filter(|n| anchor(&n.id) == Some(n.id.as_str()) && folded_into(&n.id).is_none())
             .map(|n| n.id.clone())
             .collect();
+        // How many direct children each folding container folds.
+        let mut rest: BTreeMap<String, usize> = BTreeMap::new();
+        let visible: HashSet<&str> = nodes.iter().map(String::as_str).collect();
+        for node in &self.nodes {
+            if let Some(parent) = node.parent.as_deref()
+                && visible.contains(parent)
+                && expanded.contains(parent)
+                && folds(parent)
+                && !kept.contains(node.id.as_str())
+            {
+                *rest.entry(parent.to_string()).or_default() += 1;
+            }
+        }
+        let nodes = place_rests(nodes, &rest, &parents, &kept);
+        let visible: HashSet<&str> = nodes.iter().map(String::as_str).collect();
         // Per pair: the counts by kind, and how many edges are added and removed.
         type Aggregate = (BTreeMap<EdgeKind, usize>, usize, usize);
-        let mut aggregated: BTreeMap<(&str, &str), Aggregate> = BTreeMap::new();
+        let mut aggregated: BTreeMap<(String, String), Aggregate> = BTreeMap::new();
+        // The visible node, or the placeholder, that stands for `id`.
+        let end = |id: &str| -> Option<String> {
+            match folded_into(id) {
+                Some(container) => Some(format!("rest:{container}")),
+                None => anchor(id).map(str::to_string),
+            }
+        };
         for edge in &self.edges {
-            if let (Some(from), Some(to)) = (anchor(&edge.from), anchor(&edge.to))
+            if let (Some(from), Some(to)) = (end(&edge.from), end(&edge.to))
                 && from != to
             {
                 let (kinds, added, removed) = aggregated.entry((from, to)).or_default();
@@ -368,16 +547,15 @@ impl Graph {
         let edges = aggregated
             .into_iter()
             .map(|((from, to), (kinds, added, removed))| ViewEdge {
-                from: from.to_string(),
-                to: to.to_string(),
+                from,
+                to,
                 count: kinds.values().sum(),
                 kinds,
                 added,
                 removed,
             })
             .collect();
-        let visible: std::collections::HashSet<&str> = nodes.iter().map(String::as_str).collect();
-        let with_children: std::collections::HashSet<&str> = self
+        let with_children: HashSet<&str> = self
             .nodes
             .iter()
             .filter_map(|n| n.parent.as_deref())
@@ -410,6 +588,51 @@ impl Graph {
             edges,
             expandable,
             changes,
+            rest,
         }
     }
+
+    /// Cuts the container tree. A node is visible if each of its ancestors is
+    /// expanded. Each edge moves to the nearest visible ancestors of its ends,
+    /// and an edge with both ends below the same visible node is not shown.
+    pub fn cut(&self, expanded: &HashSet<String>) -> View {
+        self.cut_focused(expanded, &Focus::default())
+    }
+}
+
+/// Inserts the placeholder `rest:<container>` of each container in `rest` after the
+/// last visible node of the container's kept children.
+fn place_rests(
+    nodes: Vec<String>,
+    rest: &BTreeMap<String, usize>,
+    parents: &HashMap<&str, Option<&str>>,
+    kept: &HashSet<&str>,
+) -> Vec<String> {
+    if rest.is_empty() {
+        return nodes;
+    }
+    let depth =
+        |id: &str| std::iter::successors(Some(id), |id| parents.get(id).copied().flatten()).count();
+    // Per node of the view: the placeholders that go right after it.
+    let mut after: HashMap<usize, Vec<&str>> = HashMap::new();
+    for container in rest.keys() {
+        let last = nodes.iter().rposition(|id| {
+            std::iter::successors(Some(id.as_str()), |id| parents.get(id).copied().flatten())
+                .any(|a| parents.get(a).copied().flatten() == Some(container) && kept.contains(a))
+        });
+        // A container with folded children has a kept child, and it is visible.
+        if let Some(last) = last {
+            after.entry(last).or_default().push(container);
+        }
+    }
+    let mut placed = Vec::with_capacity(nodes.len() + rest.len());
+    for (i, id) in nodes.into_iter().enumerate() {
+        placed.push(id);
+        if let Some(mut containers) = after.remove(&i) {
+            // The deeper container sits inside the kept subtree of the shallower one.
+            containers.sort_by_key(|c| std::cmp::Reverse(depth(c)));
+            placed.extend(containers.into_iter().map(|c| format!("rest:{c}")));
+        }
+    }
+    placed
 }

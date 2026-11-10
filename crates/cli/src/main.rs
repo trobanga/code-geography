@@ -73,17 +73,59 @@ fn diff(repo: &Path, spec: &str) -> Result<cg_core::Graph, String> {
     // The head first: an unknown revision is reported as such, not as a missing parent.
     let after = index_revision(repo, head)?;
     // A root commit has no parent and is compared with the empty graph.
-    let before = if base_may_be_missing && !has_commit(repo, &base)? {
+    let root_commit = base_may_be_missing && !has_commit(repo, &base)?;
+    let before = if root_commit {
         cg_core::Graph::default()
     } else {
         index_revision(repo, &base)?
     };
     let mut graph = cg_core::diff(&before, &after);
+    let changed = changed_files(repo, &base, head, root_commit)?;
     graph.diff = Some(cg_core::DiffInfo {
         base,
         head: head.to_string(),
+        files: cg_core::file_changes(&graph, &changed),
     });
     Ok(graph)
+}
+
+/// The files that differ between `base` and `head`, sorted by path as git lists
+/// them. A root commit has no base: all its files count as added.
+fn changed_files(
+    repo: &Path,
+    base: &str,
+    head: &str,
+    root_commit: bool,
+) -> Result<Vec<(String, cg_core::Change)>, String> {
+    let mut git = Command::new("git");
+    git.arg("-C").arg(repo);
+    if root_commit {
+        git.args(["diff-tree", "--root", "--no-commit-id", "-r"])
+            .args(["--name-status", "--no-renames", "-z"])
+            .arg(head);
+    } else {
+        git.args(["diff", "--name-status", "--no-renames", "-z"])
+            .arg(base)
+            .arg(head);
+    }
+    let output = git.arg("--").output().map_err(|e| format!("git: {e}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim_end().into());
+    }
+    // With `-z`: `<status> NUL <path> NUL` per file, the path as stored.
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut fields = text.split('\0');
+    let mut changed = Vec::new();
+    while let (Some(status), Some(path)) = (fields.next(), fields.next()) {
+        let change = match status.chars().next() {
+            Some('A') => cg_core::Change::Added,
+            Some('D') => cg_core::Change::Removed,
+            // `M`, a changed file type, or anything else that touches the file.
+            _ => cg_core::Change::Modified,
+        };
+        changed.push((path.to_string(), change));
+    }
+    Ok(changed)
 }
 
 fn has_commit(repo: &Path, revision: &str) -> Result<bool, String> {

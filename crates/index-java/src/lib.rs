@@ -161,7 +161,7 @@ pub fn index(root: &Path) -> io::Result<Graph> {
         }
 
         let file = slash_path(relative);
-        let is_test = in_test_sources(&file);
+        let is_test = cg_core::in_test_sources(&file);
         for decl in declarations(tree.root_node(), &source, &package) {
             graph.nodes.push(Node {
                 hash: Some(own_hash(decl.node, &source)),
@@ -494,14 +494,6 @@ fn slash_path(path: &Path) -> String {
         .map(|c| c.as_os_str().to_string_lossy())
         .collect::<Vec<_>>()
         .join("/")
-}
-
-/// Whether a directory `src` of a `/`-separated path is followed by a directory
-/// other than `main`: `src/test`, `src/e2e`, `src/it`, ...
-fn in_test_sources(file: &str) -> bool {
-    let dirs: Vec<&str> = file.split('/').collect();
-    let dirs = &dirs[..dirs.len() - 1];
-    dirs.windows(2).any(|w| w[0] == "src" && w[1] != "main")
 }
 
 /// FNV-1a over the own source text of a declaration: the text without the byte

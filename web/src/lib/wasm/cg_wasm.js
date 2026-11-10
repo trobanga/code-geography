@@ -15,6 +15,34 @@ export class Explorer {
         wasm.__wbg_explorer_free(ptr, 0);
     }
     /**
+     * @param {string[]} expanded
+     * @param {boolean} include_tests
+     * @param {boolean} merge_imports
+     * @param {string[]} focus_nodes
+     * @param {boolean} focus_changes
+     * @param {boolean} neighbors
+     * @param {string[]} unfolded
+     * @returns {string}
+     */
+    focusView(expanded, include_tests, merge_imports, focus_nodes, focus_changes, neighbors, unfolded) {
+        let deferred4_0;
+        let deferred4_1;
+        try {
+            const ptr0 = passArrayJsValueToWasm0(expanded, wasm.__wbindgen_malloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passArrayJsValueToWasm0(focus_nodes, wasm.__wbindgen_malloc);
+            const len1 = WASM_VECTOR_LEN;
+            const ptr2 = passArrayJsValueToWasm0(unfolded, wasm.__wbindgen_malloc);
+            const len2 = WASM_VECTOR_LEN;
+            const ret = wasm.explorer_focusView(this.__wbg_ptr, ptr0, len0, include_tests, merge_imports, ptr1, len1, focus_changes, neighbors, ptr2, len2);
+            deferred4_0 = ret[0];
+            deferred4_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+        }
+    }
+    /**
      * @param {string} graph_json
      */
     constructor(graph_json) {
