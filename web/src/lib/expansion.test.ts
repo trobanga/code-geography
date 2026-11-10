@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildTree, collapse, levelExpanded, splitByLevel } from './expansion';
+import { buildTree, collapse, drawable, levelExpanded, splitByLevel } from './expansion';
 import type { GraphNode } from './types';
 
 const nodes: GraphNode[] = [
@@ -78,5 +78,14 @@ describe('collapse', () => {
     const expanded = new Set(['m1', 'p1']);
     collapse(tree, expanded, 'm1');
     expect(sorted(expanded)).toEqual(['m1', 'p1']);
+  });
+});
+
+describe('drawable with a placeholder of the focus cut', () => {
+  it('treats rest:<c> as a child of c', () => {
+    expect(drawable(tree, { from: 'rest:p1', to: 'm1' })).toBe(false);
+    expect(drawable(tree, { from: 'm1', to: 'rest:p1' })).toBe(false);
+    expect(drawable(tree, { from: 'rest:p1', to: 't2' })).toBe(true);
+    expect(drawable(tree, { from: 'rest:p1', to: 'rest:p2' })).toBe(true);
   });
 });

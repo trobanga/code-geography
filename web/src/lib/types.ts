@@ -23,11 +23,20 @@ export interface GraphEdge {
   change?: EdgeChange;
 }
 
+/** A file changed by the commit (ADR 0012). Paths are relative to the repository, like `GraphNode.file`. */
+export interface ChangedFile {
+  path: string;
+  change: NodeChange;
+  /** Id of the module with the longest directory prefix. */
+  module: string | null;
+  test: boolean;
+}
+
 export interface Graph {
   nodes: GraphNode[];
   edges: GraphEdge[];
   /** Present when the graph is the union of two commits (ADR 0009). */
-  diff?: { base: string; head: string };
+  diff?: { base: string; head: string; files?: ChangedFile[] };
 }
 
 export interface ViewEdge {
@@ -52,6 +61,8 @@ export interface View {
   edges: ViewEdge[];
   /** Per visible node with a marked node in its subtree (itself included). */
   changes: Record<string, ChangeCount>;
+  /** Focus cut (ADR 0011): per container, the number of direct children folded into `rest:<id>`. */
+  rest?: Record<string, number>;
 }
 
 export const LEVELS = ['modules', 'packages', 'types', 'functions'] as const;

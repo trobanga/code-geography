@@ -64,6 +64,11 @@ describe('liftEdges (O3)', () => {
     expect(r.edges).toEqual([{ from: 'm1', to: 'm2', count: 2, kinds: { type_ref: 2 }, added: 0, removed: 0 }]);
   });
 
+  it('lifts an edge of a placeholder as an edge of a child of its container', () => {
+    const r = liftEdges([e('rest:p1', 't4', { type_ref: 1 }), e('rest:p1', 't1', { imports: 1 })], tree);
+    expect(r.edges.map(pair).sort()).toEqual(['m1>m2', 'rest:p1>t1']);
+  });
+
   it('keeps an edge between two types of the same package', () => {
     const r = liftEdges([e('t1', 't2', { extends: 1 })], tree);
     expect(r.edges.map(pair)).toEqual(['t1>t2']);

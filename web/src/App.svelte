@@ -4,11 +4,14 @@
   import DetailPanel from './components/DetailPanel.svelte';
   import Diagram from './components/Diagram.svelte';
   import EdgeBar from './components/EdgeBar.svelte';
+  import FocusBar from './components/FocusBar.svelte';
   import Toolbar from './components/Toolbar.svelte';
   import type { Offset } from './lib/drag';
   import { DEFAULT_EDGE_OPTIONS, edgePipeline, painted, type Drawn, type EdgeOptions } from './lib/edgeOptions';
   import { toElkGraph } from './lib/elkGraph';
   import { commitTotals, openChanged, pathToOpen } from './lib/commit';
+  import { changedFiles } from './lib/files';
+  import { focusActive, focusOn, NO_FOCUS, type Focus } from './lib/focus';
   import { buildTree, collapse, levelExpanded, splitByLevel, type Tree } from './lib/expansion';
   import { decodeHash, encodeHash, type Source } from './lib/hash';
   import { runLayout, type Layout } from './lib/layout';
@@ -24,6 +27,7 @@
   let tree = $state.raw<Tree | null>(null);
   let expanded = $state.raw<Set<string>>(new Set());
   let tests = $state(false);
+  let focus = $state.raw<Focus>(NO_FOCUS);
   // Deep state: each consumer tracks only the fields it reads, so O1 does not trigger a layout.
   let opts = $state<EdgeOptions>({ ...DEFAULT_EDGE_OPTIONS, kinds: { ...DEFAULT_EDGE_OPTIONS.kinds } });
   let selected = $state<string | null>(null);
@@ -41,15 +45,27 @@
   const activeLevel = $derived(hashState && hashState.open.length === 0 ? hashState.level : null);
 
   // O4 is part of the WASM view.
-  const view = $derived(
-    explorer && tree ? (JSON.parse(explorer.view([...expanded], tests, opts.mergeImports)) as View) : null,
-  );
+  // Without a focus the plain cut; with one the focus cut of ADR 0011.
+  const view = $derived.by(() => {
+    if (!explorer || !tree) return null;
+    const ex = [...expanded];
+    const f = focus;
+    const json = focusActive(f)
+      ? explorer.focusView(ex, tests, opts.mergeImports, f.nodes, f.changes && graph?.diff != null, f.neighbors, f.unfolded)
+      : explorer.view(ex, tests, opts.mergeImports);
+    return JSON.parse(json) as View;
+  });
   // O2 → O3 → O5.
   const drawn = $derived(view && tree ? edgePipeline(view.edges, tree, opts) : null);
   const diff = $derived(graph?.diff ?? null);
   // Without a commit graph the option has no effect, even when the hash carries it.
   const changesOnly = $derived(diff !== null && opts.changesOnly);
   const totals = $derived(graph && tree && diff ? commitTotals(graph, tree, tests) : null);
+  const files = $derived(graph && tree && diff?.files ? changedFiles(graph, tree, tests) : null);
+  /** Per module box: number of changed files that the test-code switch shows. */
+  const fileCounts = $derived(
+    new Map((files?.groups ?? []).flatMap((g) => (g.module === null ? [] : [[g.module, g.files.length] as const]))),
+  );
   const paintedCount = $derived(
     laid
       ? laid.layout.edges.filter((le) =>
@@ -81,6 +97,7 @@
     tests = s.tests;
     Object.assign(opts, s.edges);
     expanded = new Set([...levelExpanded(tree, s.level), ...s.open]);
+    focus = s.focus ?? NO_FOCUS;
     fitNext = true;
   }
 
@@ -111,6 +128,11 @@
   function setLevel(l: Level) {
     if (!tree) return;
     expanded = levelExpanded(tree, l);
+    fitNext = true;
+  }
+
+  function setFocus(f: Focus) {
+    focus = f;
     fitNext = true;
   }
 
@@ -157,7 +179,14 @@
   // Hash follows the state.
   $effect(() => {
     if (!hashState) return;
-    const h = encodeHash({ src: src ?? undefined, level: hashState.level, tests, open: hashState.open, edges: opts });
+    const h = encodeHash({
+      src: src ?? undefined,
+      level: hashState.level,
+      tests,
+      open: hashState.open,
+      edges: opts,
+      focus: focusActive(focus) ? focus : undefined,
+    });
     if (h !== location.hash) history.replaceState(null, '', h);
     lastHash = h;
   });
@@ -207,11 +236,21 @@
       {totals}
       changesOnly={opts.changesOnly}
       onchanges={(v) => (opts.changesOnly = v)}
+      {files}
       onopen={() => {
         if (!tree) return;
         expanded = openChanged(tree, tests);
-        fitNext = true;
+        setFocus({ nodes: [], changes: true, neighbors: focus.neighbors, unfolded: [] });
       }}
+    />
+  {/if}
+  {#if tree && focusActive(focus)}
+    <FocusBar
+      {tree}
+      {focus}
+      rest={view?.rest}
+      onneighbors={(v) => setFocus({ ...focus, neighbors: v })}
+      onclear={() => setFocus(NO_FOCUS)}
     />
   {/if}
   {#if error}
@@ -232,7 +271,9 @@
         {offsets}
         {expanded}
         {selected}
+        {fileCounts}
         onselect={(id) => (selected = id)}
+        onunfold={(c) => (focus = { ...focus, unfolded: [...focus.unfolded, c] })}
         ontoggle={toggle}
         onoffset={(id, o) => (offsets = new Map(offsets).set(id, o))}
       />
@@ -242,8 +283,15 @@
         {selected}
         {tests}
         commit={diff !== null}
+        {files}
         onselect={(id) => (selected = id)}
         onreveal={reveal}
+        onfocus={(id) => {
+          if (!tree) return;
+          const r = focusOn(tree, id);
+          expanded = r.expanded;
+          setFocus(r.focus);
+        }}
       />
     {:else}
       <div class="flex-1"></div>

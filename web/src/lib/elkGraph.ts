@@ -1,5 +1,6 @@
 import type { ElkExtendedEdge, ElkNode } from 'elkjs/lib/elk-api';
-import { drawable, type Tree } from './expansion';
+import { drawable, parentOf, type Tree } from './expansion';
+import { labelOf } from './focus';
 import type { View } from './types';
 
 /** Geometry shared by the ELK input and the SVG renderer. */
@@ -66,8 +67,8 @@ export function toElkGraph(view: View, tree: Tree, nodeCount = view.nodes.length
   const elkById = new Map<string, ElkNode>();
   const hasVisibleChild = new Set<string>();
   for (const id of view.nodes) {
-    const p = tree.byId.get(id)?.parent;
-    if (p != null && visible.has(p)) hasVisibleChild.add(p);
+    const p = parentOf(tree, id);
+    if (p !== null && visible.has(p)) hasVisibleChild.add(p);
   }
 
   // In sparse views a leaf is tall enough to keep the edges on its busier side apart.
@@ -86,7 +87,7 @@ export function toElkGraph(view: View, tree: Tree, nodeCount = view.nodes.length
   };
 
   for (const id of view.nodes) {
-    const name = tree.label.get(id) ?? id;
+    const name = labelOf(tree, view, id);
     const w = labelWidth(name, expandable.has(id)) + (tree.byId.get(id)?.change ? BOX.markW : 0);
     const node: ElkNode = hasVisibleChild.has(id)
       ? {
@@ -102,8 +103,8 @@ export function toElkGraph(view: View, tree: Tree, nodeCount = view.nodes.length
     elkById.set(id, node);
   }
   for (const id of view.nodes) {
-    const p = tree.byId.get(id)?.parent;
-    const parent = p != null ? elkById.get(p) : undefined;
+    const p = parentOf(tree, id);
+    const parent = p !== null ? elkById.get(p) : undefined;
     (parent ?? root).children!.push(elkById.get(id)!);
   }
 

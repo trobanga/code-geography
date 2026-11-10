@@ -1,22 +1,26 @@
 <script lang="ts">
   import type { CommitTotals } from '../lib/commit';
+  import type { ChangedFiles } from '../lib/files';
 
   let {
     diff,
     totals,
+    files,
     changesOnly,
     onchanges,
     onopen,
   }: {
     diff: { base: string; head: string };
     totals: CommitTotals;
+    files: ChangedFiles | null;
     changesOnly: boolean;
     onchanges: (v: boolean) => void;
     onopen: () => void;
   } = $props();
 
   const btn = 'px-2 py-0.5 border border-[var(--line)] hover:border-[var(--muted)]';
-  const hidden = $derived(totals.hidden.nodes + totals.hidden.edges > 0);
+  const hiddenFiles = $derived(files?.hidden ?? 0);
+  const hidden = $derived(totals.hidden.nodes + totals.hidden.edges + hiddenFiles > 0);
   /** Zero counts stay in place but recede. */
   const tint = (n: number, k: string) => (n > 0 ? `color: var(--c-${k})` : 'color: var(--muted)');
 </script>
@@ -35,9 +39,17 @@
     <span style={tint(totals.edges.added, 'added')}>+{totals.edges.added}</span>
     <span style={tint(totals.edges.removed, 'removed')}>−{totals.edges.removed}</span>
   </span>
+  {#if files}
+    <span>
+      <span class="text-[var(--muted)]">files</span>
+      <span style={tint(files.totals.added, 'added')}>+{files.totals.added}</span>
+      <span style={tint(files.totals.removed, 'removed')}>−{files.totals.removed}</span>
+      <span style={tint(files.totals.modified, 'modified')}>~{files.totals.modified}</span>
+    </span>
+  {/if}
   {#if hidden}
     <span class="text-[var(--muted)]"
-      >{totals.hidden.nodes} nodes, {totals.hidden.edges} edges more in test code</span
+      >{totals.hidden.nodes} nodes, {totals.hidden.edges} edges{files ? `, ${hiddenFiles} files` : ''} more in test code</span
     >
   {/if}
   <label class="flex items-center gap-1 border-l border-[var(--line)] pl-3">

@@ -1,4 +1,4 @@
-import { drawable, type Tree } from './expansion';
+import { drawable, parentOf, type Tree } from './expansion';
 import { EDGE_KINDS, type EdgeKind, type ViewEdge } from './types';
 
 /** The edge carries at least one added or removed graph edge (ADR 0009). */
@@ -44,7 +44,7 @@ export interface Lifted {
 /** Path from the top-level ancestor down to `id`. */
 function pathTo(tree: Tree, id: string): string[] {
   const out: string[] = [];
-  for (let n: string | null = id; n !== null; n = tree.byId.get(n)?.parent ?? null) out.push(n);
+  for (let n: string | null = id; n !== null; n = parentOf(tree, n)) out.push(n);
   return out.reverse();
 }
 

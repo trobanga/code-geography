@@ -79,8 +79,18 @@ export function splitByLevel(tree: Tree, expanded: ReadonlySet<string>): { level
   return { level: best.level, open: [...expanded].filter((id) => !best.base.has(id)) };
 }
 
+/** Prefix of a placeholder of the focus cut (ADR 0011): `rest:<container id>`. */
+export const REST = 'rest:';
+
+/** Parent of a graph node or of a placeholder, which is a view node without a graph node. */
+export function parentOf(tree: Tree, id: string): string | null {
+  const n = tree.byId.get(id);
+  if (n) return n.parent;
+  return id.startsWith(REST) ? id.slice(REST.length) : null;
+}
+
 export function isAncestor(tree: Tree, anc: string, id: string): boolean {
-  for (let p = tree.byId.get(id)?.parent ?? null; p !== null; p = tree.byId.get(p)?.parent ?? null) {
+  for (let p = parentOf(tree, id); p !== null; p = parentOf(tree, p)) {
     if (p === anc) return true;
   }
   return false;

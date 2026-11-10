@@ -5,6 +5,7 @@
   import { changed, painted, type Drawn } from '../lib/edgeOptions';
   import { BOX } from '../lib/elkGraph';
   import type { Tree } from '../lib/expansion';
+  import { background, labelOf, restOf } from '../lib/focus';
   import { CHANGE_SIGN, changeColor, KIND_LETTER, kindColor } from '../lib/kinds';
   import type { LaidNode, Layout, Point } from '../lib/layout';
   import type { View, ViewEdge } from '../lib/types';
@@ -21,10 +22,12 @@
     offsets,
     expanded,
     selected,
+    fileCounts,
     hoverNode = $bindable(null),
     onselect,
     ontoggle,
     onoffset,
+    onunfold,
   }: {
     tree: Tree;
     view: View;
@@ -39,10 +42,14 @@
     offsets: ReadonlyMap<string, Offset>;
     expanded: ReadonlySet<string>;
     selected: string | null;
+    /** Commit overlay: changed files per module box (ADR 0012). */
+    fileCounts: ReadonlyMap<string, number>;
     hoverNode?: string | null;
     onselect: (id: string | null) => void;
     ontoggle: (id: string) => void;
     onoffset: (id: string, o: Offset) => void;
+    /** Show all children of the container of a placeholder. */
+    onunfold: (container: string) => void;
   } = $props();
 
   let wrap: HTMLDivElement;
@@ -83,6 +90,8 @@
           w: width(ve.count),
           lab: labelAnchor(pts),
           ch: edgeChange(ve),
+          // A changed edge at a placeholder keeps its change color.
+          bg: !edgeChange(ve) && background(tree, ve),
         };
       })
       .filter((e) => e.show),
@@ -101,7 +110,8 @@
             return [{ ve, d: pathOf(pts), w: width(ve.count), lab: labelAnchor(pts), ch: edgeChange(ve) }];
           }),
   );
-  const nameOf = (id: string) => tree.label.get(id) ?? id;
+  const nameOf = (id: string) => labelOf(tree, view, id);
+  const placeholders = $derived(placed.nodes.filter((n) => restOf(tree, n.id) !== null));
 
   /** Overlay look of an edge: color by the larger of added and removed, dashed when all removed. */
   function edgeChange(ve: ViewEdge) {
@@ -215,9 +225,11 @@
     {@const own = commit ? g.change : undefined}
     {@const below = commit ? view.changes[n.id] : undefined}
     {@const label = tree.label.get(n.id) ?? n.id}
+    {@const nf = commit ? fileCounts.get(n.id) : undefined}
+    {@const badge = below ? badgeLabel(below, own) : ''}
     <g
       data-node={n.id}
-      opacity={changesOnly && !below ? 0.3 : 1}
+      opacity={changesOnly && !below && !nf ? 0.3 : 1}
       class="cursor-default outline-none"
       role="button"
       tabindex="-1"
@@ -263,12 +275,25 @@
           fill={changeColor(own)}><title>{own}</title>{CHANGE_SIGN[own]}</text
         >
       {/if}
-      {#if below && badgeLabel(below, own)}
+      {#if below && badge}
         <text x={n.x} y={n.y - 2} font-size="8" fill="var(--muted)"
           ><title>marked below: {below.added} added, {below.removed} removed, {below.modified} modified{own
               ? ' (with this node)'
               : ''}</title
-          >{badgeLabel(below, own)}</text
+          >{badge}</text
+        >
+      {/if}
+      {#if nf}
+        {#if !below && !own}
+          <!-- Touched only through files: a quiet bar where the change bar would be. -->
+          <rect x={n.x} y={n.y} width="3" height={n.container ? BOX.header : n.h} fill="var(--c-modified)" opacity="0.45" />
+        {/if}
+        <text
+          x={n.x + (badge ? badge.length * 5 + 6 : 0)}
+          y={n.y - 2}
+          font-size="8"
+          fill="var(--c-modified)"
+          font-style="italic"><title>{nf} changed {nf === 1 ? 'file' : 'files'} in this module</title>{nf} {nf === 1 ? 'file' : 'files'}</text
         >
       {/if}
       {@render marker(n, n.x + n.w - BOX.markerW + 1, mid - 5.5)}
@@ -287,6 +312,25 @@
       {/if}
     </g>
   {/if}
+{/snippet}
+
+{#snippet placeholder(n: LaidNode)}
+  {@const c = restOf(tree, n.id)!}
+  <g
+    data-node={n.id}
+    opacity={changesOnly ? 0.3 : 1}
+    class="cursor-pointer outline-none"
+    role="button"
+    tabindex="-1"
+    onclick={() => onunfold(c)}
+    onkeydown={() => {}}
+  >
+    <title>{view.rest?.[c] ?? 0} folded children of {tree.label.get(c) ?? c}; click to show all</title>
+    <rect x={n.x} y={n.y} width={n.w} height={n.h} fill="var(--bg)" stroke="var(--muted)" stroke-width="0.6" stroke-dasharray="3 2" />
+    <text x={n.x + BOX.pad + BOX.kindW} y={n.y + n.h / 2 + 4} font-size={BOX.font} fill="var(--muted)" font-style="italic"
+      >{nameOf(n.id)}</text
+    >
+  </g>
 {/snippet}
 
 <div
@@ -323,10 +367,11 @@
     <g transform="translate({t.x},{t.y}) scale({t.k})">
       {#each containers as n (n.id)}{@render box(n)}{/each}
       {#each leaves as n (n.id)}{@render box(n)}{/each}
+      {#each placeholders as n (n.id)}{@render placeholder(n)}{/each}
       {#each edges as e (e.key)}
         <g
           data-edge
-          opacity={selected === null || e.touches || onSelection ? 1 : 0.15}
+          opacity={(selected === null || e.touches || onSelection ? 1 : 0.15) * (e.bg && !e.touches ? 0.35 : 1)}
           role="presentation"
           onpointerenter={(ev) => edgeHover(ev, e.ve)}
           onpointermove={(ev) => edgeHover(ev, e.ve)}
@@ -338,7 +383,8 @@
               d={e.d}
               fill="none"
               stroke={e.touches ? 'var(--accent)' : 'var(--edge)'}
-              stroke-width={e.w}
+              stroke-width={e.bg ? Math.min(e.w, 1.5) : e.w}
+              stroke-dasharray={e.bg && !e.touches ? '2 3' : undefined}
               stroke-opacity={commit && !e.touches ? 0.35 : 0.8}
               marker-end={e.ch ? undefined : e.touches ? 'url(#arr-hi)' : 'url(#arr)'}
             />
@@ -376,7 +422,7 @@
         </g>
       {/each}
       {#each [...edges, ...realLines] as e, i (i)}
-        {#if e.ch || e.ve.count > 1}
+        {#if e.ch || (e.ve.count > 1 && !('bg' in e && e.bg))}
           {@const hi = !('touches' in e) || e.touches}
           <text
             x={e.lab.horizontal ? e.lab.x : e.lab.x + e.w / 2 + 2}

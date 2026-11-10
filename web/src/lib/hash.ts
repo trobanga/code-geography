@@ -1,4 +1,5 @@
 import { DEFAULT_EDGE_OPTIONS, MIN_COUNT_MAX, type EdgeOptions } from './edgeOptions';
+import type { Focus } from './focus';
 import { EDGE_KINDS, LEVELS, type EdgeKind, type Level } from './types';
 
 export const SOURCES = ['graph', 'commit'] as const;
@@ -11,6 +12,8 @@ export interface HashState {
   tests: boolean;
   open: string[];
   edges: EdgeOptions;
+  /** Absent: no focus. */
+  focus?: Focus;
 }
 
 const FLAGS = [
@@ -29,6 +32,12 @@ export function encodeHash(s: HashState): string {
   if (on.length < EDGE_KINDS.length) parts.push(`kinds=${on.length > 0 ? on.join(',') : 'none'}`);
   if (s.edges.min !== DEFAULT_EDGE_OPTIONS.min) parts.push(`min=${s.edges.min}`);
   for (const [key, field] of FLAGS) if (s.edges[field]) parts.push(`${key}=1`);
+  const ids = (xs: string[]) => xs.map(encodeURIComponent).join(',');
+  const f = s.focus;
+  if (f?.nodes.length) parts.push(`focus=${ids(f.nodes)}`);
+  if (f?.changes) parts.push('fchanges=1');
+  if (f?.neighbors) parts.push('fnear=1');
+  if (f?.unfolded.length) parts.push(`unfold=${ids(f.unfolded)}`);
   return '#' + parts.join('&');
 }
 
@@ -41,6 +50,8 @@ function decodeKinds(value: string): Record<EdgeKind, boolean> | null {
 export function decodeHash(hash: string): HashState {
   const edges: EdgeOptions = { ...DEFAULT_EDGE_OPTIONS, kinds: { ...DEFAULT_EDGE_OPTIONS.kinds } };
   const state: HashState = { level: 'modules', tests: false, open: [], edges };
+  const focus = (): Focus => (state.focus ??= { nodes: [], changes: false, neighbors: false, unfolded: [] });
+  const ids = (value: string) => value.split(',').map(decodeURIComponent);
   for (const part of hash.replace(/^#/, '').split('&')) {
     const eq = part.indexOf('=');
     if (eq < 0) continue;
@@ -50,6 +61,10 @@ export function decodeHash(hash: string): HashState {
     else if (key === 'level' && (LEVELS as readonly string[]).includes(value)) state.level = value as Level;
     else if (key === 'tests') state.tests = value === '1';
     else if (key === 'open' && value !== '') state.open = value.split(',').map(decodeURIComponent);
+    else if (key === 'focus' && value !== '') focus().nodes = ids(value);
+    else if (key === 'fchanges' && value === '1') focus().changes = true;
+    else if (key === 'fnear' && value === '1') focus().neighbors = true;
+    else if (key === 'unfold' && value !== '') focus().unfolded = ids(value);
     else if (key === 'kinds') edges.kinds = decodeKinds(value) ?? edges.kinds;
     else if (key === 'min' && /^\d+$/.test(value)) edges.min = Math.min(MIN_COUNT_MAX, Math.max(1, Number(value)));
     else {

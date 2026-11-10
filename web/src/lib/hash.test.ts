@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_EDGE_OPTIONS } from './edgeOptions';
 import { decodeHash, encodeHash } from './hash';
+import { NO_FOCUS } from './focus';
 
 describe('hash', () => {
   it('round-trips level, tests and open ids with special characters', () => {
@@ -37,6 +38,20 @@ describe('hash', () => {
     expect(decodeHash(encodeHash({ ...base, src: 'graph' })).src).toBe('graph');
     expect(decodeHash(encodeHash(base)).src).toBeUndefined();
     expect(decodeHash('#src=bogus').src).toBeUndefined();
+  });
+
+  it('round-trips the focus with special characters', () => {
+    const base = { level: 'types' as const, tests: false, open: [], edges: DEFAULT_EDGE_OPTIONS };
+    const focus = { nodes: ['type:a.B', 'x,y&z=1'], changes: true, neighbors: true, unfolded: ['pkg:a', 'mod:x,y'] };
+    expect(decodeHash(encodeHash({ ...base, focus })).focus).toEqual(focus);
+    const changes = { nodes: [], changes: true, neighbors: false, unfolded: [] };
+    expect(decodeHash(encodeHash({ ...base, focus: changes })).focus).toEqual(changes);
+  });
+
+  it('writes nothing for an empty focus and decodes none to no focus', () => {
+    const base = { level: 'modules' as const, tests: false, open: [], edges: DEFAULT_EDGE_OPTIONS };
+    expect(encodeHash({ ...base, focus: NO_FOCUS })).toBe('#level=modules&tests=0');
+    expect(decodeHash('#level=modules').focus).toBeUndefined();
   });
 
   it('round-trips all kinds off', () => {
