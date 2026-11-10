@@ -3,11 +3,13 @@ import { DEFAULT_EDGE_OPTIONS, edgePipeline, filterEdges, liftEdges, painted, re
 import { buildTree } from './expansion';
 import type { GraphNode, ViewEdge } from './types';
 
-const e = (from: string, to: string, kinds: ViewEdge['kinds']): ViewEdge => ({
+const e = (from: string, to: string, kinds: ViewEdge['kinds'], added = 0, removed = 0): ViewEdge => ({
   from,
   to,
   count: Object.values(kinds).reduce((a, b) => a + (b ?? 0), 0),
   kinds,
+  added,
+  removed,
 });
 
 describe('filterEdges (O2)', () => {
@@ -21,12 +23,25 @@ describe('filterEdges (O2)', () => {
   it('counts only enabled kinds and drops edges that sum to 0', () => {
     const edges = [e('a', 'b', { imports: 4 }), e('b', 'c', { type_ref: 2, imports: 3 })];
     const out = filterEdges(edges, { ...all, imports: false }, 1);
-    expect(out).toEqual([{ from: 'b', to: 'c', count: 2, kinds: { type_ref: 2 } }]);
+    expect(out).toEqual([{ from: 'b', to: 'c', count: 2, kinds: { type_ref: 2 }, added: 0, removed: 0 }]);
   });
 
   it('drops edges whose effective count is below min', () => {
     const edges = [e('a', 'b', { imports: 2 }), e('b', 'c', { type_ref: 3 })];
     expect(filterEdges(edges, all, 3).map((x) => x.from)).toEqual(['b']);
+  });
+
+  it('drops a changed edge below min, except when changed edges are kept', () => {
+    const edges = [e('a', 'b', { imports: 1 }, 1, 0), e('c', 'd', { imports: 1 })];
+    expect(filterEdges(edges, all, 2)).toEqual([]);
+    expect(filterEdges(edges, all, 2, true).map((x) => x.from)).toEqual(['a']);
+  });
+
+  it('applies the kind filter to changed edges and keeps their marks within the new count', () => {
+    const edges = [e('a', 'b', { imports: 1 }, 1, 0), e('c', 'd', { imports: 2, type_ref: 1 }, 3, 0)];
+    expect(filterEdges(edges, { ...all, imports: false }, 1, true)).toEqual([
+      { from: 'c', to: 'd', count: 1, kinds: { type_ref: 1 }, added: 1, removed: 0 },
+    ]);
   });
 });
 
@@ -46,7 +61,7 @@ describe('liftEdges (O3)', () => {
 
   it('lifts an edge between types in different modules to a module edge', () => {
     const r = liftEdges([e('t1', 't4', { type_ref: 2 })], tree);
-    expect(r.edges).toEqual([{ from: 'm1', to: 'm2', count: 2, kinds: { type_ref: 2 } }]);
+    expect(r.edges).toEqual([{ from: 'm1', to: 'm2', count: 2, kinds: { type_ref: 2 }, added: 0, removed: 0 }]);
   });
 
   it('keeps an edge between two types of the same package', () => {
@@ -68,7 +83,14 @@ describe('liftEdges (O3)', () => {
 
   it('merges equal lifted pairs and adds counts and kinds', () => {
     const r = liftEdges([e('t1', 't4', { type_ref: 2 }), e('t2', 'p3', { type_ref: 1, imports: 1 })], tree);
-    expect(r.edges).toEqual([{ from: 'm1', to: 'm2', count: 4, kinds: { type_ref: 3, imports: 1 } }]);
+    expect(r.edges).toEqual([{ from: 'm1', to: 'm2', count: 4, kinds: { type_ref: 3, imports: 1 }, added: 0, removed: 0 }]);
+  });
+
+  it('adds up added and removed counts when it merges edges', () => {
+    const r = liftEdges([e('t1', 't4', { type_ref: 2 }, 2, 0), e('t2', 'p3', { imports: 3 }, 1, 2)], tree);
+    expect(r.edges).toEqual([
+      { from: 'm1', to: 'm2', count: 5, kinds: { type_ref: 2, imports: 3 }, added: 3, removed: 2 },
+    ]);
   });
 
   it('gives each end whose edge was lifted away a badge with outgoing and incoming counts', () => {
@@ -110,6 +132,11 @@ describe('reduceTransitive (O5)', () => {
     expect(pairs(reduceTransitive(one('ab ba ac bc')))).toBe('ab ba ac bc');
   });
 
+  it('never hides a changed edge', () => {
+    const edges = [...one('ab bc'), e('a', 'c', { imports: 1 }, 1, 0), e('c', 'd', { imports: 1 }), e('b', 'd', { imports: 2 }, 0, 1)];
+    expect(pairs(reduceTransitive(edges))).toBe('ab bc ac cd bd');
+  });
+
   it('hides an edge whose target is reached through a cycle', () => {
     expect(pairs(reduceTransitive(one('xa ab ba bc xc')))).toBe('xa ab ba bc');
   });
@@ -144,10 +171,25 @@ describe('edgePipeline', () => {
     expect(pairs(r.edges)).toBe('m2>m3 m1>m3');
   });
 
+  it('keeps changed edges below min when only changes are shown', () => {
+    const ch = [...edges, e('b', 'm3', { imports: 1 }, 1, 0)];
+    expect(pairs(edgePipeline(ch, tree, { ...DEFAULT_EDGE_OPTIONS, min: 2 }).edges)).toBe('m2>m3 m1>m3');
+    const r = edgePipeline(ch, tree, { ...DEFAULT_EDGE_OPTIONS, min: 2, changesOnly: true });
+    expect(pairs(r.edges)).toBe('m2>m3 m1>m3 b>m3');
+  });
+
   it('reduces after lift', () => {
     const r = edgePipeline(edges, tree, { ...DEFAULT_EDGE_OPTIONS, lift: true, reduce: true });
     expect(pairs(r.edges)).toBe('m1>m2 m2>m3');
     expect(r.badges.get('a')).toEqual({ out: 1, in: 0 });
+  });
+});
+
+describe('painted with changes only', () => {
+  it('paints only changed edges', () => {
+    expect(painted(e('a', 'b', { imports: 1 }), false, null, null, true)).toBe(false);
+    expect(painted(e('a', 'b', { imports: 2 }, 0, 1), false, null, null, true)).toBe(true);
+    expect(painted(e('a', 'b', { imports: 2 }, 0, 1), true, 'x', null, true)).toBe(false);
   });
 });
 

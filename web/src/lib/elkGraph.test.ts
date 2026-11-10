@@ -16,11 +16,12 @@ const tree = buildTree(nodes);
 const view: View = {
   nodes: ['m1', 'p1', 'p2', 'm2'],
   expandable: ['m1', 'p1'],
+  changes: {},
   edges: [
-    { from: 'p1', to: 'p2', count: 3, kinds: { type_ref: 3 } },
-    { from: 'p1', to: 'm1', count: 1, kinds: { imports: 1 } },
-    { from: 'm1', to: 'p2', count: 1, kinds: { imports: 1 } },
-    { from: 'm2', to: 'p1', count: 2, kinds: { extends: 2 } },
+    { from: 'p1', to: 'p2', count: 3, kinds: { type_ref: 3 }, added: 0, removed: 0 },
+    { from: 'p1', to: 'm1', count: 1, kinds: { imports: 1 }, added: 0, removed: 0 },
+    { from: 'm1', to: 'p2', count: 1, kinds: { imports: 1 }, added: 0, removed: 0 },
+    { from: 'm2', to: 'p1', count: 2, kinds: { extends: 2 }, added: 0, removed: 0 },
   ],
 };
 
@@ -41,6 +42,11 @@ describe('toElkGraph', () => {
     const long = find(g, 'm2')!;
     expect(short.height).toBeGreaterThan(0);
     expect(long.width!).toBeGreaterThan(short.width!);
+  });
+
+  it('makes room for the mark of a changed node', () => {
+    const marked = buildTree(nodes.map((n) => (n.id === 'p2' ? { ...n, change: 'added' as const } : n)));
+    expect(find(toElkGraph(view, marked), 'p2')!.width!).toBeGreaterThan(find(g, 'p2')!.width!);
   });
 
   it('gives an open container a minimum width that fits its label', () => {
@@ -94,7 +100,8 @@ describe('leaf height in sparse views', () => {
   const v: View = {
     nodes: ids,
     expandable: [],
-    edges: ['a', 'b', 'c', 'd'].map((f) => ({ from: f, to: 'hub', count: 1, kinds: { imports: 1 } })),
+    changes: {},
+    edges: ['a', 'b', 'c', 'd'].map((f) => ({ from: f, to: 'hub', count: 1, kinds: { imports: 1 }, added: 0, removed: 0 })),
   };
 
   it('grows with the number of edges on one side so that they do not crowd', () => {

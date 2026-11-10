@@ -1,7 +1,12 @@
 import { DEFAULT_EDGE_OPTIONS, MIN_COUNT_MAX, type EdgeOptions } from './edgeOptions';
 import { EDGE_KINDS, LEVELS, type EdgeKind, type Level } from './types';
 
+export const SOURCES = ['graph', 'commit'] as const;
+/** Which file under public/ is loaded: graph.json or commit.json. */
+export type Source = (typeof SOURCES)[number];
+
 export interface HashState {
+  src?: Source;
   level: Level;
   tests: boolean;
   open: string[];
@@ -13,10 +18,12 @@ const FLAGS = [
   ['lift', 'lift'],
   ['merge', 'mergeImports'],
   ['reduce', 'reduce'],
+  ['changes', 'changesOnly'],
 ] as const;
 
 export function encodeHash(s: HashState): string {
   const parts = [`level=${s.level}`, `tests=${s.tests ? 1 : 0}`];
+  if (s.src) parts.unshift(`src=${s.src}`);
   if (s.open.length > 0) parts.push(`open=${s.open.map(encodeURIComponent).join(',')}`);
   const on = EDGE_KINDS.filter((k) => s.edges.kinds[k]);
   if (on.length < EDGE_KINDS.length) parts.push(`kinds=${on.length > 0 ? on.join(',') : 'none'}`);
@@ -39,7 +46,8 @@ export function decodeHash(hash: string): HashState {
     if (eq < 0) continue;
     const key = part.slice(0, eq);
     const value = part.slice(eq + 1);
-    if (key === 'level' && (LEVELS as readonly string[]).includes(value)) state.level = value as Level;
+    if (key === 'src' && (SOURCES as readonly string[]).includes(value)) state.src = value as Source;
+    else if (key === 'level' && (LEVELS as readonly string[]).includes(value)) state.level = value as Level;
     else if (key === 'tests') state.tests = value === '1';
     else if (key === 'open' && value !== '') state.open = value.split(',').map(decodeURIComponent);
     else if (key === 'kinds') edges.kinds = decodeKinds(value) ?? edges.kinds;

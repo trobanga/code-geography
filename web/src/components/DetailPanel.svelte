@@ -1,7 +1,8 @@
 <script lang="ts">
+  import { changeLabel, markedByModule } from '../lib/commit';
   import { breakdown, edgesOf } from '../lib/detail';
   import type { Tree } from '../lib/expansion';
-  import { KIND_LETTER, kindColor } from '../lib/kinds';
+  import { CHANGE_SIGN, changeColor, KIND_LETTER, kindColor } from '../lib/kinds';
   import type { View, ViewEdge } from '../lib/types';
 
   let {
@@ -9,13 +10,18 @@
     view,
     selected,
     tests,
+    commit,
     onselect,
+    onreveal,
   }: {
     tree: Tree;
     view: View;
     selected: string | null;
     tests: boolean;
+    commit: boolean;
     onselect: (id: string) => void;
+    /** Select a node that may be hidden: open the containers on the path to it. */
+    onreveal: (id: string) => void;
   } = $props();
 
   const node = $derived(selected ? tree.byId.get(selected) : undefined);
@@ -26,7 +32,28 @@
   );
   const lists = $derived(selected ? edgesOf(view, selected) : { outgoing: [], incoming: [] });
   const nameOf = (id: string) => tree.label.get(id) ?? id;
+  const marked = $derived(commit ? markedByModule(tree, tests, selected) : []);
 </script>
+
+{#snippet markedList(groups: { module: string; nodes: string[] }[])}
+  {#each groups as grp (grp.module)}
+    <div class="mt-2 text-[var(--muted)]">{nameOf(grp.module)}</div>
+    {#each grp.nodes as id (id)}
+      {@const n = tree.byId.get(id)!}
+      <button
+        class="flex w-full gap-1 border-b border-[var(--line)] py-0.5 text-left hover:bg-[var(--bg)]"
+        onclick={() => onreveal(id)}
+      >
+        <span class="w-2 font-bold" style="color: {changeColor(n.change!)}" title={n.change}>{CHANGE_SIGN[n.change!]}</span>
+        <span class="font-bold" style="color: {kindColor(n.kind)}">{KIND_LETTER[n.kind]}</span>
+        <span class="truncate {n.change === 'removed' ? 'line-through' : ''}" title={id}
+          >{#if n.kind === 'function' && n.parent}<span class="text-[var(--muted)]">{nameOf(n.parent)}.</span
+            >{/if}{nameOf(id)}</span
+        >
+      </button>
+    {/each}
+  {/each}
+{/snippet}
 
 {#snippet edgeList(title: string, edges: ViewEdge[], other: (e: ViewEdge) => string)}
   <div class="mt-3">
@@ -41,7 +68,14 @@
         <div class="flex gap-1">
           {#if k}<span class="font-bold" style="color: {kindColor(k)}">{KIND_LETTER[k]}</span>{/if}
           <span class="truncate" title={id}>{nameOf(id)}</span>
-          <span class="ml-auto tabular-nums">{e.count}</span>
+          {#if commit && changeLabel(e)}
+            <span class="ml-auto font-bold tabular-nums" style="color: var(--c-{e.added >= e.removed ? 'added' : 'removed'})"
+              >{changeLabel(e)}</span
+            >
+            <span class="tabular-nums">{e.count}</span>
+          {:else}
+            <span class="ml-auto tabular-nums">{e.count}</span>
+          {/if}
         </div>
         <div class="pl-3 text-[11px] text-[var(--muted)]">{breakdown(e.kinds)}</div>
       </button>
@@ -54,6 +88,9 @@
     <div class="flex items-baseline gap-2">
       <span class="font-bold" style="color: {kindColor(node.kind)}">{node.kind}</span>
       {#if node.test}<span class="text-[var(--muted)]">test</span>{/if}
+      {#if commit && node.change}
+        <span class="font-bold" style="color: {changeColor(node.change)}">{CHANGE_SIGN[node.change]} {node.change}</span>
+      {/if}
     </div>
     <div class="mt-1 text-sm font-bold break-all">{node.name}</div>
     <dl class="mt-2 grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 text-[11px]">
@@ -70,6 +107,13 @@
     </dl>
     {@render edgeList('outgoing', lists.outgoing, (e) => e.to)}
     {@render edgeList('incoming', lists.incoming, (e) => e.from)}
+    {#if marked.length > 0}
+      <div class="mt-3 text-[var(--muted)]">changes below ({marked.reduce((a, g) => a + g.nodes.length, 0)})</div>
+      {@render markedList(marked)}
+    {/if}
+  {:else if commit}
+    <div class="text-[var(--muted)]">changed ({marked.reduce((a, g) => a + g.nodes.length, 0)})</div>
+    {@render markedList(marked)}
   {:else}
     <div class="text-[var(--muted)]">no selection</div>
   {/if}

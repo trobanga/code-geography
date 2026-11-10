@@ -1,8 +1,12 @@
 <script lang="ts">
+  import type { Source } from '../lib/hash';
   import { KIND_LETTER, kindColor } from '../lib/kinds';
   import { LEVELS, type Level, type NodeKind } from '../lib/types';
 
   let {
+    src,
+    hasCommit,
+    onsrc,
     level,
     tests,
     busy,
@@ -13,6 +17,10 @@
     onreset,
     onfile,
   }: {
+    /** null: a file opened from disk. */
+    src: Source | null;
+    hasCommit: boolean;
+    onsrc: (s: Source) => void;
     level: Level | null;
     tests: boolean;
     busy: boolean;
@@ -29,6 +37,15 @@
 </script>
 
 <div class="flex items-center gap-3 border-b border-[var(--line)] bg-[var(--panel)] px-3 py-1.5">
+  <div class="flex">
+    {#each ['graph', 'commit'] as const as s (s)}
+      <button
+        class="{btn} -ml-px first:ml-0 disabled:opacity-40 {src === s ? 'bg-[var(--fg)] text-[var(--bg)]' : ''}"
+        disabled={s === 'commit' && !hasCommit}
+        onclick={() => onsrc(s)}>{s}</button
+      >
+    {/each}
+  </div>
   <div class="flex">
     {#each LEVELS as l (l)}
       <button

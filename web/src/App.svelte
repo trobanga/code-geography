@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, tick, untrack } from 'svelte';
+  import CommitStrip from './components/CommitStrip.svelte';
   import DetailPanel from './components/DetailPanel.svelte';
   import Diagram from './components/Diagram.svelte';
   import EdgeBar from './components/EdgeBar.svelte';
@@ -7,13 +8,18 @@
   import type { Offset } from './lib/drag';
   import { DEFAULT_EDGE_OPTIONS, edgePipeline, painted, type Drawn, type EdgeOptions } from './lib/edgeOptions';
   import { toElkGraph } from './lib/elkGraph';
+  import { commitTotals, openChanged, pathToOpen } from './lib/commit';
   import { buildTree, collapse, levelExpanded, splitByLevel, type Tree } from './lib/expansion';
-  import { decodeHash, encodeHash } from './lib/hash';
+  import { decodeHash, encodeHash, type Source } from './lib/hash';
   import { runLayout, type Layout } from './lib/layout';
   import type { Graph, Level, View } from './lib/types';
   import init, { Explorer } from './lib/wasm/cg_wasm.js';
 
   let error = $state<string | null>(null);
+  let graph = $state.raw<Graph | null>(null);
+  /** null: a file opened from disk. */
+  let src = $state<Source | null>('graph');
+  let hasCommit = $state(false);
   let explorer = $state.raw<Explorer | null>(null);
   let tree = $state.raw<Tree | null>(null);
   let expanded = $state.raw<Set<string>>(new Set());
@@ -40,21 +46,27 @@
   );
   // O2 → O3 → O5.
   const drawn = $derived(view && tree ? edgePipeline(view.edges, tree, opts) : null);
+  const diff = $derived(graph?.diff ?? null);
+  // Without a commit graph the option has no effect, even when the hash carries it.
+  const changesOnly = $derived(diff !== null && opts.changesOnly);
+  const totals = $derived(graph && tree && diff ? commitTotals(graph, tree, tests) : null);
   const paintedCount = $derived(
     laid
-      ? laid.layout.edges.filter((le) => painted(laid!.drawn.edges[le.index], opts.onSelection, selected, hoverNode))
-          .length
+      ? laid.layout.edges.filter((le) =>
+          painted(laid!.drawn.edges[le.index], opts.onSelection, selected, hoverNode, changesOnly),
+        ).length
       : 0,
   );
 
   async function load(text: string) {
     try {
       await init();
-      const graph = JSON.parse(text) as Graph;
+      const g = JSON.parse(text) as Graph;
       const ex = new Explorer(text);
       explorer?.free();
       explorer = ex;
-      tree = buildTree(graph.nodes);
+      graph = g;
+      tree = buildTree(g.nodes);
       offsets = new Map();
       error = null;
       applyHash(location.hash);
@@ -70,6 +82,30 @@
     Object.assign(opts, s.edges);
     expanded = new Set([...levelExpanded(tree, s.level), ...s.open]);
     fitNext = true;
+  }
+
+  async function fetchSource(s: Source) {
+    try {
+      const r = await fetch(`/${s}.json`);
+      if (!r.ok || !r.headers.get('content-type')?.includes('json')) throw new Error(`HTTP ${r.status}`);
+      const text = await r.text();
+      src = s;
+      selected = null;
+      await load(text);
+    } catch (e) {
+      error = `cannot load /${s}.json: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  /** Expands the containers on the path to `id` and selects it. */
+  function reveal(id: string) {
+    if (!tree) return;
+    const path = pathToOpen(tree, id);
+    if (path.some((p) => !expanded.has(p))) {
+      expanded = new Set([...expanded, ...path]);
+      fitNext = true;
+    }
+    selected = id;
   }
 
   function setLevel(l: Level) {
@@ -121,20 +157,24 @@
   // Hash follows the state.
   $effect(() => {
     if (!hashState) return;
-    const h = encodeHash({ level: hashState.level, tests, open: hashState.open, edges: opts });
+    const h = encodeHash({ src: src ?? undefined, level: hashState.level, tests, open: hashState.open, edges: opts });
     if (h !== location.hash) history.replaceState(null, '', h);
     lastHash = h;
   });
 
   onMount(() => {
     const onHash = () => {
-      if (location.hash !== lastHash) applyHash(location.hash);
+      if (location.hash === lastHash) return;
+      const s = decodeHash(location.hash).src ?? 'graph';
+      if (s !== src) fetchSource(s);
+      else applyHash(location.hash);
     };
     window.addEventListener('hashchange', onHash);
-    fetch('/graph.json')
-      .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`HTTP ${r.status}`))))
-      .then(load)
-      .catch((e) => (error = `cannot load /graph.json: ${e instanceof Error ? e.message : String(e)}`));
+    // The dev and preview servers answer unknown paths with index.html, so check the type.
+    fetch('/commit.json', { method: 'HEAD' })
+      .then((r) => (hasCommit = r.ok && !!r.headers.get('content-type')?.includes('json')))
+      .catch(() => (hasCommit = false));
+    fetchSource(decodeHash(location.hash).src ?? 'graph');
     return () => window.removeEventListener('hashchange', onHash);
   });
 </script>
@@ -145,16 +185,35 @@
     {tests}
     {busy}
     moved={offsets.size > 0}
+    {src}
+    {hasCommit}
+    onsrc={(s) => {
+      if (s !== src) fetchSource(s);
+    }}
     onlevel={setLevel}
     ontests={(v) => (tests = v)}
     onfit={() => diagram?.fit()}
     onreset={() => (offsets = new Map())}
     onfile={(f) => {
       selected = null;
+      src = null;
       f.text().then(load);
     }}
   />
   <EdgeBar {opts} onchange={(patch) => Object.assign(opts, patch)} drawn={paintedCount} total={drawn?.total ?? 0} />
+  {#if diff && totals}
+    <CommitStrip
+      {diff}
+      {totals}
+      changesOnly={opts.changesOnly}
+      onchanges={(v) => (opts.changesOnly = v)}
+      onopen={() => {
+        if (!tree) return;
+        expanded = openChanged(tree, tests);
+        fitNext = true;
+      }}
+    />
+  {/if}
   {#if error}
     <div class="border-b border-[var(--line)] px-3 py-1 text-[var(--accent)]">{error}</div>
   {/if}
@@ -168,6 +227,8 @@
         layout={laid.layout}
         drawn={laid.drawn}
         onSelection={opts.onSelection}
+        commit={diff !== null}
+        {changesOnly}
         {offsets}
         {expanded}
         {selected}
@@ -175,7 +236,15 @@
         ontoggle={toggle}
         onoffset={(id, o) => (offsets = new Map(offsets).set(id, o))}
       />
-      <DetailPanel {tree} {view} {selected} {tests} onselect={(id) => (selected = id)} />
+      <DetailPanel
+        {tree}
+        {view}
+        {selected}
+        {tests}
+        commit={diff !== null}
+        onselect={(id) => (selected = id)}
+        onreveal={reveal}
+      />
     {:else}
       <div class="flex-1"></div>
     {/if}

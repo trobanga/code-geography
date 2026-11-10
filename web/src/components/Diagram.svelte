@@ -1,10 +1,11 @@
 <script lang="ts">
+  import { badgeLabel, changeLabel } from '../lib/commit';
   import { breakdown } from '../lib/detail';
   import { borderLine, edgePoints, placeNodes, type Offset, type Rect } from '../lib/drag';
-  import { painted, type Drawn } from '../lib/edgeOptions';
+  import { changed, painted, type Drawn } from '../lib/edgeOptions';
   import { BOX } from '../lib/elkGraph';
   import type { Tree } from '../lib/expansion';
-  import { KIND_LETTER, kindColor } from '../lib/kinds';
+  import { CHANGE_SIGN, changeColor, KIND_LETTER, kindColor } from '../lib/kinds';
   import type { LaidNode, Layout, Point } from '../lib/layout';
   import type { View, ViewEdge } from '../lib/types';
   import { fitTransform, labelAnchor, zoomAt, type Transform } from '../lib/viewport';
@@ -15,6 +16,8 @@
     layout,
     drawn,
     onSelection,
+    commit,
+    changesOnly,
     offsets,
     expanded,
     selected,
@@ -29,6 +32,10 @@
     /** The edge list `layout` was computed for; LaidEdge.index points into drawn.edges. */
     drawn: Drawn;
     onSelection: boolean;
+    /** A commit graph is loaded: draw the overlay. */
+    commit: boolean;
+    /** Paint only changed edges and draw untouched boxes pale. */
+    changesOnly: boolean;
     offsets: ReadonlyMap<string, Offset>;
     expanded: ReadonlySet<string>;
     selected: string | null;
@@ -71,10 +78,11 @@
           key: le.index,
           ve,
           touches,
-          show: painted(ve, onSelection, selected, hoverNode),
+          show: painted(ve, onSelection, selected, hoverNode, changesOnly),
           d: pathOf(pts),
           w: width(ve.count),
           lab: labelAnchor(pts),
+          ch: edgeChange(ve),
         };
       })
       .filter((e) => e.show),
@@ -90,10 +98,18 @@
             const b = rects.get(ve.to);
             if (!a || !b) return [];
             const pts = borderLine(a, b);
-            return [{ ve, d: pathOf(pts), w: width(ve.count), lab: labelAnchor(pts) }];
+            return [{ ve, d: pathOf(pts), w: width(ve.count), lab: labelAnchor(pts), ch: edgeChange(ve) }];
           }),
   );
   const nameOf = (id: string) => tree.label.get(id) ?? id;
+
+  /** Overlay look of an edge: color by the larger of added and removed, dashed when all removed. */
+  function edgeChange(ve: ViewEdge) {
+    if (!commit || !changed(ve)) return null;
+    const kind = ve.added >= ve.removed ? 'added' : 'removed';
+    return { color: `var(--c-${kind})`, marker: `url(#arr-${kind})`, dashed: ve.removed === ve.count, label: changeLabel(ve) };
+  }
+  const SEGMENTS = ['added', 'removed', 'modified'] as const;
 
   // Wheel zoom at the pointer; needs a non-passive listener to stop page scroll.
   $effect(() => {
@@ -196,8 +212,12 @@
     {@const c = kindColor(g.kind)}
     {@const sel = n.id === selected}
     {@const mid = n.container ? n.y + BOX.header / 2 : n.y + n.h / 2}
+    {@const own = commit ? g.change : undefined}
+    {@const below = commit ? view.changes[n.id] : undefined}
+    {@const label = tree.label.get(n.id) ?? n.id}
     <g
       data-node={n.id}
+      opacity={changesOnly && !below ? 0.3 : 1}
       class="cursor-default outline-none"
       role="button"
       tabindex="-1"
@@ -211,11 +231,46 @@
         width={n.w}
         height={n.h}
         fill={n.container ? `color-mix(in srgb, ${c} 5%, var(--bg))` : `color-mix(in srgb, ${c} 12%, var(--bg))`}
-        stroke={sel ? 'var(--accent)' : c}
-        stroke-width={sel ? 2 : n.container ? 0.75 : 0.6}
+        stroke={sel ? 'var(--accent)' : own ? changeColor(own) : c}
+        stroke-width={sel ? 2 : own ? 1.25 : n.container ? 0.75 : 0.6}
+        stroke-dasharray={own === 'removed' ? '4 2' : undefined}
       />
+      {#if below && !own}
+        <!-- Changes below: a bar at the left edge, split by kind of mark. -->
+        {@const total = below.added + below.removed + below.modified}
+        {@const h = n.container ? BOX.header : n.h}
+        {#each SEGMENTS as k, i (k)}
+          {@const y0 = SEGMENTS.slice(0, i).reduce((a, j) => a + below[j], 0)}
+          {#if below[k] > 0}
+            <rect x={n.x} y={n.y + (h * y0) / total} width="3" height={(h * below[k]) / total} fill={changeColor(k)} />
+          {/if}
+        {/each}
+      {/if}
       <text x={n.x + BOX.pad} y={mid + 4} font-size={BOX.font} font-weight="700" fill={c}>{KIND_LETTER[g.kind]}</text>
-      <text x={n.x + BOX.pad + BOX.kindW} y={mid + 4} font-size={BOX.font} fill="var(--fg)">{tree.label.get(n.id)}</text>
+      <text
+        x={n.x + BOX.pad + BOX.kindW}
+        y={mid + 4}
+        font-size={BOX.font}
+        fill="var(--fg)"
+        text-decoration={own === 'removed' ? 'line-through' : undefined}>{label}</text
+      >
+      {#if own}
+        <text
+          x={n.x + BOX.pad + BOX.kindW + label.length * BOX.charW + 3}
+          y={mid + 4}
+          font-size={BOX.font}
+          font-weight="700"
+          fill={changeColor(own)}><title>{own}</title>{CHANGE_SIGN[own]}</text
+        >
+      {/if}
+      {#if below && badgeLabel(below, own)}
+        <text x={n.x} y={n.y - 2} font-size="8" fill="var(--muted)"
+          ><title>marked below: {below.added} added, {below.removed} removed, {below.modified} modified{own
+              ? ' (with this node)'
+              : ''}</title
+          >{badgeLabel(below, own)}</text
+        >
+      {/if}
       {@render marker(n, n.x + n.w - BOX.markerW + 1, mid - 5.5)}
       {#if drawn.badges.get(n.id)}
         {@const b = drawn.badges.get(n.id)!}
@@ -256,6 +311,11 @@
       <marker id="arr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
         <path d="M0,0L8,4L0,8z" fill="var(--edge)" />
       </marker>
+      {#each ['added', 'removed'] as k (k)}
+        <marker id="arr-{k}" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto">
+          <path d="M0,0L8,4L0,8z" fill="var(--c-{k})" />
+        </marker>
+      {/each}
       <marker id="arr-hi" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto">
         <path d="M0,0L8,4L0,8z" fill="var(--accent)" />
       </marker>
@@ -273,14 +333,27 @@
           onpointerleave={() => (hover = null)}
         >
           <path d={e.d} fill="none" stroke="transparent" stroke-width={Math.max(8, e.w + 4)} />
-          <path
-            d={e.d}
-            fill="none"
-            stroke={e.touches ? 'var(--accent)' : 'var(--edge)'}
-            stroke-width={e.w}
-            stroke-opacity="0.8"
-            marker-end={e.touches ? 'url(#arr-hi)' : 'url(#arr)'}
-          />
+          {#if !e.ch?.dashed}
+            <path
+              d={e.d}
+              fill="none"
+              stroke={e.touches ? 'var(--accent)' : 'var(--edge)'}
+              stroke-width={e.w}
+              stroke-opacity={commit && !e.touches ? 0.35 : 0.8}
+              marker-end={e.ch ? undefined : e.touches ? 'url(#arr-hi)' : 'url(#arr)'}
+            />
+          {/if}
+          {#if e.ch}
+            <!-- The changed part on top of the whole bundle, as wide as the changed count. -->
+            <path
+              d={e.d}
+              fill="none"
+              stroke={e.ch.color}
+              stroke-width={Math.max(1.5, width(e.ve.added + e.ve.removed))}
+              stroke-dasharray={e.ch.dashed ? '5 3' : undefined}
+              marker-end={e.ch.marker}
+            />
+          {/if}
         </g>
       {/each}
       {#each realLines as e (e.ve.from + '>' + e.ve.to)}
@@ -295,27 +368,28 @@
           <path
             d={e.d}
             fill="none"
-            stroke="var(--accent)"
+            stroke={e.ch ? e.ch.color : 'var(--accent)'}
             stroke-width={e.w}
             stroke-dasharray="5 3"
-            marker-end="url(#arr-hi)"
+            marker-end={e.ch ? e.ch.marker : 'url(#arr-hi)'}
           />
         </g>
       {/each}
       {#each [...edges, ...realLines] as e, i (i)}
-        {#if e.ve.count > 1}
+        {#if e.ch || e.ve.count > 1}
           {@const hi = !('touches' in e) || e.touches}
           <text
             x={e.lab.horizontal ? e.lab.x : e.lab.x + e.w / 2 + 2}
             y={e.lab.horizontal ? e.lab.y - e.w / 2 - 2 : e.lab.y + 3}
             text-anchor={e.lab.horizontal ? 'middle' : 'start'}
             font-size="9"
-            fill={hi ? 'var(--accent)' : 'var(--muted)'}
-            opacity={selected === null || hi || onSelection ? 1 : 0.15}
+            fill={e.ch ? e.ch.color : hi ? 'var(--accent)' : 'var(--muted)'}
+            font-weight={e.ch ? 700 : undefined}
+            opacity={selected === null || hi || onSelection ? (commit && !e.ch && !hi ? 0.6 : 1) : 0.15}
             stroke="var(--bg)"
             stroke-width="3"
             paint-order="stroke"
-            pointer-events="none">{e.ve.count}</text
+            pointer-events="none">{e.ch ? e.ch.label : e.ve.count}</text
           >
         {/if}
       {/each}
@@ -329,6 +403,13 @@
     >
       <div>{nameOf(ve.from)} → {nameOf(ve.to)} <span class="text-[var(--muted)]">{ve.count}</span></div>
       <div class="text-[var(--muted)]">{breakdown(ve.kinds)}</div>
+      {#if commit && changed(ve)}
+        <div>
+          <span style="color: var(--c-added)">added {ve.added}</span>
+          <span style="color: var(--c-removed)">removed {ve.removed}</span>
+          <span class="text-[var(--muted)]">unchanged {ve.count - ve.added - ve.removed}</span>
+        </div>
+      {/if}
     </div>
   {/if}
 </div>

@@ -1,10 +1,17 @@
 import { drawable, type Tree } from './expansion';
 import { EDGE_KINDS, type EdgeKind, type ViewEdge } from './types';
 
+/** The edge carries at least one added or removed graph edge (ADR 0009). */
+export const changed = (e: ViewEdge) => e.added > 0 || e.removed > 0;
+
 export type KindSwitch = Record<EdgeKind, boolean>;
 
-/** O2: effective count = sum of enabled kinds; drop edges at 0 or below `min`. */
-export function filterEdges(edges: ViewEdge[], on: KindSwitch, min: number): ViewEdge[] {
+/**
+ * O2: effective count = sum of enabled kinds; drop edges at 0 or below `min`, except changed
+ * edges when `keepChanged`. The view has no per-kind split of `added`/`removed`, so when a
+ * kind is switched off they are clipped to the new count (an upper bound).
+ */
+export function filterEdges(edges: ViewEdge[], on: KindSwitch, min: number, keepChanged = false): ViewEdge[] {
   const out: ViewEdge[] = [];
   for (const e of edges) {
     const kinds: ViewEdge['kinds'] = {};
@@ -16,7 +23,8 @@ export function filterEdges(edges: ViewEdge[], on: KindSwitch, min: number): Vie
         count += n;
       }
     }
-    if (count > 0 && count >= min) out.push({ from: e.from, to: e.to, count, kinds });
+    if (count === 0 || (count < min && !(keepChanged && changed(e)))) continue;
+    out.push({ from: e.from, to: e.to, count, kinds, added: Math.min(e.added, count), removed: Math.min(e.removed, count) });
   }
   return out;
 }
@@ -64,10 +72,12 @@ export function liftEdges(edges: ViewEdge[], tree: Tree): Lifted {
     const key = `${from}\u0000${to}`;
     const m = merged.get(key);
     if (!m) {
-      merged.set(key, { from, to, count: e.count, kinds: { ...e.kinds } });
+      merged.set(key, { from, to, count: e.count, kinds: { ...e.kinds }, added: e.added, removed: e.removed });
       continue;
     }
     m.count += e.count;
+    m.added += e.added;
+    m.removed += e.removed;
     for (const k of EDGE_KINDS) {
       const n = e.kinds[k];
       if (n) m.kinds[k] = (m.kinds[k] ?? 0) + n;
@@ -150,7 +160,7 @@ export function reduceTransitive(edges: ViewEdge[]): ViewEdge[] {
   return edges.filter((e) => {
     const a = comp.get(e.from)!;
     const b = comp.get(e.to)!;
-    if (a === b) return true;
+    if (a === b || changed(e)) return true;
     for (const x of csucc.get(a) ?? []) if (x !== b && reachOf(x).has(b)) return false;
     return true;
   });
@@ -168,6 +178,8 @@ export interface EdgeOptions {
   mergeImports: boolean;
   /** O5 */
   reduce: boolean;
+  /** Commit overlay: paint only changed edges; `min` does not drop them. */
+  changesOnly: boolean;
 }
 
 export const MIN_COUNT_MAX = 10;
@@ -179,6 +191,7 @@ export const DEFAULT_EDGE_OPTIONS: EdgeOptions = Object.freeze({
   lift: false,
   mergeImports: false,
   reduce: false,
+  changesOnly: false,
 });
 
 export interface Drawn extends Lifted {
@@ -189,13 +202,24 @@ export interface Drawn extends Lifted {
 /** Drawable view edges → O2 → O3 → O5. O4 is in the WASM view, O1 only decides what is painted. */
 export function edgePipeline(viewEdges: ViewEdge[], tree: Tree, o: EdgeOptions): Drawn {
   const all = viewEdges.filter((e) => drawable(tree, e));
-  const kept = filterEdges(all, o.kinds, o.min);
+  // Reads `changesOnly` only when it matters, so toggling it at min 1 does not re-run the layout.
+  const kept = filterEdges(all, o.kinds, o.min, o.min > 1 && o.changesOnly);
   const l = o.lift ? liftEdges(kept, tree) : { edges: kept, badges: new Map<string, Badge>(), lifted: [] };
   return { ...l, edges: o.reduce ? reduceTransitive(l.edges) : l.edges, total: all.length };
 }
 
-/** O1: with `onSelection`, paint only edges at the selected or the hovered node. */
-export function painted(e: ViewEdge, onSelection: boolean, selected: string | null, hover: string | null): boolean {
+/**
+ * O1: with `onSelection`, paint only edges at the selected or the hovered node.
+ * With `changesOnly`, paint only changed edges.
+ */
+export function painted(
+  e: ViewEdge,
+  onSelection: boolean,
+  selected: string | null,
+  hover: string | null,
+  changesOnly = false,
+): boolean {
+  if (changesOnly && !changed(e)) return false;
   if (!onSelection) return true;
   const at = (id: string | null) => id !== null && (e.from === id || e.to === id);
   return at(selected) || at(hover);

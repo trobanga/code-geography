@@ -12,6 +12,10 @@
   --k-package: #8a6a1f;
   --k-type: #2f7a55;
   --k-function: #7a4a8f;
+  /* commit overlay */
+  --c-added: #1a7f37;
+  --c-removed: #b4235a;
+  --c-modified: #0b7285;
   color-scheme: light;
 }
 
@@ -28,6 +32,9 @@
     --k-package: #d0ac57;
     --k-type: #6cc095;
     --k-function: #be8ed4;
+    --c-added: #4cc06a;
+    --c-removed: #f0719a;
+    --c-modified: #3cc3d4;
     color-scheme: dark;
   }
 }

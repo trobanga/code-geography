@@ -25,9 +25,18 @@ describe('hash', () => {
         lift: true,
         mergeImports: true,
         reduce: true,
+        changesOnly: true,
       },
     };
     expect(decodeHash(encodeHash(state))).toEqual(state);
+  });
+
+  it('round-trips the source and leaves it out when not given', () => {
+    const base = { level: 'modules' as const, tests: false, open: [], edges: DEFAULT_EDGE_OPTIONS };
+    expect(decodeHash(encodeHash({ ...base, src: 'commit' })).src).toBe('commit');
+    expect(decodeHash(encodeHash({ ...base, src: 'graph' })).src).toBe('graph');
+    expect(decodeHash(encodeHash(base)).src).toBeUndefined();
+    expect(decodeHash('#src=bogus').src).toBeUndefined();
   });
 
   it('round-trips all kinds off', () => {

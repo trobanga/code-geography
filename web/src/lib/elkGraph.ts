@@ -10,6 +10,8 @@ export const BOX = {
   pad: 6,
   kindW: 14,
   markerW: 14,
+  /** Room for the mark of a changed node (`+`, `−`, `~`) after the name. */
+  markW: 12,
   header: 22,
 } as const;
 
@@ -85,7 +87,7 @@ export function toElkGraph(view: View, tree: Tree, nodeCount = view.nodes.length
 
   for (const id of view.nodes) {
     const name = tree.label.get(id) ?? id;
-    const w = labelWidth(name, expandable.has(id));
+    const w = labelWidth(name, expandable.has(id)) + (tree.byId.get(id)?.change ? BOX.markW : 0);
     const node: ElkNode = hasVisibleChild.has(id)
       ? {
           id,

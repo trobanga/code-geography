@@ -5,10 +5,11 @@ import type { View } from './types';
 const view: View = {
   nodes: ['a', 'b', 'c'],
   expandable: [],
+  changes: {},
   edges: [
-    { from: 'a', to: 'b', count: 2, kinds: { imports: 2 } },
-    { from: 'a', to: 'c', count: 9, kinds: { imports: 1, type_ref: 8 } },
-    { from: 'c', to: 'a', count: 4, kinds: { extends: 4 } },
+    { from: 'a', to: 'b', count: 2, kinds: { imports: 2 }, added: 0, removed: 0 },
+    { from: 'a', to: 'c', count: 9, kinds: { imports: 1, type_ref: 8 }, added: 0, removed: 0 },
+    { from: 'c', to: 'a', count: 4, kinds: { extends: 4 }, added: 0, removed: 0 },
   ],
 };
 
