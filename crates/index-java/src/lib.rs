@@ -7,6 +7,7 @@
 mod calls;
 
 use cg_core::{Edge, EdgeKind, Graph, Node, NodeKind, Span};
+use serde::Serialize;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::io;
@@ -121,7 +122,7 @@ impl<'a> Scope<'a> {
 
 /// How the call sites of the sources were resolved. Counts of call sites, before the
 /// removal of duplicate edges.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub struct CallReport {
     /// The call reaches one function of the repository.
     pub to_function: usize,
@@ -134,16 +135,76 @@ pub struct CallReport {
 }
 
 /// What the indexer could not resolve.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub struct Report {
     pub calls: CallReport,
+}
+
+/// One file of the input of `index_sources`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceFile {
+    /// Relative to the root of the repository, with `/` as separator.
+    pub path: String,
+    /// The content. Only the place of a `pom.xml` counts, so its text may be empty.
+    pub text: String,
+}
+
+/// Whether the indexer wants the file at `path` (relative to the root, `/` as separator):
+/// a `.java` file or a `pom.xml`, not below a hidden directory or a Maven `target`
+/// directory. Those hold copies, not sources.
+pub fn is_input(path: &str) -> bool {
+    let mut parts = path.split('/').rev();
+    let Some(name) = parts.next() else {
+        return false;
+    };
+    let wanted = name == "pom.xml" || (name.len() > ".java".len() && name.ends_with(".java"));
+    wanted && parts.all(|dir| !dir.starts_with('.') && dir != "target")
 }
 
 pub fn index(root: &Path) -> io::Result<Graph> {
     index_with_report(root).map(|(graph, _)| graph)
 }
 
+/// Walks `root`, reads the input files and indexes them with `index_sources`.
 pub fn index_with_report(root: &Path) -> io::Result<(Graph, Report)> {
+    let mut files = Vec::new();
+    for path in input_files(root)? {
+        let relative = slash_path(path.strip_prefix(root).unwrap_or(&path));
+        let text = if relative.ends_with(".java") {
+            fs::read_to_string(&path)?
+        } else {
+            String::new()
+        };
+        files.push(SourceFile {
+            path: relative,
+            text,
+        });
+    }
+    Ok(index_sources(&file_name(root), &files))
+}
+
+/// Indexes sources that are given as data. The result does not depend on the order of
+/// `files`. `root_name` names the module of a `pom.xml` in the root. Files that
+/// `is_input` rejects are ignored.
+pub fn index_sources(root_name: &str, files: &[SourceFile]) -> (Graph, Report) {
+    let mut files: Vec<&SourceFile> = files.iter().filter(|f| is_input(&f.path)).collect();
+    // The order of the components, as `Path` compares, not of the bytes.
+    files.sort_by(|a, b| {
+        a.path
+            .split('/')
+            .cmp(b.path.split('/'))
+            .then_with(|| a.text.cmp(&b.text))
+    });
+    files.dedup_by(|a, b| a.path == b.path);
+    let module_dirs: HashSet<&str> = files
+        .iter()
+        .filter_map(|f| match f.path.rsplit_once('/') {
+            _ if f.path == "pom.xml" => Some(""),
+            Some((dir, "pom.xml")) => Some(dir),
+            _ => None,
+        })
+        .collect();
+
     let mut report = Report::default();
     let mut parser = Parser::new();
     parser
@@ -153,23 +214,28 @@ pub fn index_with_report(root: &Path) -> io::Result<(Graph, Report)> {
     let mut graph = Graph::default();
     let mut containers = BTreeSet::new();
     let mut units = Vec::new();
-    for path in java_files(root)? {
-        let source = fs::read_to_string(&path)?;
+    for file in files.iter().filter(|f| f.path.ends_with(".java")) {
+        let source = file.text.clone();
         let Some(tree) = parser.parse(&source, None) else {
             continue;
         };
         let package = package_name(tree.root_node(), &source);
-        let relative = path.strip_prefix(root).unwrap_or(&path);
-        let module = module_of(root, relative);
-        let module_id = module.as_ref().map(|dir| format!("mod:{}", dir.display()));
-        if let (Some(dir), Some(id)) = (&module, &module_id)
+        let relative = file.path.as_str();
+        let module = module_of(&module_dirs, relative);
+        let module_id = module.map(|dir| format!("mod:{dir}"));
+        if let (Some(dir), Some(id)) = (module, &module_id)
             && containers.insert(id.clone())
         {
             graph.nodes.push(Node {
                 id: id.clone(),
                 parent: None,
                 kind: NodeKind::Module,
-                name: file_name(&root.join(dir)),
+                name: dir
+                    .rsplit('/')
+                    .next()
+                    .filter(|n| !n.is_empty())
+                    .unwrap_or(root_name)
+                    .to_string(),
                 file: None,
                 span: None,
                 test: false,
@@ -177,8 +243,8 @@ pub fn index_with_report(root: &Path) -> io::Result<(Graph, Report)> {
                 change: None,
             });
         }
-        let package_id = match &module {
-            Some(dir) => format!("pkg:{}:{package}", dir.display()),
+        let package_id = match module {
+            Some(dir) => format!("pkg:{dir}:{package}"),
             None => format!("pkg:{package}"),
         };
         if containers.insert(package_id.clone()) {
@@ -195,7 +261,7 @@ pub fn index_with_report(root: &Path) -> io::Result<(Graph, Report)> {
             });
         }
 
-        let file = slash_path(relative);
+        let file = relative.to_string();
         let is_test = cg_core::in_test_sources(&file);
         for decl in declarations(tree.root_node(), &source, &package) {
             graph.nodes.push(Node {
@@ -280,7 +346,7 @@ pub fn index_with_report(root: &Path) -> io::Result<(Graph, Report)> {
         }
     }
     graph.edges = edges.into_iter().collect();
-    Ok((graph, report))
+    (graph, report)
 }
 
 /// The supertypes that a type declaration names, with the kind of the relation.
@@ -487,15 +553,20 @@ fn declared_name<'a>(declaration: Ts, source: &'a str) -> &'a str {
 }
 
 /// The nearest directory above the file, inside the root, that has a `pom.xml`.
-fn module_of(root: &Path, relative: &Path) -> Option<PathBuf> {
-    relative
-        .ancestors()
-        .skip(1)
-        .find(|dir| root.join(dir).join("pom.xml").is_file())
-        .map(Path::to_path_buf)
+/// The root is the empty string.
+fn module_of<'a>(module_dirs: &HashSet<&str>, relative: &'a str) -> Option<&'a str> {
+    let mut dir = relative;
+    while let Some((above, _)) = dir.rsplit_once('/') {
+        dir = above;
+        if module_dirs.contains(dir) {
+            return Some(dir);
+        }
+    }
+    module_dirs.contains("").then_some("")
 }
 
-fn java_files(root: &Path) -> io::Result<Vec<PathBuf>> {
+/// The files below `root` for which `is_input` holds.
+fn input_files(root: &Path) -> io::Result<Vec<PathBuf>> {
     let mut files = Vec::new();
     let mut pending = vec![root.to_path_buf()];
     while let Some(dir) = pending.pop() {
@@ -507,7 +578,7 @@ fn java_files(root: &Path) -> io::Result<Vec<PathBuf>> {
                 if !name.starts_with('.') && name != "target" {
                     pending.push(path);
                 }
-            } else if path.extension().is_some_and(|e| e == "java") {
+            } else if is_input(&slash_path(path.strip_prefix(root).unwrap_or(&path))) {
                 files.push(path);
             }
         }

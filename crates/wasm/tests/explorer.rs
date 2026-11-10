@@ -170,3 +170,53 @@ fn focus_view_json_folds_in_the_chosen_variant_and_passes_each_option() {
     let unfolded = focus_view(true, false, false, &["p".to_string()]);
     assert_eq!(unfolded.nodes, ["M", "p", "T", "TT", "TM"]);
 }
+
+fn strings(items: &[&str]) -> Vec<String> {
+    items.iter().map(|s| s.to_string()).collect()
+}
+
+#[test]
+fn index_java_returns_the_graph_and_the_report_of_the_sources_as_json() {
+    let paths = strings(&[
+        "pom.xml",
+        "src/main/java/a/Foo.java",
+        "src/main/java/b/Bar.java",
+    ]);
+    let texts = strings(&[
+        "",
+        "package a;\nimport b.Bar;\nclass Foo extends Bar {}\n",
+        "package b;\npublic class Bar {}\n",
+    ]);
+
+    let json = cg_wasm::index_java(&paths, &texts, "repo").unwrap();
+
+    let indexed: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let graph: Graph = serde_json::from_value(indexed["graph"].clone()).unwrap();
+    assert_eq!(graph.node("mod:").unwrap().name, "repo");
+    assert!(graph.node("type:a.Foo").is_some());
+    assert!(
+        graph
+            .edges
+            .iter()
+            .any(|e| (e.from.as_str(), e.to.as_str(), e.kind)
+                == ("type:a.Foo", "type:b.Bar", EdgeKind::Extends))
+    );
+    assert_eq!(indexed["report"]["calls"]["unresolved"], 0);
+    // The graph of the result goes into an `Explorer`.
+    assert!(Explorer::from_json(&indexed["graph"].to_string()).is_ok());
+}
+
+#[test]
+fn index_java_refuses_paths_and_texts_of_different_length() {
+    let Err(message) = cg_wasm::index_java(&strings(&["A.java"]), &[], "repo") else {
+        panic!("expected an error");
+    };
+
+    assert!(message.contains("1") && message.contains("0"), "{message}");
+}
+
+#[test]
+fn is_input_is_the_rule_of_the_indexer() {
+    assert!(cg_wasm::is_input("a/Foo.java"));
+    assert!(!cg_wasm::is_input("a/target/Foo.java"));
+}

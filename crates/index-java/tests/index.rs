@@ -1,5 +1,5 @@
 use cg_core::{EdgeKind, Graph, NodeKind, Span};
-use cg_index_java::{CallReport, index, index_with_report};
+use cg_index_java::{CallReport, SourceFile, index, index_sources, index_with_report, is_input};
 use std::fs;
 use tempfile::TempDir;
 
@@ -1487,4 +1487,135 @@ fn this_and_super_with_arguments_call_a_constructor_of_the_own_type_or_the_super
 
     assert_eq!(calls_from(&g, "fn:a.Sub#Sub()"), ["fn:a.Sub#Sub(int)"]);
     assert_eq!(calls_from(&g, "fn:a.Sub#Sub(int)"), ["fn:a.Base#Base(int)"]);
+}
+
+fn sources(files: &[(&str, &str)]) -> Vec<SourceFile> {
+    files
+        .iter()
+        .map(|(path, text)| SourceFile {
+            path: (*path).into(),
+            text: (*text).into(),
+        })
+        .collect()
+}
+
+const TREE: [(&str, &str); 5] = [
+    ("pom.xml", ""),
+    ("api/pom.xml", ""),
+    (
+        "api/src/main/java/a/Foo.java",
+        "package a;\nimport b.Bar;\npublic class Foo extends Bar { void f() { new Bar().g(); } }\n",
+    ),
+    (
+        "util/src/main/java/b/Bar.java",
+        "package b;\npublic class Bar { public void g() {} }\n",
+    ),
+    (
+        "api/src/test/java/a/FooTest.java",
+        "package a;\nclass FooTest { Foo foo; }\n",
+    ),
+];
+
+#[test]
+fn index_sources_gives_the_graph_that_index_gives_for_the_same_files_on_disk() {
+    let dir = repo(&TREE);
+    let root_name = dir
+        .path()
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+
+    let from_disk = index_with_report(dir.path()).unwrap();
+    let from_data = index_sources(&root_name, &sources(&TREE));
+
+    assert_eq!(from_data, from_disk);
+}
+
+#[test]
+fn is_input_takes_java_files_and_poms_outside_hidden_and_target_directories() {
+    for wanted in [
+        "pom.xml",
+        "api/pom.xml",
+        "A.java",
+        "src/main/java/a/Foo.java",
+        "target-x/A.java",
+    ] {
+        assert!(is_input(wanted), "{wanted}");
+    }
+    for rejected in [
+        "",
+        "README.md",
+        "api/pom.xml.bak",
+        "Foo.javax",
+        ".java",
+        "src/Foo.kt",
+        ".git/A.java",
+        "a/.hidden/B.java",
+        "target/A.java",
+        "api/target/classes/B.java",
+        "api/target/pom.xml",
+        ".mvn/pom.xml",
+    ] {
+        assert!(!is_input(rejected), "{rejected}");
+    }
+}
+
+#[test]
+fn index_sources_ignores_rejected_files_and_the_order_of_the_input() {
+    let mut files = sources(&TREE);
+    let expected = index_sources("r", &files);
+
+    files.push(SourceFile {
+        path: "api/target/classes/Gen.java".into(),
+        text: "package gen;\nclass Gen {}\n".into(),
+    });
+    files.push(SourceFile {
+        path: "README.md".into(),
+        text: "class NotJava {}".into(),
+    });
+    files.reverse();
+    let shuffled = index_sources("r", &files);
+    files.rotate_left(3);
+
+    assert_eq!(shuffled, expected);
+    assert_eq!(index_sources("r", &files), expected);
+    assert!(expected.0.node("type:gen.Gen").is_none());
+}
+
+#[test]
+fn index_sources_sorts_paths_by_component_like_a_directory_walk() {
+    // By bytes `a-b/` comes before `a/`, by component `a/` comes first. The order of
+    // the nodes is the order of the files.
+    let files = sources(&[
+        ("a-b/X.java", "package q;\nclass Second {}\n"),
+        ("a/X.java", "package p;\nclass First {}\n"),
+    ]);
+
+    let (graph, _) = index_sources("r", &files);
+
+    let types: Vec<&str> = graph
+        .nodes
+        .iter()
+        .filter(|n| n.kind == NodeKind::Type)
+        .map(|n| n.id.as_str())
+        .collect();
+    assert_eq!(types, ["type:p.First", "type:q.Second"]);
+}
+
+#[test]
+fn the_module_in_the_root_is_named_after_the_root() {
+    let (graph, _) = index_sources(
+        "my-repo",
+        &sources(&[
+            ("pom.xml", ""),
+            ("src/main/java/a/A.java", "package a;\nclass A {}\n"),
+        ]),
+    );
+
+    let module = graph.node("mod:").expect("module of the root");
+    assert_eq!(
+        (module.kind, module.name.as_str()),
+        (NodeKind::Module, "my-repo")
+    );
 }

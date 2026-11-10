@@ -69,6 +69,46 @@ impl Explorer {
     }
 }
 
+/// Whether the Java indexer wants the file at `path`. See `cg_index_java::is_input`.
+pub fn is_input(path: &str) -> bool {
+    cg_index_java::is_input(path)
+}
+
+/// Indexes Java sources that are given as data: `paths[i]` (relative to the root, with
+/// `/`) holds `texts[i]`. Returns the JSON `{"graph": ..., "report": ...}`.
+pub fn index_java(paths: &[String], texts: &[String], root_name: &str) -> Result<String, String> {
+    if paths.len() != texts.len() {
+        return Err(format!("{} paths but {} texts", paths.len(), texts.len()));
+    }
+    let files: Vec<cg_index_java::SourceFile> = paths
+        .iter()
+        .zip(texts)
+        .map(|(path, text)| cg_index_java::SourceFile {
+            path: path.clone(),
+            text: text.clone(),
+        })
+        .collect();
+    let (graph, report) = cg_index_java::index_sources(root_name, &files);
+    serde_json::to_string(&serde_json::json!({ "graph": graph, "report": report }))
+        .map_err(|e| e.to_string())
+}
+
+/// `isInput(path)`: true for a `.java` file or a `pom.xml` that the indexer wants.
+#[wasm_bindgen(js_name = isInput)]
+pub fn js_is_input(path: &str) -> bool {
+    is_input(path)
+}
+
+/// `indexJava(paths, texts, rootName)`: JSON of `{graph, report}`; throws on an error.
+#[wasm_bindgen(js_name = indexJava)]
+pub fn js_index_java(
+    paths: Vec<String>,
+    texts: Vec<String>,
+    root_name: &str,
+) -> Result<String, JsError> {
+    index_java(&paths, &texts, root_name).map_err(|message| JsError::new(&message))
+}
+
 /// The JavaScript class `Explorer`: only forwards to the plain type above.
 #[wasm_bindgen(js_name = Explorer)]
 pub struct JsExplorer(Explorer);

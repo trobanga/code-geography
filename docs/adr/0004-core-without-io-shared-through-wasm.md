@@ -17,3 +17,4 @@ does not reimplement graph operations in TypeScript. The indexer stays native fo
   measurable next to the layout.
 - An indexer in the browser needs a C toolchain for WASM (tree-sitter is C). That work
   waits until the GitHub connection needs it.
+- Update: the indexer runs in the browser too, see ADR 15.

@@ -26,10 +26,13 @@ model. Record each new decision of that weight as a new ADR.
 
 ```
 crates/core        graph model, cut, filters. No I/O. Builds for native and wasm32.
-crates/index-java  Java front end on tree-sitter: index(root) -> Graph
+crates/index-java  Java front end on tree-sitter: index_sources(root_name, files) -> Graph + Report
+                   (pure, builds for wasm32); index(root) walks a directory and calls it
 crates/cli         cg index <repo> -o graph.json; cg diff <repo> <rev|A..B> -o diff.json
-crates/wasm        wasm-bindgen binding of core: class Explorer
-scripts/build-wasm.sh   builds crates/wasm into web/src/lib/wasm (generated, committed)
+crates/wasm        wasm-bindgen binding of core and the Java indexer: class Explorer,
+                   indexJava(paths, texts, rootName), isInput(path)
+scripts/build-wasm.sh   builds crates/wasm into web/src/lib/wasm (generated, committed);
+                        sets the C include path for tree-sitter-java (needs cargo, jq)
 web/               viewer: Svelte 5, Tailwind 4, ELK layout in a web worker, plain SVG
 docs/adr/          architecture decision records
 ```
@@ -41,7 +44,7 @@ cargo test --workspace
 cargo clippy --workspace --all-targets      # must be free of warnings
 cargo fmt --all --check
 cargo build -p cg-core --target wasm32-unknown-unknown   # core must stay free of I/O
-scripts/build-wasm.sh                        # after each change in crates/core or crates/wasm
+scripts/build-wasm.sh                        # after each change in crates/core, index-java or wasm
 cargo run --release -p cg -- index <repo> -o web/public/graph.json
 
 cd web
