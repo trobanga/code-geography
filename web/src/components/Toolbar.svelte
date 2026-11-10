@@ -40,7 +40,7 @@
   const btn = 'px-2 py-0.5 border border-[var(--line)] hover:border-[var(--muted)]';
 </script>
 
-<div class="flex items-center gap-3 border-b border-[var(--line)] bg-[var(--panel)] px-3 py-1.5">
+<div class="flex flex-wrap items-center gap-x-3 gap-y-1 whitespace-nowrap border-b border-[var(--line)] bg-[var(--panel)] px-3 py-1.5">
   <div class="flex">
     {#each ['graph', 'commit'] as const as s (s)}
       <button

@@ -31,11 +31,16 @@
 <button
   type="button"
   class="{btn} cursor-pointer"
-  title="Index a Java or Rust project in this browser. Not stored: a reload returns to graph.json."
+  title={picker
+    ? 'Index a Java or Rust project in this browser. Not stored: a reload returns to graph.json.'
+    : 'Index a Java or Rust project in this browser. This browser lists every file of the directory first, which is slow for a tree with node_modules or target: drop the directory on the page instead.'}
   onclick={() => (picker ? pick() : dirInput?.click())}
 >
   open directory
 </button>
+{#if !picker}
+  <span class="text-[var(--muted)]" data-drop-advice>or drop it (faster)</span>
+{/if}
 <input
   bind:this={dirInput}
   type="file"
