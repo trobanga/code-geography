@@ -1,20 +1,23 @@
 <script lang="ts">
-  import { MIN_COUNT_MAX, type EdgeOptions } from '../lib/edgeOptions';
+  import { linesText, type EdgeOptions } from '../lib/edgeOptions';
   import { EDGE_KINDS } from '../lib/types';
 
   let {
     opts,
     drawn,
     total,
+    dropped,
     onchange,
   }: {
     opts: EdgeOptions;
     drawn: number;
     total: number;
+    /** Placeholder lines that lift dropped. */
+    dropped: number;
     onchange: (patch: Partial<EdgeOptions>) => void;
   } = $props();
 
-  const flag = (key: 'onSelection' | 'lift' | 'mergeImports' | 'reduce') => (e: Event) =>
+  const flag = (key: 'onSelection' | 'lift' | 'mergeImports') => (e: Event) =>
     onchange({ [key]: (e.currentTarget as HTMLInputElement).checked });
 </script>
 
@@ -33,20 +36,6 @@
         />{k}
       </label>
     {/each}
-    <label class="flex items-center gap-1">
-      min
-      <input
-        type="number"
-        min="1"
-        max={MIN_COUNT_MAX}
-        value={opts.min}
-        class="w-10 border border-[var(--line)] bg-[var(--bg)] px-1"
-        oninput={(e) => {
-          const v = Number(e.currentTarget.value);
-          if (Number.isInteger(v) && v >= 1 && v <= MIN_COUNT_MAX) onchange({ min: v });
-        }}
-      />
-    </label>
   </span>
   <label class="flex items-center gap-1 border-l border-[var(--line)] pl-3">
     <input type="checkbox" checked={opts.lift} onchange={flag('lift')} />lift
@@ -54,8 +43,5 @@
   <label class="flex items-center gap-1">
     <input type="checkbox" checked={opts.mergeImports} onchange={flag('mergeImports')} />merge imports
   </label>
-  <label class="flex items-center gap-1">
-    <input type="checkbox" checked={opts.reduce} onchange={flag('reduce')} />transitive reduction
-  </label>
-  <span class="ml-auto tabular-nums text-[var(--muted)]">lines: {drawn} / {total}</span>
+  <span class="ml-auto tabular-nums text-[var(--muted)]">{linesText(drawn, total, dropped)}</span>
 </div>

@@ -1,4 +1,4 @@
-import { DEFAULT_EDGE_OPTIONS, MIN_COUNT_MAX, type EdgeOptions } from './edgeOptions';
+import { DEFAULT_EDGE_OPTIONS, type EdgeOptions } from './edgeOptions';
 import type { Focus } from './focus';
 import { EDGE_KINDS, LEVELS, type EdgeKind, type Level } from './types';
 
@@ -20,7 +20,6 @@ const FLAGS = [
   ['sel', 'onSelection'],
   ['lift', 'lift'],
   ['merge', 'mergeImports'],
-  ['reduce', 'reduce'],
   ['changes', 'changesOnly'],
 ] as const;
 
@@ -30,8 +29,9 @@ export function encodeHash(s: HashState): string {
   if (s.open.length > 0) parts.push(`open=${s.open.map(encodeURIComponent).join(',')}`);
   const on = EDGE_KINDS.filter((k) => s.edges.kinds[k]);
   if (on.length < EDGE_KINDS.length) parts.push(`kinds=${on.length > 0 ? on.join(',') : 'none'}`);
-  if (s.edges.min !== DEFAULT_EDGE_OPTIONS.min) parts.push(`min=${s.edges.min}`);
-  for (const [key, field] of FLAGS) if (s.edges[field]) parts.push(`${key}=1`);
+  // A flag is written only when it differs from its default; removed keys are ignored on load.
+  for (const [key, field] of FLAGS)
+    if (s.edges[field] !== DEFAULT_EDGE_OPTIONS[field]) parts.push(`${key}=${s.edges[field] ? 1 : 0}`);
   const ids = (xs: string[]) => xs.map(encodeURIComponent).join(',');
   const f = s.focus;
   if (f?.nodes.length) parts.push(`focus=${ids(f.nodes)}`);
@@ -66,7 +66,6 @@ export function decodeHash(hash: string): HashState {
     else if (key === 'fnear' && value === '1') focus().neighbors = true;
     else if (key === 'unfold' && value !== '') focus().unfolded = ids(value);
     else if (key === 'kinds') edges.kinds = decodeKinds(value) ?? edges.kinds;
-    else if (key === 'min' && /^\d+$/.test(value)) edges.min = Math.min(MIN_COUNT_MAX, Math.max(1, Number(value)));
     else {
       const flag = FLAGS.find(([k]) => k === key);
       if (flag) edges[flag[1]] = value === '1';

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { badgeLabel, changeLabel } from '../lib/commit';
   import { breakdown } from '../lib/detail';
-  import { borderLine, edgePoints, placeNodes, type Offset, type Rect } from '../lib/drag';
+  import { edgePoints, placeNodes, type Offset, type Rect } from '../lib/drag';
   import { changed, painted, type Drawn } from '../lib/edgeOptions';
   import { BOX } from '../lib/elkGraph';
   import type { Tree } from '../lib/expansion';
@@ -9,6 +9,7 @@
   import { CHANGE_SIGN, changeColor, KIND_LETTER, kindColor } from '../lib/kinds';
   import type { LaidNode, Layout, Point } from '../lib/layout';
   import type { View, ViewEdge } from '../lib/types';
+  import { orthoRoutes } from '../lib/ortho';
   import { fitTransform, labelAnchor, zoomAt, type Transform } from '../lib/viewport';
 
   let {
@@ -96,20 +97,18 @@
       })
       .filter((e) => e.show),
   );
-  // O3: the real edges of the selected node that were lifted away, as direct lines.
-  const realLines = $derived(
-    selected === null
-      ? []
-      : drawn.lifted
-          .filter((e) => e.from === selected || e.to === selected)
-          .flatMap((ve) => {
-            const a = rects.get(ve.from);
-            const b = rects.get(ve.to);
-            if (!a || !b) return [];
-            const pts = borderLine(a, b);
-            return [{ ve, d: pathOf(pts), w: width(ve.count), lab: labelAnchor(pts), ch: edgeChange(ve) }];
-          }),
-  );
+  // O3: the real edges of the selected node that were lifted away, as orthogonal lines between
+  // the boxes as they are; the layout is not run again.
+  const realLines = $derived.by(() => {
+    if (selected === null) return [];
+    const ves = drawn.lifted.filter((e) => (e.from === selected || e.to === selected) && rects.has(e.from) && rects.has(e.to));
+    return orthoRoutes(ves, rects).map((pts, i) => {
+      const ve = ves[i];
+      // Drawn like an ELK line at the selection.
+      const key = `real:${ve.from}\u0000${ve.to}`;
+      return { key, ve, touches: true, d: pathOf(pts), w: width(ve.count), lab: labelAnchor(pts), ch: edgeChange(ve), bg: false };
+    });
+  });
   const nameOf = (id: string) => labelOf(tree, view, id);
   const placeholders = $derived(placed.nodes.filter((n) => restOf(tree, n.id) !== null));
 
@@ -227,6 +226,7 @@
     {@const label = tree.label.get(n.id) ?? n.id}
     {@const nf = commit ? fileCounts.get(n.id) : undefined}
     {@const badge = below ? badgeLabel(below, own) : ''}
+    {@const filesOnly = !!nf && !below && !own}
     <g
       data-node={n.id}
       opacity={changesOnly && !below && !nf ? 0.3 : 1}
@@ -243,8 +243,14 @@
         width={n.w}
         height={n.h}
         fill={n.container ? `color-mix(in srgb, ${c} 5%, var(--bg))` : `color-mix(in srgb, ${c} 12%, var(--bg))`}
-        stroke={sel ? 'var(--accent)' : own ? changeColor(own) : c}
-        stroke-width={sel ? 2 : own ? 1.25 : n.container ? 0.75 : 0.6}
+        stroke={sel
+          ? 'var(--accent)'
+          : own
+            ? changeColor(own)
+            : filesOnly
+              ? 'color-mix(in srgb, var(--c-modified) 55%, ' + c + ')'
+              : c}
+        stroke-width={sel ? 2 : own ? 1.25 : filesOnly ? 1 : n.container ? 0.75 : 0.6}
         stroke-dasharray={own === 'removed' ? '4 2' : undefined}
       />
       {#if below && !own}
@@ -284,16 +290,16 @@
         >
       {/if}
       {#if nf}
-        {#if !below && !own}
-          <!-- Touched only through files: a quiet bar where the change bar would be. -->
-          <rect x={n.x} y={n.y} width="3" height={n.container ? BOX.header : n.h} fill="var(--c-modified)" opacity="0.45" />
+        {#if filesOnly}
+          <!-- Touched only through files: a dashed bar where the solid change bar would be. -->
+          {@const h = n.container ? BOX.header : n.h}
+          <path d="M{n.x + 1.5},{n.y}v{h}" stroke="var(--c-modified)" stroke-width="3" stroke-dasharray="3 2" />
         {/if}
         <text
           x={n.x + (badge ? badge.length * 5 + 6 : 0)}
           y={n.y - 2}
           font-size="8"
-          fill="var(--c-modified)"
-          font-style="italic"><title>{nf} changed {nf === 1 ? 'file' : 'files'} in this module</title>{nf} {nf === 1 ? 'file' : 'files'}</text
+          fill="var(--c-modified)"><title>{nf} changed {nf === 1 ? 'file' : 'files'} in this module</title>{nf} {nf === 1 ? 'file' : 'files'}</text
         >
       {/if}
       {@render marker(n, n.x + n.w - BOX.markerW + 1, mid - 5.5)}
@@ -368,7 +374,7 @@
       {#each containers as n (n.id)}{@render box(n)}{/each}
       {#each leaves as n (n.id)}{@render box(n)}{/each}
       {#each placeholders as n (n.id)}{@render placeholder(n)}{/each}
-      {#each edges as e (e.key)}
+      {#each [...edges, ...realLines] as e (e.key)}
         <g
           data-edge
           opacity={(selected === null || e.touches || onSelection ? 1 : 0.15) * (e.bg && !e.touches ? 0.35 : 1)}
@@ -402,28 +408,9 @@
           {/if}
         </g>
       {/each}
-      {#each realLines as e (e.ve.from + '>' + e.ve.to)}
-        <g
-          data-edge
-          role="presentation"
-          onpointerenter={(ev) => edgeHover(ev, e.ve)}
-          onpointermove={(ev) => edgeHover(ev, e.ve)}
-          onpointerleave={() => (hover = null)}
-        >
-          <path d={e.d} fill="none" stroke="transparent" stroke-width={Math.max(8, e.w + 4)} />
-          <path
-            d={e.d}
-            fill="none"
-            stroke={e.ch ? e.ch.color : 'var(--accent)'}
-            stroke-width={e.w}
-            stroke-dasharray="5 3"
-            marker-end={e.ch ? e.ch.marker : 'url(#arr-hi)'}
-          />
-        </g>
-      {/each}
       {#each [...edges, ...realLines] as e, i (i)}
-        {#if e.ch || (e.ve.count > 1 && !('bg' in e && e.bg))}
-          {@const hi = !('touches' in e) || e.touches}
+        {#if e.ch || (e.ve.count > 1 && !e.bg)}
+          {@const hi = e.touches}
           <text
             x={e.lab.horizontal ? e.lab.x : e.lab.x + e.w / 2 + 2}
             y={e.lab.horizontal ? e.lab.y - e.w / 2 - 2 : e.lab.y + 3}

@@ -55,7 +55,7 @@
       : explorer.view(ex, tests, opts.mergeImports);
     return JSON.parse(json) as View;
   });
-  // O2 → O3 → O5.
+  // O2 → O3.
   const drawn = $derived(view && tree ? edgePipeline(view.edges, tree, opts) : null);
   const diff = $derived(graph?.diff ?? null);
   // Without a commit graph the option has no effect, even when the hash carries it.
@@ -229,7 +229,7 @@
       f.text().then(load);
     }}
   />
-  <EdgeBar {opts} onchange={(patch) => Object.assign(opts, patch)} drawn={paintedCount} total={drawn?.total ?? 0} />
+  <EdgeBar {opts} onchange={(patch) => Object.assign(opts, patch)} drawn={paintedCount} total={drawn?.total ?? 0} dropped={drawn?.dropped ?? 0} />
   {#if diff && totals}
     <CommitStrip
       {diff}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_EDGE_OPTIONS, edgePipeline, filterEdges, liftEdges, painted, reduceTransitive } from './edgeOptions';
+import { DEFAULT_EDGE_OPTIONS, edgePipeline, filterEdges, liftEdges, linesText, painted } from './edgeOptions';
 import { buildTree } from './expansion';
 import type { GraphNode, ViewEdge } from './types';
 
@@ -15,31 +15,20 @@ const e = (from: string, to: string, kinds: ViewEdge['kinds'], added = 0, remove
 describe('filterEdges (O2)', () => {
   const all = { extends: true, implements: true, imports: true, type_ref: true };
 
-  it('keeps every edge with all kinds on and min 1', () => {
+  it('keeps every edge with all kinds on', () => {
     const edges = [e('a', 'b', { imports: 1 }), e('b', 'c', { type_ref: 2, extends: 1 })];
-    expect(filterEdges(edges, all, 1)).toEqual(edges);
+    expect(filterEdges(edges, all)).toEqual(edges);
   });
 
   it('counts only enabled kinds and drops edges that sum to 0', () => {
     const edges = [e('a', 'b', { imports: 4 }), e('b', 'c', { type_ref: 2, imports: 3 })];
-    const out = filterEdges(edges, { ...all, imports: false }, 1);
+    const out = filterEdges(edges, { ...all, imports: false });
     expect(out).toEqual([{ from: 'b', to: 'c', count: 2, kinds: { type_ref: 2 }, added: 0, removed: 0 }]);
-  });
-
-  it('drops edges whose effective count is below min', () => {
-    const edges = [e('a', 'b', { imports: 2 }), e('b', 'c', { type_ref: 3 })];
-    expect(filterEdges(edges, all, 3).map((x) => x.from)).toEqual(['b']);
-  });
-
-  it('drops a changed edge below min, except when changed edges are kept', () => {
-    const edges = [e('a', 'b', { imports: 1 }, 1, 0), e('c', 'd', { imports: 1 })];
-    expect(filterEdges(edges, all, 2)).toEqual([]);
-    expect(filterEdges(edges, all, 2, true).map((x) => x.from)).toEqual(['a']);
   });
 
   it('applies the kind filter to changed edges and keeps their marks within the new count', () => {
     const edges = [e('a', 'b', { imports: 1 }, 1, 0), e('c', 'd', { imports: 2, type_ref: 1 }, 3, 0)];
-    expect(filterEdges(edges, { ...all, imports: false }, 1, true)).toEqual([
+    expect(filterEdges(edges, { ...all, imports: false })).toEqual([
       { from: 'c', to: 'd', count: 1, kinds: { type_ref: 1 }, added: 1, removed: 0 },
     ]);
   });
@@ -64,9 +53,17 @@ describe('liftEdges (O3)', () => {
     expect(r.edges).toEqual([{ from: 'm1', to: 'm2', count: 2, kinds: { type_ref: 2 }, added: 0, removed: 0 }]);
   });
 
-  it('lifts an edge of a placeholder as an edge of a child of its container', () => {
-    const r = liftEdges([e('rest:p1', 't4', { type_ref: 1 }), e('rest:p1', 't1', { imports: 1 })], tree);
+  it('drops a placeholder edge that would be lifted, keeps one to a sibling, and counts the dropped', () => {
+    const r = liftEdges(
+      [e('rest:p1', 't4', { type_ref: 2 }), e('t4', 'rest:p1', { imports: 1 }), e('rest:p1', 't1', { imports: 1 }), e('t1', 't4', { imports: 1 })],
+      tree,
+    );
     expect(r.edges.map(pair).sort()).toEqual(['m1>m2', 'rest:p1>t1']);
+    expect(r.edges.find((x) => x.from === 'm1')!.count).toBe(1);
+    expect(r.dropped).toBe(2);
+    expect(r.badges.get('t4')).toEqual({ out: 0, in: 1 });
+    expect(r.badges.has('rest:p1')).toBe(false);
+    expect(r.lifted.map(pair)).toEqual(['t1>t4']);
   });
 
   it('keeps an edge between two types of the same package', () => {
@@ -116,37 +113,6 @@ describe('liftEdges (O3)', () => {
   });
 });
 
-describe('reduceTransitive (O5)', () => {
-  const one = (pairs: string) => pairs.split(' ').map((p) => e(p[0], p[1], { imports: 1 }));
-  const pairs = (es: ViewEdge[]) => es.map((x) => x.from + x.to).join(' ');
-
-  it('hides the shortcut of a chain', () => {
-    expect(pairs(reduceTransitive(one('ab bc ac')))).toBe('ab bc');
-  });
-
-  it('hides the shortcut of a diamond and keeps both sides', () => {
-    expect(pairs(reduceTransitive(one('ab ac bd cd ad')))).toBe('ab ac bd cd');
-  });
-
-  it('never hides edges inside a cycle', () => {
-    expect(pairs(reduceTransitive(one('ab bc ca ac')))).toBe('ab bc ca ac');
-  });
-
-  it('keeps reachability when several members of a cycle reach the same node', () => {
-    // a and b form a cycle; both point to c. Hiding both would lose c.
-    expect(pairs(reduceTransitive(one('ab ba ac bc')))).toBe('ab ba ac bc');
-  });
-
-  it('never hides a changed edge', () => {
-    const edges = [...one('ab bc'), e('a', 'c', { imports: 1 }, 1, 0), e('c', 'd', { imports: 1 }), e('b', 'd', { imports: 2 }, 0, 1)];
-    expect(pairs(reduceTransitive(edges))).toBe('ab bc ac cd bd');
-  });
-
-  it('hides an edge whose target is reached through a cycle', () => {
-    expect(pairs(reduceTransitive(one('xa ab ba bc xc')))).toBe('xa ab ba bc');
-  });
-});
-
 describe('edgePipeline', () => {
   const nodes: GraphNode[] = [
     { id: 'm1', parent: null, kind: 'module', name: 'm1' },
@@ -165,27 +131,15 @@ describe('edgePipeline', () => {
   ];
   const pairs = (es: ViewEdge[]) => es.map((x) => `${x.from}>${x.to}`).join(' ');
 
-  it('passes the drawable edges through with all options off and counts them', () => {
-    const r = edgePipeline(edges, tree, DEFAULT_EDGE_OPTIONS);
+  it('passes the drawable edges through with lift off and counts them', () => {
+    const r = edgePipeline(edges, tree, { ...DEFAULT_EDGE_OPTIONS, lift: false });
     expect(pairs(r.edges)).toBe('a>m2 b>m2 m2>m3 m1>m3');
     expect(r.total).toBe(4);
   });
 
-  it('applies min before lift, so small real edges do not add up', () => {
-    const r = edgePipeline(edges, tree, { ...DEFAULT_EDGE_OPTIONS, min: 2, lift: true });
-    expect(pairs(r.edges)).toBe('m2>m3 m1>m3');
-  });
-
-  it('keeps changed edges below min when only changes are shown', () => {
-    const ch = [...edges, e('b', 'm3', { imports: 1 }, 1, 0)];
-    expect(pairs(edgePipeline(ch, tree, { ...DEFAULT_EDGE_OPTIONS, min: 2 }).edges)).toBe('m2>m3 m1>m3');
-    const r = edgePipeline(ch, tree, { ...DEFAULT_EDGE_OPTIONS, min: 2, changesOnly: true });
-    expect(pairs(r.edges)).toBe('m2>m3 m1>m3 b>m3');
-  });
-
-  it('reduces after lift', () => {
-    const r = edgePipeline(edges, tree, { ...DEFAULT_EDGE_OPTIONS, lift: true, reduce: true });
-    expect(pairs(r.edges)).toBe('m1>m2 m2>m3');
+  it('lifts by default', () => {
+    const r = edgePipeline(edges, tree, DEFAULT_EDGE_OPTIONS);
+    expect(pairs(r.edges)).toBe('m1>m2 m2>m3 m1>m3');
     expect(r.badges.get('a')).toEqual({ out: 1, in: 0 });
   });
 });
@@ -210,5 +164,12 @@ describe('painted (O1)', () => {
     expect(painted(ab, true, 'a', null)).toBe(true);
     expect(painted(ab, true, 'x', 'b')).toBe(true);
     expect(painted(ab, true, 'x', 'y')).toBe(false);
+  });
+});
+
+describe('linesText', () => {
+  it('names the hidden background lines only when there are any', () => {
+    expect(linesText(20, 55, 0)).toBe('lines: 20 / 55');
+    expect(linesText(20, 55, 12)).toBe('lines: 20 / 55, 12 background hidden');
   });
 });

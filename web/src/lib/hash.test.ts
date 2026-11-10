@@ -22,10 +22,8 @@ describe('hash', () => {
       edges: {
         onSelection: true,
         kinds: { extends: true, implements: false, imports: false, type_ref: true },
-        min: 3,
-        lift: true,
-        mergeImports: true,
-        reduce: true,
+        lift: false,
+        mergeImports: false,
         changesOnly: true,
       },
     };
@@ -66,7 +64,19 @@ describe('hash', () => {
   it('decodes an empty or garbage hash to the start state', () => {
     const start = { level: 'modules', tests: false, open: [], edges: DEFAULT_EDGE_OPTIONS };
     expect(decodeHash('')).toEqual(start);
-    expect(decodeHash('#level=bogus&tests=7&min=99&kinds=bogus')).toEqual({ ...start, edges: { ...DEFAULT_EDGE_OPTIONS, min: 10 } });
+    expect(decodeHash('#level=bogus&tests=7&min=99&kinds=bogus')).toEqual(start);
+  });
+
+  it('writes a default-on option only when it is off', () => {
+    const base = { level: 'modules' as const, tests: false, open: [] };
+    const off = { ...DEFAULT_EDGE_OPTIONS, lift: false, mergeImports: false };
+    expect(DEFAULT_EDGE_OPTIONS.lift && DEFAULT_EDGE_OPTIONS.mergeImports).toBe(true);
+    expect(encodeHash({ ...base, edges: off })).toBe('#level=modules&tests=0&lift=0&merge=0');
+    expect(decodeHash(encodeHash({ ...base, edges: off })).edges).toEqual(off);
+  });
+
+  it('loads an old hash with removed keys', () => {
+    expect(decodeHash('#level=packages&min=3&reduce=1&lift=1').edges).toEqual(DEFAULT_EDGE_OPTIONS);
   });
 
   it('accepts a hash with leading # and missing fields', () => {
