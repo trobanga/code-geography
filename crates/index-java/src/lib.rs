@@ -150,15 +150,19 @@ pub struct SourceFile {
 }
 
 /// Whether the indexer wants the file at `path` (relative to the root, `/` as separator):
-/// a `.java` file or a `pom.xml`, not below a hidden directory or a Maven `target`
-/// directory. Those hold copies, not sources.
+/// a `.java` file or a `pom.xml`, not below a directory that `holds_no_sources`.
 pub fn is_input(path: &str) -> bool {
     let mut parts = path.split('/').rev();
     let Some(name) = parts.next() else {
         return false;
     };
     let wanted = name == "pom.xml" || (name.len() > ".java".len() && name.ends_with(".java"));
-    wanted && parts.all(|dir| !dir.starts_with('.') && dir != "target")
+    wanted && parts.all(|dir| !holds_no_sources(dir))
+}
+
+/// Hidden directories, Maven build output and npm packages hold copies, not sources.
+fn holds_no_sources(dir: &str) -> bool {
+    dir.starts_with('.') || dir == "target" || dir == "node_modules"
 }
 
 pub fn index(root: &Path) -> io::Result<Graph> {
@@ -573,9 +577,7 @@ fn input_files(root: &Path) -> io::Result<Vec<PathBuf>> {
         for entry in fs::read_dir(dir)? {
             let path = entry?.path();
             if path.is_dir() {
-                // Hidden directories and Maven build output hold copies, not sources.
-                let name = file_name(&path);
-                if !name.starts_with('.') && name != "target" {
+                if !holds_no_sources(&file_name(&path)) {
                     pending.push(path);
                 }
             } else if is_input(&slash_path(path.strip_prefix(root).unwrap_or(&path))) {

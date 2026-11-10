@@ -29,8 +29,7 @@ export async function walkInputs(
       const path = prefix + e.name;
       if (e.kind === 'directory') {
         // A directory can hold inputs iff a source file in it would be one: the rule is asked, not repeated.
-        // `is_input` accepts node_modules; it is skipped here only, so the CLI walk still lists it.
-        if (e.name !== 'node_modules' && isInput(path + '/X.java')) below.push(visit(e, path + '/'));
+        if (isInput(path + '/X.java')) below.push(visit(e, path + '/'));
       } else if (isInput(path)) inputs.push({ path, file: e });
     }
     // Sibling directories are listed at the same time: each listing waits on the browser.

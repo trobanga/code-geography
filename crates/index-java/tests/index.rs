@@ -1556,6 +1556,8 @@ fn is_input_takes_java_files_and_poms_outside_hidden_and_target_directories() {
         "api/target/classes/B.java",
         "api/target/pom.xml",
         ".mvn/pom.xml",
+        "node_modules/x/A.java",
+        "web/node_modules/x/pom.xml",
     ] {
         assert!(!is_input(rejected), "{rejected}");
     }

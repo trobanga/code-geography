@@ -5,7 +5,7 @@ import { fromEntry, fromHandle, isCancel, walkInputs, type DirEntry, type DirHan
 const isInput = (p: string) => {
   const parts = p.split('/');
   const name = parts.pop()!;
-  return (name === 'pom.xml' || (name.length > 5 && name.endsWith('.java'))) && parts.every((d) => !d.startsWith('.') && d !== 'target');
+  return (name === 'pom.xml' || (name.length > 5 && name.endsWith('.java'))) && parts.every((d) => !d.startsWith('.') && d !== 'target' && d !== 'node_modules');
 };
 
 type Tree = { [name: string]: Tree | string };
@@ -39,13 +39,6 @@ describe('walkInputs', () => {
     const r = await walkInputs(dir, isInput);
     expect(r.inputs.map((i) => i.path)).toEqual(['src/B.java']);
     expect(opened).toEqual(['repo', 'repo/src']);
-  });
-
-  it('does not list node_modules, which the rule of the indexer accepts', async () => {
-    const opened: string[] = [];
-    const dir = fakeDir('repo', { docs: { node_modules: { pkg: { 'index.js': '' } } }, 'A.java': '' }, opened);
-    await walkInputs(dir, isInput);
-    expect(opened).toEqual(['repo', 'repo/docs']);
   });
 
   it('reports the running number of listed directories', async () => {
