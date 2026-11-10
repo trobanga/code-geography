@@ -26,18 +26,25 @@ fn graph_json() -> String {
             node("tp", Some("TM"), NodeKind::Package, false),
             node("TU", Some("tp"), NodeKind::Type, true),
         ],
-        edges: vec![Edge {
-            from: "TT".into(),
-            to: "T".into(),
-            kind: EdgeKind::TypeRef,
-        }],
+        edges: vec![
+            Edge {
+                from: "TT".into(),
+                to: "T".into(),
+                kind: EdgeKind::Imports,
+            },
+            Edge {
+                from: "TT".into(),
+                to: "T".into(),
+                kind: EdgeKind::TypeRef,
+            },
+        ],
     };
     serde_json::to_string(&graph).unwrap()
 }
 
 fn view(explorer: &Explorer, expanded: &[&str], include_tests: bool) -> View {
     let expanded: Vec<String> = expanded.iter().map(|id| id.to_string()).collect();
-    serde_json::from_str(&explorer.view_json(&expanded, include_tests)).unwrap()
+    serde_json::from_str(&explorer.view_json(&expanded, include_tests, false)).unwrap()
 }
 
 #[test]
@@ -46,7 +53,7 @@ fn the_view_json_is_the_cut_of_the_graph_with_or_without_the_tests() {
 
     let all = view(&explorer, &["M", "p"], true);
     assert_eq!(all.nodes, ["M", "p", "T", "TT", "TM"]);
-    assert_eq!(all.edges.len(), 1);
+    assert_eq!(all.edges[0].count, 2);
 
     let without = view(&explorer, &["M", "p"], false);
     assert_eq!(without.nodes, ["M", "p", "T"]);
@@ -61,4 +68,15 @@ fn invalid_json_gives_an_error_message() {
     };
 
     assert!(!message.is_empty());
+}
+
+#[test]
+fn merge_imports_leaves_out_the_imports_that_a_use_covers() {
+    let explorer = Explorer::from_json(&graph_json()).unwrap();
+    let expanded = ["M".to_string(), "p".to_string()];
+
+    let merged: View = serde_json::from_str(&explorer.view_json(&expanded, true, true)).unwrap();
+
+    assert_eq!(merged.edges[0].count, 1);
+    assert_eq!(merged.edges[0].kinds.get(&EdgeKind::TypeRef), Some(&1));
 }

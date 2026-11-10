@@ -31,15 +31,16 @@ export class Explorer {
     /**
      * @param {string[]} expanded
      * @param {boolean} include_tests
+     * @param {boolean} merge_imports
      * @returns {string}
      */
-    view(expanded, include_tests) {
+    view(expanded, include_tests, merge_imports) {
         let deferred2_0;
         let deferred2_1;
         try {
             const ptr0 = passArrayJsValueToWasm0(expanded, wasm.__wbindgen_malloc);
             const len0 = WASM_VECTOR_LEN;
-            const ret = wasm.explorer_view(this.__wbg_ptr, ptr0, len0, include_tests);
+            const ret = wasm.explorer_view(this.__wbg_ptr, ptr0, len0, include_tests, merge_imports);
             deferred2_0 = ret[0];
             deferred2_1 = ret[1];
             return getStringFromWasm0(ret[0], ret[1]);

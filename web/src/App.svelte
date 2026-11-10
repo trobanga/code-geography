@@ -65,7 +65,7 @@
   // View from the wasm cut; layout from ELK in a worker. Stale results are dropped.
   $effect(() => {
     if (!explorer || !tree) return;
-    const v = JSON.parse(explorer.view([...expanded], tests)) as View;
+    const v = JSON.parse(explorer.view([...expanded], tests, false)) as View;
     view = v;
     untrack(() => {
       if (selected && !v.nodes.includes(selected)) selected = null;

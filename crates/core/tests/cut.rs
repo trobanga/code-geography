@@ -195,3 +195,36 @@ fn expandable_lists_the_visible_nodes_that_have_children_in_graph_order() {
         "the leaves T1 and T2 cannot open"
     );
 }
+
+#[test]
+fn an_import_is_redundant_when_the_importer_or_a_descendant_uses_the_type() {
+    let graph = Graph {
+        nodes: vec![
+            node("User", None, NodeKind::Type),
+            node("User#run", Some("User"), NodeKind::Function),
+            node("Used", None, NodeKind::Type),
+            node("Used.Inner", Some("Used"), NodeKind::Type),
+            node("ViaInner", None, NodeKind::Type),
+            node("OnlyImported", None, NodeKind::Type),
+        ],
+        edges: vec![
+            edge("User", "Used", EdgeKind::Imports),
+            edge("User#run", "Used", EdgeKind::TypeRef),
+            edge("User", "OnlyImported", EdgeKind::Imports),
+            edge("ViaInner", "Used", EdgeKind::Imports),
+            edge("ViaInner", "Used.Inner", EdgeKind::Extends),
+        ],
+    };
+
+    let merged = graph.without_redundant_imports();
+
+    assert_eq!(merged.nodes, graph.nodes);
+    assert_eq!(
+        merged.edges,
+        vec![
+            edge("User#run", "Used", EdgeKind::TypeRef),
+            edge("User", "OnlyImported", EdgeKind::Imports),
+            edge("ViaInner", "Used.Inner", EdgeKind::Extends),
+        ]
+    );
+}

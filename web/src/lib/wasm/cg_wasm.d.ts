@@ -8,7 +8,7 @@ export class Explorer {
     free(): void;
     [Symbol.dispose](): void;
     constructor(graph_json: string);
-    view(expanded: string[], include_tests: boolean): string;
+    view(expanded: string[], include_tests: boolean, merge_imports: boolean): string;
 }
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
@@ -17,7 +17,7 @@ export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly __wbg_explorer_free: (a: number, b: number) => void;
     readonly explorer_new: (a: number, b: number) => [number, number, number];
-    readonly explorer_view: (a: number, b: number, c: number, d: number) => [number, number];
+    readonly explorer_view: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;

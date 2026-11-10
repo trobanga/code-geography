@@ -70,6 +70,46 @@ impl Graph {
             .any(|e| e.from == from && e.to == to && e.kind == kind)
     }
 
+    /// The graph without the `Imports` edges that say nothing new: an import from
+    /// `F` to `X` is dropped when `F` or a descendant of `F` has an edge of another
+    /// kind to `X` or to a descendant of `X`.
+    pub fn without_redundant_imports(&self) -> Graph {
+        use std::collections::{HashMap, HashSet};
+
+        let parents: HashMap<&str, Option<&str>> = self
+            .nodes
+            .iter()
+            .map(|n| (n.id.as_str(), n.parent.as_deref()))
+            .collect();
+        let ancestors_or_self = |id: &'_ str| {
+            let parents = &parents;
+            std::iter::successors(parents.get_key_value(id).map(|(id, _)| *id), move |id| {
+                parents.get(id).copied().flatten()
+            })
+        };
+        // Each (user, used) pair that a use covers, for all ancestors of both ends.
+        let mut uses: HashSet<(&str, &str)> = HashSet::new();
+        for edge in self.edges.iter().filter(|e| e.kind != EdgeKind::Imports) {
+            for from in ancestors_or_self(&edge.from) {
+                for to in ancestors_or_self(&edge.to) {
+                    uses.insert((from, to));
+                }
+            }
+        }
+        let edges = self
+            .edges
+            .iter()
+            .filter(|e| {
+                e.kind != EdgeKind::Imports || !uses.contains(&(e.from.as_str(), e.to.as_str()))
+            })
+            .cloned()
+            .collect();
+        Graph {
+            nodes: self.nodes.clone(),
+            edges,
+        }
+    }
+
     /// The graph without the nodes that have `test == true`, without their
     /// descendants, and without the edges that end at a removed node. A container
     /// that loses all its children this way is removed too.
