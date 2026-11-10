@@ -64,7 +64,9 @@ dependencies = [
  "cg-core",
  "cg-index-java",
  "cg-index-rust",
+ "cg-walk",
  "serde",
+ "serde_json",
  "tempfile",
 ]
 
@@ -73,6 +75,7 @@ name = "cg-index-java"
 version = "0.1.0"
 dependencies = [
  "cg-core",
+ "cg-walk",
  "serde",
  "tempfile",
  "tree-sitter",
@@ -87,6 +90,14 @@ dependencies = [
  "serde",
  "tree-sitter",
  "tree-sitter-rust",
+]
+
+[[package]]
+name = "cg-walk"
+version = "0.1.0"
+dependencies = [
+ "cg-core",
+ "tempfile",
 ]
 
 [[package]]

@@ -168,7 +168,6 @@ pub fn compute<'t>(
             }
         }
     }
-    drop_edges_to_ancestors(&mut edges, decls, mods, packages);
     edges
 }
 
@@ -457,7 +456,7 @@ pub fn type_head(world: &World, ctx: &Ctx, node: Ts, source: &str) -> Option<usi
 
 /// An edge between a node and itself, its ancestor or its descendant says nothing: the
 /// tree already holds that relation.
-fn drop_edges_to_ancestors(
+pub fn drop_edges_to_ancestors(
     edges: &mut BTreeSet<Edge>,
     decls: &[Decl],
     mods: &[ModInfo],

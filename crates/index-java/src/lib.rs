@@ -7,12 +7,11 @@
 mod calls;
 
 pub use cg_core::SourceFile;
-use cg_core::{Edge, EdgeKind, Graph, Node, NodeKind, Span, holds_no_sources};
+use cg_core::{Edge, EdgeKind, Graph, Node, NodeKind, Span};
 use serde::Serialize;
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tree_sitter::{Node as Ts, Parser, Tree};
 
 const TYPE_DECLARATIONS: [&str; 5] = [
@@ -121,19 +120,7 @@ impl<'a> Scope<'a> {
     }
 }
 
-/// How the call sites of the sources were resolved. Counts of call sites, before the
-/// removal of duplicate edges.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
-pub struct CallReport {
-    /// The call reaches one function of the repository.
-    pub to_function: usize,
-    /// The call reaches the type of the receiver: several overloads fit, or none is declared.
-    pub to_type: usize,
-    /// The type of the receiver is known and not in the repository.
-    pub external: usize,
-    /// The type of the receiver is not known.
-    pub unresolved: usize,
-}
+pub use cg_core::CallReport;
 
 /// What the indexer could not resolve.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
@@ -153,21 +140,10 @@ pub fn index(root: &Path) -> io::Result<Graph> {
     index_with_report(root).map(|(graph, _)| graph)
 }
 
-/// Walks `root`, reads the input files and indexes them with `index_sources`.
+/// Walks `root` with `cg_walk::read_sources`, keeps the files that `is_input` accepts and
+/// indexes them with `index_sources`.
 pub fn index_with_report(root: &Path) -> io::Result<(Graph, Report)> {
-    let mut files = Vec::new();
-    for path in input_files(root)? {
-        let relative = slash_path(path.strip_prefix(root).unwrap_or(&path));
-        let text = if relative.ends_with(".java") {
-            fs::read_to_string(&path)?
-        } else {
-            String::new()
-        };
-        files.push(SourceFile {
-            path: relative,
-            text,
-        });
-    }
+    let files = cg_walk::read_sources(root, is_input)?;
     Ok(index_sources(&file_name(root), &files))
 }
 
@@ -553,26 +529,6 @@ fn module_of<'a>(module_dirs: &HashSet<&str>, relative: &'a str) -> Option<&'a s
     module_dirs.contains("").then_some("")
 }
 
-/// The files below `root` for which `is_input` holds.
-fn input_files(root: &Path) -> io::Result<Vec<PathBuf>> {
-    let mut files = Vec::new();
-    let mut pending = vec![root.to_path_buf()];
-    while let Some(dir) = pending.pop() {
-        for entry in fs::read_dir(dir)? {
-            let path = entry?.path();
-            if path.is_dir() {
-                if !holds_no_sources(&file_name(&path)) {
-                    pending.push(path);
-                }
-            } else if is_input(&slash_path(path.strip_prefix(root).unwrap_or(&path))) {
-                files.push(path);
-            }
-        }
-    }
-    files.sort();
-    Ok(files)
-}
-
 fn package_name(unit: Ts, source: &str) -> String {
     children(unit)
         .find(|c| c.kind() == "package_declaration")
@@ -587,14 +543,6 @@ fn type_id(package: &str, name: &str) -> String {
     } else {
         format!("type:{package}.{name}")
     }
-}
-
-/// The path with `/` as separator, whatever the platform.
-fn slash_path(path: &Path) -> String {
-    path.components()
-        .map(|c| c.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/")
 }
 
 /// The hash of the own source text of a declaration: the text without the byte

@@ -6,14 +6,14 @@ use cg_core::{Graph, Node};
 use cg_index_java::CallReport;
 use serde::Serialize;
 use std::collections::{BTreeSet, HashSet};
-use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// What the front ends could not resolve, one part per language.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct Report {
-    /// How the call sites of the Java sources were resolved.
+    /// How the call sites of all front ends were resolved: the sum of the Java part and
+    /// `rust.calls`. The viewer reads this.
     pub calls: CallReport,
     pub rust: cg_index_rust::Report,
 }
@@ -44,7 +44,7 @@ pub fn index_sources(root_name: &str, files: &[SourceFile]) -> (Graph, Report) {
         diff: None,
     };
     let report = Report {
-        calls: calls.calls,
+        calls: calls.calls + rust_report.calls,
         rust: rust_report,
     };
     (graph, report)
@@ -54,57 +54,13 @@ pub fn index(root: &Path) -> io::Result<Graph> {
     index_with_report(root).map(|(graph, _)| graph)
 }
 
-/// Walks `root`, reads the files that `is_input` accepts and indexes them with
-/// `index_sources`.
+/// Walks `root` with `cg_walk::read_sources`, keeps the files that `is_input` accepts and
+/// indexes them with `index_sources`.
 pub fn index_with_report(root: &Path) -> io::Result<(Graph, Report)> {
-    let mut files = Vec::new();
-    for path in input_files(root)? {
-        let relative = slash_path(path.strip_prefix(root).unwrap_or(&path));
-        // Only the place of a `pom.xml` counts.
-        let text = if relative.ends_with("pom.xml") {
-            String::new()
-        } else {
-            String::from_utf8_lossy(&fs::read(&path)?).into_owned()
-        };
-        files.push(SourceFile {
-            path: relative,
-            text,
-        });
-    }
-    Ok(index_sources(&file_name(root), &files))
-}
-
-/// The files below `root` for which `is_input` holds, without the directories that
-/// `cg_core::holds_no_sources` rejects.
-fn input_files(root: &Path) -> io::Result<Vec<PathBuf>> {
-    let mut files = Vec::new();
-    let mut pending = vec![root.to_path_buf()];
-    while let Some(dir) = pending.pop() {
-        for entry in fs::read_dir(dir)? {
-            let path = entry?.path();
-            if path.is_dir() {
-                if !cg_core::holds_no_sources(&file_name(&path)) {
-                    pending.push(path);
-                }
-            } else if is_input(&slash_path(path.strip_prefix(root).unwrap_or(&path))) {
-                files.push(path);
-            }
-        }
-    }
-    files.sort();
-    Ok(files)
-}
-
-/// The path with `/` as separator, whatever the platform.
-fn slash_path(path: &Path) -> String {
-    path.components()
-        .map(|c| c.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/")
-}
-
-fn file_name(path: &Path) -> String {
-    path.file_name()
+    let files = cg_walk::read_sources(root, is_input)?;
+    let name = root
+        .file_name()
         .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    Ok(index_sources(&name, &files))
 }

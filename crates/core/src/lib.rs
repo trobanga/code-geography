@@ -2,8 +2,10 @@
 //! between its nodes. No I/O, so the crate builds for native and wasm32.
 
 mod input;
+mod report;
 
 pub use input::{SourceFile, holds_no_sources, outside_excluded_directories, text_hash};
+pub use report::CallReport;
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};

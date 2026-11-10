@@ -92,6 +92,7 @@ describe('the indexer in WASM', () => {
     expect(graph.edges).toContainEqual({ from: 'fn:my_app::Top#run', to: 'type:my_app::a::A', kind: 'type_ref' });
     expect(report.rust.unreached_files).toEqual(['src/orphan.rs']);
     expect(report.rust.paths.resolved).toBeGreaterThan(0);
-    expect(report.calls.to_function).toBe(0);
+    expect(graph.edges).toContainEqual({ from: 'fn:my_app::Top#run', to: 'fn:my_app::a::A#new', kind: 'calls' });
+    expect(report.calls.to_function).toBe(1);
   });
 });

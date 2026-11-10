@@ -1,4 +1,4 @@
-use cg_core::{EdgeKind, Graph, Node, NodeKind, Span};
+use cg_core::{CallReport, EdgeKind, Graph, Node, NodeKind, Span};
 use cg_index_rust::{PathReport, Report, SourceFile, index_sources, is_input};
 
 fn run(files: &[(&str, &str)]) -> (Graph, Report) {
@@ -778,5 +778,519 @@ fn paths_in_the_arguments_of_a_macro_call_give_type_ref_but_a_macro_definition_d
             ("fn:my_app::f", "type:my_app::B"),
             ("fn:my_app::f", "type:my_app::C"),
         ]
+    );
+}
+
+/// The targets of the `calls` edges that leave `from`.
+fn calls_from<'a>(g: &'a Graph, from: &str) -> Vec<&'a str> {
+    g.edges
+        .iter()
+        .filter(|e| e.from == from && e.kind == EdgeKind::Calls)
+        .map(|e| e.to.as_str())
+        .collect()
+}
+
+#[test]
+fn a_call_of_a_free_function_gives_calls_from_the_function_that_holds_the_call() {
+    let g = index(&[
+        APP,
+        (
+            "src/lib.rs",
+            "mod a {\n    pub fn foo() {}\n    pub mod b {\n        pub fn bar() {}\n    }\n}\n\
+             fn local() {}\n\
+             pub fn f() {\n    local();\n    a::foo();\n    crate::a::b::bar();\n    std::mem::drop(1);\n}\n",
+        ),
+    ]);
+
+    assert_eq!(
+        calls_from(&g, "fn:my_app::f"),
+        [
+            "fn:my_app::a::b::bar",
+            "fn:my_app::a::foo",
+            "fn:my_app::local"
+        ]
+    );
+}
+
+#[test]
+fn a_function_is_found_through_super_use_renames_groups_globs_and_re_exports() {
+    let g = index(&[
+        APP,
+        (
+            "src/lib.rs",
+            "mod util {\n    pub fn one() {}\n    pub fn two() {}\n    pub fn three() {}\n    pub fn four() {}\n}\n\
+             mod facade {\n    pub use crate::util::four;\n}\n\
+             fn top() {}\n\
+             mod user {\n    use crate::util::{one as uno, two};\n    use crate::util::*;\n    use crate::facade::four as vier;\n\
+             \x20   pub fn f() {\n        super::top();\n        uno();\n        two();\n        three();\n        vier();\n    }\n}\n",
+        ),
+    ]);
+
+    assert_eq!(
+        calls_from(&g, "fn:my_app::user::f"),
+        [
+            "fn:my_app::top",
+            "fn:my_app::util::four",
+            "fn:my_app::util::one",
+            "fn:my_app::util::three",
+            "fn:my_app::util::two",
+        ]
+    );
+}
+
+#[test]
+fn a_local_variable_or_a_nested_function_hides_a_function_of_the_same_name() {
+    let g = index(&[
+        APP,
+        (
+            "src/lib.rs",
+            "fn a() {}\nfn b() {}\nfn c() {}\n\
+             pub fn f(a: fn()) {\n    let b = || ();\n    b();\n    a();\n    fn c() {}\n    c();\n}\n",
+        ),
+    ]);
+
+    assert!(calls_from(&g, "fn:my_app::f").is_empty());
+}
+
+#[test]
+fn an_associated_call_reaches_the_function_in_an_inherent_impl_a_trait_impl_or_a_trait_default() {
+    let g = index(&[
+        APP,
+        (
+            "src/lib.rs",
+            "pub mod m {\n    pub struct W;\n    impl W {\n        pub fn new() -> W { W }\n    }\n}\n\
+             pub trait Tr {\n    fn make() -> Self;\n    fn dflt() {}\n}\n\
+             pub struct X;\n\
+             impl Tr for X {\n    fn make() -> X { X }\n}\n\
+             impl X {\n    fn helper() {}\n    pub fn run() {\n        Self::helper();\n        Self::make();\n    }\n}\n\
+             pub fn f() {\n    m::W::new();\n    X::make();\n    X::dflt();\n    crate::X::run();\n}\n",
+        ),
+    ]);
+
+    assert_eq!(
+        calls_from(&g, "fn:my_app::f"),
+        [
+            "fn:my_app::Tr#dflt",
+            "fn:my_app::X#Tr::make",
+            "fn:my_app::X#run",
+            "fn:my_app::m::W#new",
+        ]
+    );
+    assert_eq!(
+        calls_from(&g, "fn:my_app::X#run"),
+        ["fn:my_app::X#Tr::make", "fn:my_app::X#helper"]
+    );
+}
+
+#[test]
+fn several_candidates_for_an_associated_function_give_an_edge_to_the_type() {
+    let g = index(&[
+        APP,
+        (
+            "src/lib.rs",
+            "pub struct A;\npub struct B;\npub struct Two;\n\
+             impl From<A> for Two {\n    fn from(_: A) -> Two { Two }\n}\n\
+             impl From<B> for Two {\n    fn from(_: B) -> Two { Two }\n}\n\
+             pub fn f() {\n    Two::from(A);\n}\n",
+        ),
+    ]);
+
+    assert_eq!(calls_from(&g, "fn:my_app::f"), ["type:my_app::Two"]);
+}
+
+#[test]
+fn constructors_of_tuple_structs_and_variants_and_struct_literals_are_no_calls() {
+    let (g, report) = run(&[
+        APP,
+        (
+            "src/lib.rs",
+            "pub struct P(u8);\npub enum E {\n    V(u8),\n    W { x: u8 },\n}\n\
+             impl E {\n    pub fn make() -> Self {\n        Self::V(1)\n    }\n}\n\
+             impl P {\n    pub fn make() -> Self {\n        Self(1)\n    }\n}\n\
+             pub fn f() {\n    P(1);\n    E::V(2);\n    let _ = E::W { x: 1 };\n}\n",
+        ),
+    ]);
+
+    assert!(calls_from(&g, "fn:my_app::f").is_empty());
+    assert!(calls_from(&g, "fn:my_app::E#make").is_empty());
+    assert!(calls_from(&g, "fn:my_app::P#make").is_empty());
+    assert_eq!(report.calls, CallReport::default());
+}
+
+#[test]
+fn a_method_call_on_self_reaches_inherent_impl_trait_impl_and_default_methods_and_in_a_trait_its_supertraits()
+ {
+    let g = index(&[
+        APP,
+        (
+            "src/lib.rs",
+            "pub trait Base {\n    fn base(&self) {}\n}\n\
+             pub trait Tr: Base {\n    fn required(&self);\n    fn dflt(&self) {}\n    fn user(&self) {\n        self.required();\n        self.dflt();\n        self.base();\n    }\n}\n\
+             pub struct X;\n\
+             impl Base for X {}\n\
+             impl Tr for X {\n    fn required(&self) {}\n}\n\
+             impl X {\n    fn inherent(&self) {}\n    pub fn run(&self) {\n        self.inherent();\n        self.required();\n        self.dflt();\n        self.base();\n    }\n}\n",
+        ),
+    ]);
+
+    assert_eq!(
+        calls_from(&g, "fn:my_app::X#run"),
+        [
+            "fn:my_app::Base#base",
+            "fn:my_app::Tr#dflt",
+            "fn:my_app::X#Tr::required",
+            "fn:my_app::X#inherent",
+        ]
+    );
+    assert_eq!(
+        calls_from(&g, "fn:my_app::Tr#user"),
+        [
+            "fn:my_app::Base#base",
+            "fn:my_app::Tr#dflt",
+            "fn:my_app::Tr#required"
+        ]
+    );
+}
+
+const SHAPES: &str = "pub struct S;\n\
+    impl S {\n    pub fn go(&self) {}\n    pub fn make() -> S { S }\n    pub fn me() -> Self { S }\n}\n\
+    pub fn make_s() -> S { S }\n\
+    pub struct Holder {\n    inner: S,\n    pub name: String,\n}\n";
+
+#[test]
+fn a_receiver_whose_type_is_written_or_proven_gives_the_method_of_that_type() {
+    let g = index(&[
+        APP,
+        (
+            "src/lib.rs",
+            &format!(
+                "{SHAPES}\
+                 impl Holder {{\n    fn via_field(&self) {{ self.inner.go(); }}\n}}\n\
+                 pub fn param(a: S) {{ a.go(); }}\n\
+                 pub fn by_ref(a: &S) {{ a.go(); }}\n\
+                 pub fn by_mut(a: &mut S) {{ a.go(); }}\n\
+                 pub fn let_typed() {{ let d: S = S::make(); d.go(); }}\n\
+                 pub fn let_literal() {{ let d = S {{}}; d.go(); }}\n\
+                 pub fn let_assoc() {{ let d = S::make(); d.go(); }}\n\
+                 pub fn let_self_return() {{ let d = S::me(); d.go(); }}\n\
+                 pub fn let_free() {{ let d = make_s(); d.go(); }}\n\
+                 pub fn field_of_param(h: Holder) {{ h.inner.go(); }}\n"
+            ),
+        ),
+    ]);
+
+    for from in [
+        "Holder#via_field",
+        "param",
+        "by_ref",
+        "by_mut",
+        "let_typed",
+        "let_literal",
+        "let_assoc",
+        "let_self_return",
+        "let_free",
+        "field_of_param",
+    ] {
+        let targets = calls_from(&g, &format!("fn:my_app::{from}"));
+        assert!(targets.contains(&"fn:my_app::S#go"), "{from}: {targets:?}");
+    }
+}
+
+#[test]
+fn the_innermost_let_wins_and_a_binding_of_a_loop_or_a_pattern_is_unresolved() {
+    let (g, report) = index_and_report_of(
+        "pub struct S;\nimpl S {\n    pub fn go(&self) {}\n}\n\
+         pub struct T;\nimpl T {\n    pub fn go(&self) {}\n    pub fn new() -> T { T }\n}\n\
+         pub fn shadow(a: S) {\n    let a = T::new();\n    a.go();\n}\n\
+         pub fn block_scope(a: S) {\n    {\n        let a = T::new();\n        a.go();\n    }\n    a.go();\n}\n\
+         pub fn bindings(items: Vec<S>) {\n    for s in items { s.go(); }\n    if let Some(s) = items.first() { s.go(); }\n    match items.first() { Some(s) => s.go(), None => {} }\n}\n",
+    );
+
+    assert_eq!(
+        calls_from(&g, "fn:my_app::shadow"),
+        ["fn:my_app::T#go", "fn:my_app::T#new"]
+    );
+    assert_eq!(
+        calls_from(&g, "fn:my_app::block_scope"),
+        ["fn:my_app::S#go", "fn:my_app::T#go", "fn:my_app::T#new"]
+    );
+    assert!(calls_from(&g, "fn:my_app::bindings").is_empty());
+    assert_eq!((report.calls.unresolved, report.calls.external), (3, 2));
+}
+
+fn index_and_report_of(source: &str) -> (Graph, Report) {
+    run(&[APP, ("src/lib.rs", source)])
+}
+
+#[test]
+fn references_boxes_await_question_marks_and_unwrap_are_seen_through() {
+    let g = index(&[
+        APP,
+        (
+            "src/lib.rs",
+            "use std::future::Future;\nuse std::rc::Rc;\nuse std::sync::Arc;\n\
+             pub struct S;\n\
+             impl S {\n    pub fn a(&self) {}\n    pub fn b(&self) {}\n    pub fn c(&self) {}\n    pub fn d(&self) {}\n    pub fn e(&self) {}\n    pub fn f(&self) {}\n    pub fn g(&self) {}\n    pub fn h(&self) {}\n    pub fn i(&self) {}\n    pub fn j(&self) {}\n}\n\
+             async fn make_async() -> S { S }\n\
+             fn make_future() -> impl Future<Output = S> { async { S } }\n\
+             fn make_opt() -> Option<S> { None }\n\
+             fn make_res() -> Result<S, String> { Ok(S) }\n\
+             pub fn boxed(x: Box<S>, y: Arc<S>, z: Rc<S>) {\n    x.a();\n    y.b();\n    z.c();\n}\n\
+             pub async fn awaited() {\n    make_async().await.d();\n    make_future().await.e();\n}\n\
+             pub fn questioned() -> Option<()> {\n    make_opt()?.f();\n    make_res().ok()?;\n    None\n}\n\
+             pub fn questioned_result() -> Result<(), String> {\n    make_res()?.g();\n    Ok(())\n}\n\
+             pub fn unwrapped() {\n    make_opt().unwrap().h();\n    make_res().expect(\"x\").i();\n    make_opt().unwrap_or_default().j();\n}\n\
+             pub fn ends_the_chain() {\n    make_opt().map(|s| s).unwrap().a();\n    make_opt().is_some();\n}\n",
+        ),
+    ]);
+
+    let s = |m: &str| format!("fn:my_app::S#{m}");
+    assert_eq!(calls_from(&g, "fn:my_app::boxed"), [s("a"), s("b"), s("c")]);
+    assert_eq!(
+        calls_from(&g, "fn:my_app::awaited"),
+        [
+            &s("d"),
+            &s("e"),
+            "fn:my_app::make_async",
+            "fn:my_app::make_future"
+        ]
+    );
+    assert_eq!(
+        calls_from(&g, "fn:my_app::questioned"),
+        [&s("f"), "fn:my_app::make_opt", "fn:my_app::make_res"]
+    );
+    assert_eq!(
+        calls_from(&g, "fn:my_app::questioned_result"),
+        [&s("g"), "fn:my_app::make_res"]
+    );
+    assert_eq!(
+        calls_from(&g, "fn:my_app::unwrapped"),
+        [
+            &s("h"),
+            &s("i"),
+            &s("j"),
+            "fn:my_app::make_opt",
+            "fn:my_app::make_res"
+        ]
+    );
+    assert_eq!(
+        calls_from(&g, "fn:my_app::ends_the_chain"),
+        ["fn:my_app::make_opt"]
+    );
+}
+
+#[test]
+fn arc_new_and_box_new_keep_the_type_of_their_argument() {
+    let (g, report) = index_and_report_of(
+        "use std::sync::Arc;\n\
+         pub struct S;\nimpl S {\n    pub fn a(&self) {}\n    pub fn make() -> S { S }\n}\n\
+         pub fn f() {\n    let x = Arc::new(S::make());\n    x.a();\n    let y = Box::new(S);\n    y.a();\n    let z = Some(S);\n}\n",
+    );
+
+    assert_eq!(
+        calls_from(&g, "fn:my_app::f"),
+        ["fn:my_app::S#a", "fn:my_app::S#make"]
+    );
+    // Two `new`, one `Some` that is no call.
+    assert_eq!(
+        report.calls,
+        CallReport {
+            to_function: 3,
+            to_type: 0,
+            external: 2,
+            unresolved: 0
+        }
+    );
+}
+
+#[test]
+fn a_function_named_but_not_called_gives_a_calls_edge() {
+    let (g, report) = index_and_report_of(
+        "mod m {\n    pub fn handler() {}\n}\n\
+         use m::handler as h;\n\
+         const LIMIT: usize = 3;\n\
+         fn parse_row() {}\n\
+         pub struct S;\nimpl S {\n    fn helper() {}\n    pub fn run(items: Vec<u8>) {\n        items.iter().map(Self::helper);\n    }\n}\n\
+         pub fn f(items: Vec<u8>) {\n    items.iter().map(parse_row);\n    route(\"/x\", get(m::handler));\n    let _alias = h;\n    let _n = LIMIT;\n}\n",
+    );
+
+    assert_eq!(calls_from(&g, "fn:my_app::S#run"), ["fn:my_app::S#helper"]);
+    assert_eq!(
+        calls_from(&g, "fn:my_app::f"),
+        ["fn:my_app::m::handler", "fn:my_app::parse_row"]
+    );
+    assert_eq!(report.function_values, 4);
+}
+
+#[test]
+fn a_receiver_typed_by_a_trait_gives_the_method_of_the_trait() {
+    let (g, report) = index_and_report_of(
+        "use std::sync::Arc;\n\
+         pub trait Tr {\n    fn m1(&self);\n    fn m2(&self);\n    fn m3(&self);\n    fn m4(&self);\n    fn m5(&self);\n    fn m6(&self);\n    fn m7(&self);\n    fn make() -> u8;\n}\n\
+         pub fn dyn_ref(a: &dyn Tr) { a.m1(); }\n\
+         pub fn impl_arg(a: impl Tr) { a.m2(); }\n\
+         pub fn bound<T: Tr>(a: T) { a.m3(); }\n\
+         pub fn where_clause<T>(a: &T) where T: Send + Tr { a.m4(); }\n\
+         pub fn boxed(a: Box<dyn Tr>, b: Arc<dyn Tr + Send + Sync>) { a.m5(); b.m6(); }\n\
+         pub struct W<T>(T);\nimpl<T: Tr> W<T> {\n    pub fn run(&self, t: T) { t.m7(); T::make(); }\n}\n\
+         pub fn missing(a: &dyn Tr) { a.not_declared(); }\n",
+    );
+
+    for (from, to) in [
+        ("dyn_ref", "m1"),
+        ("impl_arg", "m2"),
+        ("bound", "m3"),
+        ("where_clause", "m4"),
+        ("W#run", "m7"),
+    ] {
+        let targets = calls_from(&g, &format!("fn:my_app::{from}"));
+        assert!(
+            targets.contains(&format!("fn:my_app::Tr#{to}").as_str()),
+            "{from}: {targets:?}"
+        );
+    }
+    assert_eq!(
+        calls_from(&g, "fn:my_app::boxed"),
+        ["fn:my_app::Tr#m5", "fn:my_app::Tr#m6"]
+    );
+    assert_eq!(
+        calls_from(&g, "fn:my_app::W#run"),
+        ["fn:my_app::Tr#m7", "fn:my_app::Tr#make"]
+    );
+    // A trait that declares no such function: it can come from a supertrait outside.
+    assert!(calls_from(&g, "fn:my_app::missing").is_empty());
+    assert_eq!(report.calls.external, 1);
+}
+
+#[test]
+fn a_function_that_the_type_does_not_declare_is_external_if_std_traits_provide_it_else_the_type() {
+    let (g, report) = index_and_report_of(
+        "pub struct D;\nimpl D {\n    pub fn go(&self) {}\n}\n\
+         pub fn std_names(d: D) {\n    d.clone();\n    d.to_string();\n    let _ = D::default();\n    let _ = D::from(1u8);\n    let _ = d.into();\n}\n\
+         pub fn derived(d: D) {\n    d.generated();\n    D::builder();\n}\n\
+         pub fn clone_keeps_the_type(d: D) {\n    let c = d.clone();\n    c.go();\n}\n",
+    );
+
+    assert!(calls_from(&g, "fn:my_app::std_names").is_empty());
+    assert_eq!(calls_from(&g, "fn:my_app::derived"), ["type:my_app::D"]);
+    assert_eq!(
+        calls_from(&g, "fn:my_app::clone_keeps_the_type"),
+        ["fn:my_app::D#go"]
+    );
+    assert_eq!(report.calls.to_type, 2);
+    assert_eq!(report.calls.external, 6);
+}
+
+#[test]
+fn a_chain_continues_through_the_written_return_type_of_a_unique_function() {
+    let (g, report) = index_and_report_of(
+        "pub struct A;\npub struct B;\n\
+         impl A {\n    pub fn b(&self) -> B { B }\n    pub fn name(&self) -> String { String::new() }\n    pub fn maybe(&self) -> Option<B> { None }\n}\n\
+         impl From<u8> for A {\n    fn from(_: u8) -> A { A }\n}\nimpl From<u16> for A {\n    fn from(_: u16) -> A { A }\n}\n\
+         impl B {\n    pub fn c(&self) {}\n    pub fn d(&self) {}\n}\n\
+         pub fn through(a: A) {\n    a.b().c();\n    a.maybe().unwrap().d();\n}\n\
+         pub fn ends_external(a: A) {\n    a.name().len();\n}\n\
+         pub fn ends_unresolved() {\n    A::from(1u8).b();\n}\n",
+    );
+
+    assert_eq!(
+        calls_from(&g, "fn:my_app::through"),
+        [
+            "fn:my_app::A#b",
+            "fn:my_app::A#maybe",
+            "fn:my_app::B#c",
+            "fn:my_app::B#d"
+        ]
+    );
+    assert_eq!(
+        calls_from(&g, "fn:my_app::ends_external"),
+        ["fn:my_app::A#name"]
+    );
+    assert_eq!(
+        calls_from(&g, "fn:my_app::ends_unresolved"),
+        ["type:my_app::A"]
+    );
+    assert_eq!(
+        report.calls,
+        CallReport {
+            to_function: 5,
+            to_type: 1,
+            external: 3,
+            unresolved: 1
+        }
+    );
+}
+
+#[test]
+fn a_const_or_static_initializer_counts_for_the_enclosing_mod_or_type() {
+    let g = index(&[
+        APP,
+        (
+            "src/lib.rs",
+            "mod util {\n    pub fn make() -> u8 { 1 }\n}\n\
+             const TOP: u8 = util::make();\n\
+             mod inner {\n    pub static LOW: u8 = super::util::make();\n}\n\
+             pub struct S;\nimpl S {\n    const C: u8 = util::make();\n}\n\
+             pub trait Tr {\n    const D: u8 = util::make();\n}\n",
+        ),
+    ]);
+
+    // The root mod is the module node, the ancestor of every node of the crate: no edge.
+    assert!(calls_from(&g, "mod:").is_empty());
+    assert_eq!(
+        calls_from(&g, "pkg::my_app::inner"),
+        ["fn:my_app::util::make"]
+    );
+    assert_eq!(calls_from(&g, "type:my_app::S"), ["fn:my_app::util::make"]);
+    assert_eq!(calls_from(&g, "type:my_app::Tr"), ["fn:my_app::util::make"]);
+}
+
+#[test]
+fn calls_in_the_arguments_of_a_macro_give_no_edge_but_are_counted_roughly() {
+    let (g, report) = index_and_report_of(
+        "fn g(_: u8) {}\nfn h() {}\nfn k() {}\npub struct A(u8);\n\
+         pub fn f(x: Vec<u8>) {\n    println!(\"{}\", g(1));\n    let _v = vec![h(), x.len()];\n    assert_eq!(A(1).0, 1);\n    assert!(k() == ());\n}\n",
+    );
+
+    assert!(calls_from(&g, "fn:my_app::f").is_empty());
+    // `g`, `h`, `len`, `k`: not `A`, a name with a capital letter.
+    assert_eq!(report.macro_call_sites, 4);
+    assert_eq!(report.calls, CallReport::default());
+}
+
+#[test]
+fn the_receiver_of_a_literal_or_a_cast_is_a_known_external_type() {
+    let (_, report) = index_and_report_of(
+        "pub fn f(a: u8) {\n    \"x\".to_string();\n    (a as u32).to_le_bytes();\n    5.max(2);\n    (1.5).floor();\n    [1, 2].len();\n    (1, 2).clone();\n}\n",
+    );
+
+    assert_eq!(
+        report.calls,
+        CallReport {
+            to_function: 0,
+            to_type: 0,
+            external: 6,
+            unresolved: 0
+        }
+    );
+}
+
+#[test]
+fn a_type_alias_is_followed_to_its_target_with_the_arguments_substituted() {
+    let g = index(&[
+        APP,
+        (
+            "src/lib.rs",
+            "pub struct S;\nimpl S {\n    pub fn a(&self) {}\n    pub fn b() {}\n}\n\
+             pub type Alias = S;\n\
+             pub type Res<T> = Result<T, String>;\n\
+             fn make() -> Res<S> { Ok(S) }\n\
+             pub fn f(x: Alias) {\n    x.a();\n    Alias::b();\n    make().unwrap().a();\n}\n",
+        ),
+    ]);
+
+    assert_eq!(
+        calls_from(&g, "fn:my_app::f"),
+        ["fn:my_app::S#a", "fn:my_app::S#b", "fn:my_app::make"]
     );
 }

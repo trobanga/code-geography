@@ -97,3 +97,33 @@ fn index_prints_what_the_rust_front_end_could_not_follow() {
         "{stderr}"
     );
 }
+
+#[test]
+fn index_prints_how_the_rust_calls_were_resolved() {
+    let dir = TempDir::new().unwrap();
+    let source = dir.path().join("repo");
+    fs::create_dir_all(source.join("src")).unwrap();
+    fs::write(source.join("Cargo.toml"), "[package]\nname = \"tool\"\n").unwrap();
+    fs::write(
+        source.join("src/lib.rs"),
+        "fn g() {}\nfn h() {}\npub fn f(x: Vec<u8>, y: u8) {\n    g();\n    x.len();\n    y.gone();\n    let _ = Some(h);\n    println!(\"{}\", g());\n}\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_cg"))
+        .arg("index")
+        .arg(&source)
+        .arg("-o")
+        .arg(dir.path().join("graph.json"))
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(
+            "rust calls: 2 to function (1 as a value), 0 to type, 2 external, 0 unresolved; 1 more in macro arguments, not read\n"
+        ),
+        "{stderr}"
+    );
+}

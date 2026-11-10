@@ -86,3 +86,27 @@ fn index_walks_a_directory_and_leaves_out_what_no_front_end_wants() {
     assert!(graph.nodes.iter().all(|n| n.name != "Copy"));
     assert!(report.rust.paths.external >= 1);
 }
+
+#[test]
+fn the_calls_of_the_report_are_the_sum_over_the_front_ends_and_the_rust_part_stays_visible() {
+    let files = [
+        source("pom.xml", ""),
+        source(
+            "src/main/java/a/Foo.java",
+            "package a;\nclass Foo {\n    void one() {}\n    void two() { one(); }\n}\n",
+        ),
+        source("Cargo.toml", "[package]\nname = \"tool\"\n"),
+        source(
+            "src/lib.rs",
+            "mod m {\n    pub fn one() {}\n}\npub fn two() {\n    m::one();\n    m::one();\n}\n",
+        ),
+    ];
+
+    let (_, report) = index_sources("repo", &files);
+
+    assert_eq!(report.rust.calls.to_function, 2);
+    assert_eq!(report.calls.to_function, 3);
+    let json = serde_json::to_value(&report).unwrap();
+    assert_eq!(json["calls"]["to_function"], 3);
+    assert_eq!(json["rust"]["calls"]["to_function"], 2);
+}

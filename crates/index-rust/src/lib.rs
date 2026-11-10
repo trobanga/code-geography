@@ -3,10 +3,13 @@
 pub use cg_core::SourceFile;
 use cg_core::{Graph, Node, NodeKind};
 use serde::Serialize;
+mod calls;
 mod declare;
 mod edges;
+mod model;
 mod modules;
 mod syntax;
+mod types;
 mod world;
 
 use modules::{Parsed, Root};
@@ -53,6 +56,14 @@ pub struct Report {
     /// follow them, so the file behind such a `mod` is missing.
     pub path_attributes: Vec<String>,
     pub paths: PathReport,
+    /// How the call sites were resolved.
+    pub calls: cg_core::CallReport,
+    /// Of the calls to a function: those where the function is named, not called
+    /// (`.map(parse)`).
+    pub function_values: usize,
+    /// Names followed by `(` in the arguments of macros. The macro decides what they
+    /// mean, so they give no edge and are not in `calls`: the size of the gap.
+    pub macro_call_sites: usize,
 }
 
 /// Whether the indexer wants the file at `path` (relative to the root, `/` as separator):
@@ -126,6 +137,9 @@ pub fn index_sources(_root_name: &str, files: &[SourceFile]) -> (Graph, Report) 
             .collect(),
         path_attributes: tree.path_attributes,
         paths: PathReport::default(),
+        calls: cg_core::CallReport::default(),
+        function_values: 0,
+        macro_call_sites: 0,
     };
 
     let mut graph = Graph::default();
@@ -160,7 +174,13 @@ pub fn index_sources(_root_name: &str, files: &[SourceFile]) -> (Graph, Report) 
     let mut paths = PathReport::default();
     let edges = {
         let world = world::World::new(&crate_names, &dependencies, &mods, &decls);
-        edges::compute(&world, &package_names, &mods, &decls, &mut paths)
+        let mut edges = edges::compute(&world, &package_names, &mods, &decls, &mut paths);
+        let (calls, stats) = calls::compute(&world, &package_names, &mods, &decls, &mut edges);
+        report.calls = calls;
+        report.function_values = stats.function_values;
+        report.macro_call_sites = stats.macro_calls;
+        edges::drop_edges_to_ancestors(&mut edges, &decls, &mods, &package_names);
+        edges
     };
     report.paths = paths;
     for m in mods.iter().filter(|m| m.has_node) {

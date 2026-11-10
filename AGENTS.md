@@ -29,7 +29,9 @@ crates/core        graph model, cut, filters. No I/O. Builds for native and wasm
 crates/index-java  Java front end on tree-sitter: index_sources(root_name, files) -> Graph + Report
                    (pure, builds for wasm32); index(root) walks a directory and calls it
 crates/index-rust  Rust front end on tree-sitter: index_sources(root_name, files) -> Graph + Report
-                   (Cargo packages, mod tree, ADR 0016); no walk
+                   (Cargo packages, mod tree, ADR 0016, call edges, ADR 0017); no walk
+crates/walk        cg-walk: the one directory walk, read_sources(root, is_input) -> Vec<SourceFile>
+                   (the only place with std::fs besides the CLI; used by index-java and index)
 crates/index       cg-index: is_input, index_sources, index(root) over all front ends; joins
                    the graphs and reports (a repository can hold Java and Rust)
 crates/cli         cg index <repo> -o graph.json; cg diff <repo> <rev|A..B> -o diff.json
@@ -85,7 +87,14 @@ pnpm dev                                     # http://localhost:5173/
   is not `var x = new T()`, members that Lombok generates, or overloads that differ only
   by type (the edge then goes to the type). `cg index` prints how many call sites fell
   into each class.
-- Rust: no call edges (stage 2). Items that macros generate get no node; files that no
+- Rust call edges (ADR 0017) need a type that the declarations prove: a parameter, a
+  `let` with a written type or a unique function behind it, a field of a repository struct.
+  On a 178-file async service 27 % of the call sites give an edge, 35 % are external and
+  38 % unresolved (results of external calls, `let` with an inferred type, iterator chains). Calls in macro arguments (`format!`, `vec!`,
+  `assert!`, `sqlx::query!`) are not read; the report counts them roughly
+  (`macro_call_sites`). Calls inside the root mod of a crate give no edge, because the
+  module node is the ancestor of everything in the crate.
+- Rust: items that macros generate get no node; files that no
   `mod` reaches and `#[path]` mods are missing (the report lists them); `[lib]` and
   `[[bin]]` paths other than the Cargo defaults are not read (ADR 0016).
 - No AI grouping, no GitHub connection.

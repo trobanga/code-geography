@@ -57,6 +57,16 @@ fn run(args: Vec<String>) -> Result<(), String> {
             "calls: {} to function, {} to type, {} external, {} unresolved",
             calls.to_function, calls.to_type, calls.external, calls.unresolved
         );
+        let rust_calls = rust.calls;
+        eprintln!(
+            "rust calls: {} to function ({} as a value), {} to type, {} external, {} unresolved; {} more in macro arguments, not read",
+            rust_calls.to_function,
+            rust.function_values,
+            rust_calls.to_type,
+            rust_calls.external,
+            rust_calls.unresolved,
+            rust.macro_call_sites
+        );
         let paths = rust.paths;
         eprintln!(
             "rust: {} paths resolved, {} external, {} unresolved; {} files not reached, {} #[path] attributes",
