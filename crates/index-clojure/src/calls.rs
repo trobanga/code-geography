@@ -4,7 +4,7 @@
 //! namespace of the file and its `:refer`s, but only if no local could hide it (`locals`)
 //! and no two sources declare it.
 
-use crate::declare::head;
+use crate::declare::{def_form, extend_pairs, head};
 use crate::syntax::{flat_items, items, keyword, plain_symbol, private, symbol};
 use crate::{Report, locals};
 use cg_core::{ClassTable, Edge, EdgeKind};
@@ -23,7 +23,9 @@ pub enum Target {
         /// A class without a var (`definterface`): valid unqualified, never as `a/Name`.
         class_only: bool,
     },
-    /// A var that no node stands for (`def`, `defonce`).
+    /// The value node with this id (`def`, `defonce` whose value is no literal `fn`).
+    Value(String),
+    /// A var that no node stands for: a name that only `declare` introduces.
     Var,
 }
 
@@ -33,6 +35,23 @@ pub struct Vars {
     names: HashMap<String, Target>,
     /// The names of `defn-` and of vars with `^:private`: `:refer :all` does not bring them.
     private: HashSet<String>,
+    /// The names of the `defmulti` forms.
+    multis: HashSet<String>,
+}
+
+impl Vars {
+    /// The function or value that the first form of the namespace declares under `name`
+    /// wins; a name that was only declared or names a type is replaced.
+    fn claim(&mut self, name: &str, target: Target) -> bool {
+        if matches!(
+            self.names.get(name),
+            Some(Target::Function(_) | Target::Value(_))
+        ) {
+            return false;
+        }
+        self.names.insert(name.to_string(), target);
+        true
+    }
 }
 
 /// The vars that the top-level `forms` of a file declare in `namespace`.
@@ -44,14 +63,16 @@ pub fn vars(forms: &[Ts], source: &str, namespace: &str) -> Vars {
             continue;
         };
         match head(*form, source).as_deref() {
-            Some("defn" | "defn-" | "defmacro" | "defmulti") => {
-                if head(*form, source).as_deref() == Some("defn-") || private(items[1], source) {
-                    vars.private.insert(name.to_string());
+            Some(kind @ ("defn" | "defn-" | "defmacro" | "defmulti")) => {
+                let target = Target::Function(format!("fn:{namespace}/{name}"));
+                if vars.claim(name, target) {
+                    if kind == "defn-" || private(items[1], source) {
+                        vars.private.insert(name.to_string());
+                    }
+                    if kind == "defmulti" {
+                        vars.multis.insert(name.to_string());
+                    }
                 }
-                vars.names.insert(
-                    name.to_string(),
-                    Target::Function(format!("fn:{namespace}/{name}")),
-                );
             }
             // The methods of a protocol are vars of the namespace, those of an interface
             // are not. The name of both is a type.
@@ -90,10 +111,17 @@ pub fn vars(forms: &[Ts], source: &str, namespace: &str) -> Vars {
                 }
             }
             Some("def" | "defonce") => {
-                if private(items[1], source) {
+                let Some((_, is_fn, _)) = def_form(&items, source) else {
+                    continue;
+                };
+                let target = if is_fn {
+                    Target::Function(format!("fn:{namespace}/{name}"))
+                } else {
+                    Target::Value(format!("val:{namespace}/{name}"))
+                };
+                if vars.claim(name, target) && private(items[1], source) {
                     vars.private.insert(name.to_string());
                 }
-                vars.names.entry(name.to_string()).or_insert(Target::Var);
             }
             // The constructor functions that the declaration generates.
             Some(kind @ ("defrecord" | "deftype")) => {
@@ -121,6 +149,8 @@ pub fn vars(forms: &[Ts], source: &str, namespace: &str) -> Vars {
 
 /// A file that is read, with what the first pass found out about it.
 pub struct File<'s> {
+    /// The declarations whose nodes `late::place` makes once all files are read.
+    pub late: Vec<crate::late::Late>,
     pub source: &'s str,
     pub tree: Tree,
     /// The `ns` form, as `Node::id`.
@@ -145,11 +175,11 @@ pub struct File<'s> {
 
 /// What a name means in one file.
 #[derive(Clone, Copy)]
-struct Scope<'a> {
-    vars: &'a HashMap<String, Vars>,
+pub struct Scope<'a> {
+    pub vars: &'a HashMap<String, Vars>,
     /// The classes of the repository: class name to the id of the type node.
-    classes: &'a ClassTable,
-    file: &'a File<'a>,
+    pub classes: &'a ClassTable,
+    pub file: &'a File<'a>,
 }
 
 /// The result of looking up a qualified symbol.
@@ -220,6 +250,137 @@ impl<'a> Scope<'a> {
     }
 }
 
+impl<'a> Scope<'a> {
+    /// The namespace that a declaration or a `:refer` brings an unqualified name from, if
+    /// exactly one does. A `:refer` of a namespace outside the repository counts, too.
+    fn declaring(&self, name: &str) -> Option<&'a str> {
+        let mut found = self.candidates(name).into_keys();
+        match (found.next(), found.next()) {
+            (Some(namespace), None) => Some(namespace),
+            (None, _) => match self.file.refers.get(name)?.as_slice() {
+                [namespace] => Some(namespace.as_str()),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// A var name with its namespace part spelled out: an alias is replaced by the full
+    /// name, an unqualified name that exactly one namespace declares or brings is qualified
+    /// with that namespace. A name that no table knows stays as written.
+    pub fn full_name(&self, written: &str) -> String {
+        match written.split_once('/') {
+            Some((namespace, name)) if !name.is_empty() => {
+                let namespace = self
+                    .file
+                    .aliases
+                    .get(namespace)
+                    .map_or(namespace, String::as_str);
+                format!("{namespace}/{name}")
+            }
+            _ => match self.declaring(written) {
+                Some(namespace) => format!("{namespace}/{written}"),
+                None => written.to_string(),
+            },
+        }
+    }
+
+    /// The class that a type name written in `extend-type` stands for, as text: the class
+    /// of an `:import` clause, else the name with the alias spelled out.
+    pub fn class_text(&self, written: &str) -> String {
+        match self.file.imports.get(written) {
+            Some(class) => class.clone(),
+            None => match written.split_once('/') {
+                Some(_) => self.full_name(written),
+                None => written.to_string(),
+            },
+        }
+    }
+
+    /// The type node that the type of an `extend-type` or `extend-protocol` names: a
+    /// record, type or interface by class name (also a Java class), a protocol or interface by
+    /// its var. No local can stand there.
+    pub fn type_node(&self, written: &str) -> Option<&'a str> {
+        match written.split_once('/') {
+            Some((namespace, name)) => match self.qualified_ref(namespace, name) {
+                Some(Target::Type {
+                    id,
+                    interface: true,
+                    ..
+                }) => Some(id),
+                _ => None,
+            },
+            None => {
+                let class = self.file.imports.get(written).map(String::as_str);
+                let class = class.or(written.contains('.').then_some(written));
+                if let Some(to) = class.and_then(|c| self.classes.get(c)) {
+                    return Some(to);
+                }
+                match self.unqualified(written) {
+                    Some(Target::Type {
+                        id,
+                        interface: true,
+                        ..
+                    }) => Some(id),
+                    _ => None,
+                }
+            }
+        }
+    }
+
+    /// The protocol node that a protocol name stands for.
+    pub fn protocol_node(&self, written: &str) -> Option<&'a str> {
+        let target = match written.split_once('/') {
+            Some((namespace, name)) => self.qualified_ref(namespace, name),
+            None => self.unqualified(written),
+        };
+        match target {
+            Some(Target::Type {
+                id,
+                interface: true,
+                class_only: false,
+            }) => Some(id),
+            _ => None,
+        }
+    }
+
+    fn qualified_ref(&self, namespace: &str, name: &str) -> Option<&'a Target> {
+        let namespace = self
+            .file
+            .aliases
+            .get(namespace)
+            .map_or(namespace, String::as_str);
+        match self.vars.get(namespace)?.names.get(name)? {
+            Target::Type {
+                class_only: true, ..
+            } => None,
+            target => Some(target),
+        }
+    }
+
+    /// The `defmulti` node that a multi of a `defmethod` names.
+    fn multi_node(&self, written: &str) -> Option<&'a str> {
+        let (namespace, name) = match written.split_once('/') {
+            Some((namespace, name)) => (
+                self.file
+                    .aliases
+                    .get(namespace)
+                    .map_or(namespace, String::as_str),
+                name,
+            ),
+            None => (self.declaring(written)?, written),
+        };
+        let vars = self.vars.get(namespace)?;
+        if !vars.multis.contains(name) {
+            return None;
+        }
+        match vars.names.get(name)? {
+            Target::Function(id) => Some(id),
+            _ => None,
+        }
+    }
+}
+
 /// The edges that the code of `files` names. `vars` holds the namespaces of the repository.
 pub fn read(
     files: &[File],
@@ -244,9 +405,47 @@ pub fn read(
             {
                 implemented(form, from, scope, &mut edges);
             }
+            match form_head.as_deref() {
+                Some("defmethod") => {
+                    if let (Some(from), Some(multi)) = (
+                        file.owned.get(&form.id()),
+                        flat_items(form)
+                            .get(1)
+                            .and_then(|m| crate::declare::qualified_text(*m, file.source)),
+                    ) && let Some(to) = scope.multi_node(&multi)
+                    {
+                        edges.insert(Edge {
+                            from: from.clone(),
+                            to: to.to_string(),
+                            kind: EdgeKind::Implements,
+                            change: None,
+                        });
+                    }
+                }
+                Some(kind @ ("extend-protocol" | "extend-type")) => {
+                    let items = flat_items(form);
+                    for (ty, protocol) in
+                        extend_pairs(&items, kind == "extend-protocol", file.source)
+                    {
+                        if let (Some(ty), Some(protocol)) =
+                            (scope.type_node(&ty), scope.protocol_node(&protocol))
+                        {
+                            edges.insert(Edge {
+                                from: ty.to_string(),
+                                to: protocol.to_string(),
+                                kind: EdgeKind::Implements,
+                                change: None,
+                            });
+                        }
+                    }
+                }
+                _ => {}
+            }
             // The pieces of code of the form, each with the node that holds it, if any.
             let units: Vec<(Option<&String>, Vec<Ts>)> = match form_head.as_deref() {
-                Some("defn" | "defn-" | "defmacro" | "defmulti") => {
+                Some(
+                    "defn" | "defn-" | "defmacro" | "defmulti" | "def" | "defonce" | "defmethod",
+                ) => {
                     let code = flat_items(form).into_iter().skip(2).collect();
                     vec![(file.owned.get(&form.id()), code)]
                 }
@@ -260,6 +459,16 @@ pub fn read(
                         (file.owned.get(&m.id()), code)
                     })
                     .collect(),
+                // The code of a method of `extend-protocol` and `extend-type` is the method.
+                Some("extend-protocol" | "extend-type") => flat_items(form)
+                    .into_iter()
+                    .skip(2)
+                    .filter(|m| m.kind() == "list_lit")
+                    .map(|m| {
+                        let code = flat_items(m).into_iter().skip(1).collect();
+                        (file.owned.get(&m.id()), code)
+                    })
+                    .collect(),
                 Some("defprotocol" | "definterface") => Vec::new(),
                 _ => vec![(None, vec![form])],
             };
@@ -267,6 +476,7 @@ pub fn read(
                 Some("def") => "def",
                 Some("defmethod") => "defmethod",
                 Some("extend-protocol") => "extend-protocol",
+                Some("extend-type") => "extend-type",
                 Some("defrecord") => "defrecord",
                 Some("deftype") => "deftype",
                 _ => "other",
@@ -403,7 +613,9 @@ impl Reader<'_> {
                 self.report.calls.external += 1;
                 return;
             }
-            Resolved::Found(Target::Function(_) | Target::Type { .. }) if self.from.is_none() => {
+            Resolved::Found(Target::Function(_) | Target::Type { .. } | Target::Value(_))
+                if self.from.is_none() =>
+            {
                 *self
                     .report
                     .no_source_node
@@ -421,6 +633,10 @@ impl Reader<'_> {
             Resolved::Found(Target::Type { id, .. }) => {
                 self.report.calls.to_type += 1;
                 (id, EdgeKind::TypeRef)
+            }
+            Resolved::Found(Target::Value(id)) => {
+                self.report.calls.to_value += 1;
+                (id, EdgeKind::ValueRef)
             }
             Resolved::Found(Target::Var) => {
                 self.report.var_without_node += 1;
@@ -522,7 +738,7 @@ impl Reader<'_> {
         if candidates.len() == 1
             && candidates
                 .values()
-                .all(|t| matches!(t, Target::Function(id) if Some(id.as_str()) == self.from))
+                .all(|t| matches!(t, Target::Function(id) | Target::Value(id) if Some(id.as_str()) == self.from))
         {
             return;
         }
@@ -542,7 +758,10 @@ impl Reader<'_> {
         let target = candidates.into_values().next();
         let Some(from) = self.from else {
             // Code that no function node holds: counted by the head of its form.
-            if matches!(target, Some(Target::Function(_) | Target::Type { .. })) {
+            if matches!(
+                target,
+                Some(Target::Function(_) | Target::Type { .. } | Target::Value(_))
+            ) {
                 *self
                     .report
                     .no_source_node
@@ -565,6 +784,11 @@ impl Reader<'_> {
                 self.report.unqualified.to_type += 1;
                 self.report.calls.to_type += 1;
                 (id, EdgeKind::TypeRef)
+            }
+            Some(Target::Value(id)) => {
+                self.report.unqualified.to_value += 1;
+                self.report.calls.to_value += 1;
+                (id, EdgeKind::ValueRef)
             }
             _ => return,
         };

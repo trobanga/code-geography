@@ -123,8 +123,8 @@ export const DEFAULT_EDGE_OPTIONS: EdgeOptions = Object.freeze({
   implied: null,
 });
 
-/** A line that hide implied never hides: a change of the commit, or a kind that states a type relation. */
-export const keepsLine = (e: ViewEdge) => changed(e) || (e.kinds.extends ?? 0) > 0 || (e.kinds.implements ?? 0) > 0;
+/** A line that hide implied never hides: a change of the commit. */
+export const keepsLine = (e: ViewEdge) => changed(e);
 
 /** In auto, hide implied is on when the view would draw more lines than this without it. */
 export const IMPLIED_AUTO_FROM = 100;

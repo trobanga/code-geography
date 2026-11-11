@@ -96,7 +96,8 @@ fn clojure_sources_give_a_graph_and_the_clojure_report() {
             .any(|e| e.from == "pkg::a" && e.to == "pkg::b")
     );
     assert_eq!(report.clojure.files_outside_source_dirs, 1);
-    assert_eq!(report.clojure.forms_without_node["def"], 1);
+    assert_eq!(graph.node("val:a/x").unwrap().kind, NodeKind::Value);
+    assert_eq!(report.clojure.value_nodes, 1);
     assert_eq!((graph, report), index_sources("repo", &reversed));
 }
 
@@ -199,13 +200,16 @@ fn the_clojure_calls_are_added_to_the_calls_of_the_report_and_stay_visible() {
     assert_eq!(report.clojure.calls.to_function, 2);
     assert_eq!(report.clojure.unqualified.to_function, 1);
     assert_eq!(report.clojure.calls.external, 1);
-    assert_eq!(report.clojure.calls.unresolved, 2);
-    assert_eq!(report.clojure.var_without_node, 1);
+    assert_eq!(report.clojure.calls.unresolved, 1);
+    assert_eq!(report.clojure.calls.to_value, 1);
+    assert_eq!(report.clojure.var_without_node, 0);
     assert_eq!(report.calls.to_function, 3);
     assert_eq!(report.calls.external, 1);
-    assert_eq!(report.calls.unresolved, 2);
+    assert_eq!(report.calls.unresolved, 1);
+    assert_eq!(report.calls.to_value, 1);
     let json = serde_json::to_value(&report).unwrap();
     assert_eq!(json["clojure"]["calls"]["to_function"], 2);
+    assert_eq!(json["calls"]["to_value"], 1);
     assert_eq!(json["clojure"]["unqualified"]["to_function"], 1);
     assert_eq!(json["clojure"]["function_values"], 0);
 }
@@ -526,4 +530,41 @@ fn a_namespace_gets_no_import_edge_to_a_java_type_that_is_inside_it() {
             ("pkg:m:a.b", "type:a.Up", cg_core::EdgeKind::Imports),
         ]
     );
+}
+
+#[test]
+fn extend_type_on_a_java_class_puts_the_method_below_the_class_and_the_class_implements_the_protocol()
+ {
+    let files = [
+        source("pom.xml", ""),
+        source("src/main/java/a/b/Foo.java", FOO),
+        source("deps.edn", "{}"),
+        source(
+            "src/p.clj",
+            "(ns p)\n(defprotocol Store (-get [s]))\n(def limit 1)\n",
+        ),
+        source(
+            "src/user.clj",
+            "(ns user (:require [p]) (:import [a.b Foo]))\n\
+             (extend-type Foo p/Store (-get [x] p/limit))\n",
+        ),
+    ];
+
+    let (graph, report) = index_sources("repo", &files);
+
+    let method = graph.node("ext:a.b.Foo#p/Store/-get").expect("method node");
+    assert_eq!(method.parent.as_deref(), Some("type:a.b.Foo"));
+    assert_eq!(method.name, "-get");
+    assert!(graph.has_edge(
+        "type:a.b.Foo",
+        "type:p/Store",
+        cg_core::EdgeKind::Implements
+    ));
+    assert!(graph.has_edge(
+        "ext:a.b.Foo#p/Store/-get",
+        "val:p/limit",
+        cg_core::EdgeKind::ValueRef
+    ));
+    assert_eq!(report.clojure.extend_nodes, 1);
+    assert_eq!(report.calls.to_value, 1);
 }

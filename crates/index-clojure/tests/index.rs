@@ -295,7 +295,19 @@ fn forms_without_a_node_are_counted_by_head_and_comment_and_discarded_forms_give
         ),
     ]);
 
-    assert_eq!(ids(&g), ["mod:", "pkg::a", "fn:a/ok"]);
+    assert_eq!(
+        ids(&g),
+        [
+            "mod:",
+            "pkg::a",
+            "val:a/x",
+            "val:a/y",
+            "fn:a/ok",
+            "fn:a/mm :k",
+            "ext:Foo#P/m"
+        ]
+    );
+    assert_eq!(report.duplicate_declarations.get("def"), Some(&1));
     let counts: Vec<(&str, usize)> = report
         .forms_without_node
         .iter()
@@ -306,11 +318,7 @@ fn forms_without_a_node_are_counted_by_head_and_comment_and_discarded_forms_give
         [
             ("comment", 1),
             ("declare", 1),
-            ("def", 2),
-            ("defmethod", 1),
-            ("defonce", 1),
             ("do", 1),
-            ("extend-protocol", 1),
             ("foo", 1),
             ("s/def", 1),
         ]
@@ -672,10 +680,7 @@ fn a_protocol_an_interface_and_the_constructors_of_a_record_or_type_give_type_re
 fn a_symbol_that_gives_no_edge_is_counted_as_external_var_without_node_or_unresolved() {
     let (g, report) = run(&[
         DEPS,
-        (
-            "src/x.clj",
-            "(ns x)\n(defn f [])\n(def v 1)\n(defonce w 2)\n",
-        ),
+        ("src/x.clj", "(ns x)\n(defn f [])\n(declare v w)\n"),
         (
             "src/user.clj",
             "(ns user (:require [clojure.string :as str] [x :as a]))\n\
@@ -739,35 +744,32 @@ fn a_reference_in_code_without_a_function_node_gives_no_edge_and_is_counted_by_t
         (
             "src/user.clj",
             "(ns user (:require [x :as a]))\n\
-             (def v (a/f))\n\
              (def e (Math/abs 1))\n\
              (defmethod mm :k [x] (a/f x) a/->R)\n\
-             (extend-protocol P Foo (m [_] (a/f)))\n\
-             (extend-type Foo P (m [_] (a/f)))\n\
+             (defmethod mm :k [x] (a/f x) a/->R)\n\
              (a/f)\n\
              (defn g [] (a/f))\n",
         ),
     ]);
 
-    assert_eq!(calls(&g), vec![("fn:user/g", "fn:x/f")]);
-    assert_eq!(edges_of(&g, EdgeKind::TypeRef), vec![]);
+    // The second `defmethod` is a duplicate: no node.
+    assert_eq!(
+        sorted(calls(&g)),
+        vec![("fn:user/g", "fn:x/f"), ("fn:user/mm :k", "fn:x/f")]
+    );
+    assert_eq!(
+        edges_of(&g, EdgeKind::TypeRef),
+        vec![("fn:user/mm :k", "type:x/R")]
+    );
     let by_head: Vec<(&str, usize)> = report
         .no_source_node
         .iter()
         .map(|(k, v)| (k.as_str(), *v))
         .collect();
-    assert_eq!(
-        by_head,
-        vec![
-            ("def", 1),
-            ("defmethod", 2),
-            ("extend-protocol", 1),
-            ("other", 2)
-        ]
-    );
+    assert_eq!(by_head, vec![("defmethod", 2), ("other", 1)]);
     // Only the sites with a source node are counted as calls to a function or a type.
-    assert_eq!(report.calls.to_function, 1);
-    assert_eq!(report.calls.to_type, 0);
+    assert_eq!(report.calls.to_function, 2);
+    assert_eq!(report.calls.to_type, 1);
     // A reference that leads nowhere in the repository is counted as before.
     assert_eq!(report.calls.external, 1);
 }
@@ -1122,7 +1124,7 @@ fn special_forms_core_functions_interop_and_plain_vars_are_no_sites() {
         (
             "src/user.clj",
             "(ns user)\n\
-             (def c 1)\n\
+             (declare c)\n\
              (defn f [x]\n\
                (if x (do (inc 1) (.method x) (.-field x) (Foo. 1) (new Foo 1) (set! y 1)) c)\n\
                (c)\n\
@@ -1170,21 +1172,22 @@ fn an_unqualified_reference_in_code_without_a_function_node_is_counted_by_the_he
         (
             "src/user.clj",
             "(ns user)\n(defn helper [])\n(defrecord R [])\n\
-             (def v (helper))\n\
+             (defmethod mm :k [x] (helper) ->R)\n\
              (defmethod mm :k [x] (helper) ->R)\n\
              (helper)\n",
         ),
     ]);
 
-    assert_eq!(g.edges.len(), 0);
+    // The first `defmethod` has a node, the second is a duplicate.
+    assert_eq!(g.edges.len(), 2);
     let by_head: Vec<(&str, usize)> = report
         .no_source_node
         .iter()
         .map(|(k, v)| (k.as_str(), *v))
         .collect();
-    assert_eq!(by_head, vec![("def", 1), ("defmethod", 2), ("other", 1)]);
-    assert_eq!(report.unqualified, cg_index_clojure::Unqualified::default());
-    assert_eq!(report.calls.to_function + report.calls.to_type, 0);
+    assert_eq!(by_head, vec![("defmethod", 2), ("other", 1)]);
+    assert_eq!(report.unqualified.to_function, 1);
+    assert_eq!(report.unqualified.to_type, 1);
 }
 
 #[test]
@@ -1495,4 +1498,487 @@ fn an_imported_or_fully_named_interface_in_the_body_of_a_record_or_type_gives_an
             ("type:user/T", "type:x.y-z/I2"),
         ]
     );
+}
+
+#[test]
+fn a_top_level_def_or_defonce_is_a_value_node_and_a_literal_fn_value_is_a_function() {
+    let (g, report) = run(&[
+        DEPS,
+        (
+            "src/a.clj",
+            "(ns a)\n\
+             (def limit 10)\n\
+             (def ^:private secret \"doc\" 42)\n\
+             (defonce ^{:doc \"x\"} state (atom {}))\n\
+             (def handler (fn [x] x))\n\
+             (def named (fn* named [x] x))\n\
+             (def lazy #(inc %))\n\
+             (def unbound)\n\
+             (declare later)\n\
+             (def ^:dynamic *x*)\n",
+        ),
+    ]);
+
+    for (id, name) in [
+        ("val:a/limit", "limit"),
+        ("val:a/secret", "secret"),
+        ("val:a/state", "state"),
+        ("val:a/lazy", "lazy"),
+        ("val:a/unbound", "unbound"),
+        ("val:a/*x*", "*x*"),
+    ] {
+        let n = node(&g, id);
+        assert_eq!((n.kind, n.name.as_str()), (NodeKind::Value, name), "{id}");
+        assert_eq!(n.parent.as_deref(), Some("pkg::a"));
+        assert_eq!(n.file.as_deref(), Some("src/a.clj"));
+        assert!(n.hash.is_some() && n.span.is_some() && !n.test);
+    }
+    assert_eq!(
+        node(&g, "val:a/limit").span,
+        Some(Span {
+            start_line: 2,
+            end_line: 2
+        })
+    );
+    for id in ["fn:a/handler", "fn:a/named"] {
+        assert_eq!(node(&g, id).kind, NodeKind::Function, "{id}");
+    }
+    assert!(g.node("fn:a/later").is_none() && g.node("val:a/later").is_none());
+    assert_eq!(report.value_nodes, 6);
+    assert!(report.forms_without_node.contains_key("declare"));
+    assert!(!report.forms_without_node.contains_key("def"));
+}
+
+#[test]
+fn of_two_forms_that_declare_the_same_name_the_first_gives_the_node_and_declare_gives_none() {
+    let (g, report) = run(&[
+        DEPS,
+        (
+            "src/a.cljc",
+            "(ns a)\n\
+             (declare f g)\n\
+             (defn f [] 1)\n\
+             (def g 2)\n\
+             (def h 1)\n\
+             (defn h [] 2)\n\
+             #?(:clj (defn k [] 1) :cljs (def k 2))\n",
+        ),
+    ]);
+
+    assert_eq!(
+        ids(&g),
+        ["mod:", "pkg::a", "fn:a/f", "val:a/g", "val:a/h", "fn:a/k"]
+    );
+    assert_eq!(report.duplicate_declarations.get("defn"), Some(&1));
+    assert_eq!(report.duplicate_declarations.get("def"), Some(&1));
+}
+
+fn value_refs(g: &Graph) -> Vec<(&str, &str)> {
+    edges_of(g, EdgeKind::ValueRef)
+}
+
+#[test]
+fn the_value_of_a_def_is_read_as_a_function_body_with_the_node_as_source() {
+    let (g, report) = run(&[
+        DEPS,
+        ("src/x.clj", "(ns x)\n(defn f [])\n(defn g [])\n"),
+        (
+            "src/user.clj",
+            "(ns user (:require [x :as a]))\n\
+             (defn local [])\n\
+             (def handler (comp a/f local))\n\
+             (def doc \"documented\" (a/g))\n\
+             (def inline (fn [x] (a/f x)))\n",
+        ),
+    ]);
+
+    assert_eq!(
+        sorted(calls(&g)),
+        vec![
+            ("fn:user/inline", "fn:x/f"),
+            ("val:user/doc", "fn:x/g"),
+            ("val:user/handler", "fn:user/local"),
+            ("val:user/handler", "fn:x/f"),
+        ]
+    );
+    assert!(report.no_source_node.is_empty());
+}
+
+#[test]
+fn a_symbol_that_names_a_value_gives_a_value_ref_edge_also_at_the_head_and_is_counted_to_value() {
+    let (g, report) = run(&[
+        DEPS,
+        (
+            "src/x.clj",
+            "(ns x)\n(def limit 10)\n(def ^:private hidden 1)\n(defonce state (atom {}))\n(declare only-declared)\n",
+        ),
+        (
+            "src/user.clj",
+            "(ns user (:require [x :as a] [x :refer [limit]]))\n\
+             (def own 1)\n\
+             (def derived (inc own))\n\
+             (defn f [] (a/limit) a/state (a/only-declared) (a/nothing))\n\
+             (defn g [] (+ own limit))\n\
+             (defn h [own] (own))\n\
+             (defn self [] (str own))\n",
+        ),
+    ]);
+
+    assert_eq!(
+        sorted(value_refs(&g)),
+        vec![
+            ("fn:user/f", "val:x/limit"),
+            ("fn:user/f", "val:x/state"),
+            ("fn:user/g", "val:user/own"),
+            ("fn:user/g", "val:x/limit"),
+            ("fn:user/self", "val:user/own"),
+            ("val:user/derived", "val:user/own"),
+        ]
+    );
+    // f: 2, g: 2, self: 1, derived: 1. `h` binds `own` as a parameter, and `(own)` is a hidden call.
+    assert_eq!(report.calls.to_value, 6);
+    assert_eq!(report.unqualified.to_value, 4);
+    assert_eq!(report.unqualified.maybe_local, 1);
+    // Only a name that `declare` alone introduces stays a var without node.
+    assert_eq!(report.var_without_node, 1);
+    assert!(calls(&g).is_empty());
+    // A reference to a value from code without a node is counted with the head of its form.
+    let (_, report) = run(&[
+        DEPS,
+        ("src/y.clj", "(ns y)\n(def v 1)\n(def w v)\n(inc v)\n"),
+    ]);
+    assert_eq!(report.calls.to_value, 1);
+    assert_eq!(report.no_source_node.get("other"), Some(&1));
+}
+
+const MULTIS: (&str, &str) = (
+    "src/m.clj",
+    "(ns m)\n(defmulti area :shape)\n(defn helper [x] x)\n(def factor 2)\n",
+);
+
+#[test]
+fn a_defmethod_is_a_function_below_the_namespace_named_by_multi_and_dispatch_value() {
+    let (g, report) = run(&[
+        DEPS,
+        MULTIS,
+        (
+            "src/user.clj",
+            "(ns user (:require [m :as mm] [ig.core :as ig :refer [init-key]]))\n\
+             (defmulti local-m :k)\n\
+             (defmethod mm/area :circle [x] (mm/helper x) mm/factor)\n\
+             (defmethod mm/area :circle [x] 3)\n\
+             (defmethod mm/area [:a   :b]\n  ([x] 1)\n  ([x y] 2))\n\
+             (defmethod undeclared :k [x] x)\n\
+             (defmethod local-m :x [x] x)\n\
+             (defmethod ig/init-key :blaze.db/node [_ cfg] cfg)\n\
+             (defmethod init-key :other [_ x] x)\n",
+        ),
+        (
+            "src/user2.clj",
+            "(ns user2 (:require [m :as other]))\n(defmethod other/area :circle [x] x)\n",
+        ),
+    ]);
+
+    let expected = [
+        ("fn:user/m/area :circle", "mm/area :circle", 3, 3),
+        ("fn:user/m/area [:a :b]", "mm/area [:a :b]", 5, 7),
+        ("fn:user/undeclared :k", "undeclared :k", 8, 8),
+        ("fn:user/user/local-m :x", "local-m :x", 9, 9),
+        (
+            "fn:user/ig.core/init-key :blaze.db/node",
+            "ig/init-key :blaze.db/node",
+            10,
+            10,
+        ),
+        ("fn:user/ig.core/init-key :other", "init-key :other", 11, 11),
+    ];
+    for (id, name, start, end) in expected {
+        let n = node(&g, id);
+        assert_eq!(
+            (n.kind, n.name.as_str()),
+            (NodeKind::Function, name),
+            "{id}"
+        );
+        assert_eq!(n.parent.as_deref(), Some("pkg::user"), "{id}");
+        assert_eq!(n.file.as_deref(), Some("src/user.clj"));
+        assert_eq!(
+            n.span,
+            Some(Span {
+                start_line: start,
+                end_line: end
+            }),
+            "{id}"
+        );
+        assert!(n.hash.is_some() && !n.test);
+    }
+    // The id holds the full name of the namespace, not the alias.
+    assert_eq!(
+        node(&g, "fn:user2/m/area :circle").name,
+        "other/area :circle"
+    );
+    assert_eq!(report.method_nodes, 7);
+    assert_eq!(report.duplicate_declarations.get("defmethod"), Some(&1));
+    assert!(!report.forms_without_node.contains_key("defmethod"));
+    // Never the id of a defn: those hold no space.
+    assert!(
+        g.nodes
+            .iter()
+            .filter(|n| n.id.contains(' '))
+            .all(|n| n.id.starts_with("fn:user"))
+    );
+}
+
+#[test]
+fn the_body_of_a_defmethod_is_read_with_the_method_as_source_and_it_implements_its_defmulti() {
+    let (g, report) = run(&[
+        DEPS,
+        MULTIS,
+        (
+            "src/user.clj",
+            "(ns user (:require [m :as mm :refer [area]] [ig.core :as ig]))\n\
+             (defrecord Circle [r])\n\
+             (defmulti local-m :k)\n\
+             (defmethod mm/area :circle [x] (mm/helper x) mm/factor (->Circle 1))\n\
+             (defmethod area :square [x] (mm/helper x))\n\
+             (defmethod local-m :a ([x] x) ([x y] (mm/helper y)))\n\
+             (defmethod ig/init-key :k [_ cfg] cfg)\n\
+             (defmethod Circle-dispatch :k [x] x)\n\
+             (defmethod mm/helper :not-a-multi [x] x)\n\
+             (defmethod mm/area Circle [x] x)\n",
+        ),
+    ]);
+
+    assert_eq!(
+        sorted(calls(&g)),
+        vec![
+            ("fn:user/m/area :circle", "fn:m/helper"),
+            ("fn:user/m/area :square", "fn:m/helper"),
+            ("fn:user/user/local-m :a", "fn:m/helper"),
+        ]
+    );
+    assert_eq!(
+        sorted(value_refs(&g)),
+        vec![("fn:user/m/area :circle", "val:m/factor")]
+    );
+    assert_eq!(
+        sorted(edges_of(&g, EdgeKind::TypeRef)),
+        vec![
+            ("fn:user/m/area :circle", "type:user/Circle"),
+            ("fn:user/m/area Circle", "type:user/Circle")
+        ]
+    );
+    // To the `defmulti` through the alias, through `:refer`, and in the own namespace. Not
+    // to a `defn`, not to a multi outside the repository.
+    assert_eq!(
+        sorted(edges_of(&g, EdgeKind::Implements)),
+        vec![
+            ("fn:user/m/area :circle", "fn:m/area"),
+            ("fn:user/m/area :square", "fn:m/area"),
+            ("fn:user/m/area Circle", "fn:m/area"),
+            ("fn:user/user/local-m :a", "fn:user/local-m"),
+        ]
+    );
+    assert!(report.no_source_node.is_empty());
+}
+
+const TYPES: (&str, &str) = (
+    "src/types.clj",
+    "(ns types)\n(defprotocol Store (-get [s k]) (-put [s k]))\n(defrecord Rec [a])\n(definterface Marker)\n",
+);
+
+#[test]
+fn a_method_of_extend_protocol_or_extend_type_is_a_function_below_its_type_else_protocol_else_namespace()
+ {
+    let (g, report) = run(&[
+        DEPS,
+        TYPES,
+        (
+            "src/user.clj",
+            "(ns user (:require [types :as t] [other.lib :as o]) (:import [java.util Date]))\n\
+             (defrecord Local [x])\n\
+             (defprotocol Own (own-m [x]))\n\
+             (extend-protocol t/Store\n\
+               Local\n\
+               (-get [x k] (t/-put x k))\n\
+               (-put [x k] k)\n\
+               nil\n\
+               (-get [_ k] nil)\n\
+               Object\n\
+               (-put ([x] 1) ([x y] 2))\n\
+               Date\n\
+               (-get [_ _] 1))\n\
+             (extend-type types.Rec t/Store (-get [_ k] k))\n\
+             (extend-type String o/Ext (m [s] s) (n [s] s))\n\
+             (extend-type Local Own (own-m [x] x))\n\
+             (extend Local Own {:own-m (fn [x] x)})\n",
+        ),
+    ]);
+
+    let expected = [
+        ("ext:user/Local#types/Store/-get", "type:user/Local", "-get"),
+        ("ext:user/Local#types/Store/-put", "type:user/Local", "-put"),
+        (
+            "ext:nil#types/Store/-get",
+            "type:types/Store",
+            "-get for nil",
+        ),
+        (
+            "ext:Object#types/Store/-put",
+            "type:types/Store",
+            "-put for Object",
+        ),
+        (
+            "ext:java.util.Date#types/Store/-get",
+            "type:types/Store",
+            "-get for Date",
+        ),
+        ("ext:types/Rec#types/Store/-get", "type:types/Rec", "-get"),
+        (
+            "ext:String#other.lib/Ext/m",
+            "pkg::user",
+            "o/Ext/m for String",
+        ),
+        (
+            "ext:String#other.lib/Ext/n",
+            "pkg::user",
+            "o/Ext/n for String",
+        ),
+        ("ext:user/Local#user/Own/own-m", "type:user/Local", "own-m"),
+    ];
+    for (id, parent, name) in expected {
+        let n = node(&g, id);
+        assert_eq!(
+            (n.kind, n.name.as_str()),
+            (NodeKind::Function, name),
+            "{id}"
+        );
+        assert_eq!(n.parent.as_deref(), Some(parent), "{id}");
+        assert_eq!(n.file.as_deref(), Some("src/user.clj"));
+        assert!(n.hash.is_some() && n.span.is_some() && !n.test);
+    }
+    assert_eq!(
+        node(&g, "ext:Object#types/Store/-put").span,
+        Some(Span {
+            start_line: 11,
+            end_line: 11
+        })
+    );
+    assert_eq!(report.extend_nodes, 9);
+    assert_eq!(report.extend_forms, 1);
+    assert!(!report.forms_without_node.contains_key("extend-protocol"));
+    assert!(!report.forms_without_node.contains_key("extend-type"));
+    // The id of a method of a type that is outside the repository is the same as written.
+    assert_eq!(
+        sorted(edges_of(&g, EdgeKind::Implements)),
+        vec![
+            ("type:types/Rec", "type:types/Store"),
+            ("type:user/Local", "type:types/Store"),
+            ("type:user/Local", "type:user/Own"),
+        ]
+    );
+}
+
+#[test]
+fn the_body_of_an_extend_method_is_read_with_the_method_as_source() {
+    let (g, report) = run(&[
+        DEPS,
+        TYPES,
+        MULTIS,
+        (
+            "src/user.clj",
+            "(ns user (:require [types :as t] [m :as mm]))\n\
+             (defrecord Local [x])\n\
+             (extend-protocol t/Store\n\
+               Local\n\
+               (-get [x k] (t/-put x k) (mm/helper k) mm/factor)\n\
+               String\n\
+               (-get [x k] (mm/helper k) (->Local k)))\n\
+             (extend-type Local t/Store (-put [x k] (->Local k)))\n",
+        ),
+    ]);
+
+    assert_eq!(
+        sorted(calls(&g)),
+        vec![
+            ("ext:String#types/Store/-get", "fn:m/helper"),
+            ("ext:user/Local#types/Store/-get", "fn:m/helper"),
+            ("ext:user/Local#types/Store/-get", "fn:types/Store#-put"),
+        ]
+    );
+    assert_eq!(
+        value_refs(&g),
+        vec![("ext:user/Local#types/Store/-get", "val:m/factor")]
+    );
+    assert_eq!(
+        edges_of(&g, EdgeKind::TypeRef),
+        vec![("ext:String#types/Store/-get", "type:user/Local")]
+    );
+    // The method below `Local` does not name its own type: no edge to an ancestor.
+    assert!(report.no_source_node.is_empty());
+}
+
+#[test]
+fn the_forms_of_one_extend_method_are_one_node_and_a_repeated_method_is_a_duplicate() {
+    let (g, report) = run(&[
+        DEPS,
+        TYPES,
+        (
+            "src/user.clj",
+            "(ns user (:require [types :as t]))\n\
+             (extend-protocol t/Store\n\
+               String\n\
+               (-get [x k] 1)\n\
+               (-put [x k] 2)\n\
+               (-get [x] 3))\n\
+             (extend-type String t/Store (-get [x k] 4))\n\
+             (extend-type nil)\n",
+        ),
+    ]);
+
+    let n = node(&g, "ext:String#types/Store/-get");
+    // Two forms with a form between them: the span is that of the first.
+    assert_eq!(
+        n.span,
+        Some(Span {
+            start_line: 4,
+            end_line: 4
+        })
+    );
+    let single = index(&[
+        DEPS,
+        TYPES,
+        (
+            "src/user.clj",
+            "(ns user (:require [types :as t]))\n(extend-protocol t/Store\n  String\n  (-get [x k] 1)\n  (-put [x k] 2))\n",
+        ),
+    ]);
+    // The own text of the merged node covers both forms.
+    assert_ne!(
+        n.hash,
+        node(&single, "ext:String#types/Store/-get").hash.clone()
+    );
+    assert_eq!(report.extend_nodes, 2);
+    assert_eq!(report.duplicate_declarations.get("extend"), Some(&1));
+    // A form without a method gives no node and is counted.
+    assert_eq!(report.forms_without_node.get("extend-type"), Some(&1));
+}
+
+#[test]
+fn methods_in_test_code_are_test_code() {
+    let g = index(&[
+        ("deps.edn", "{:aliases {:test {:extra-paths [\"test\"]}}}"),
+        TYPES,
+        (
+            "test/user.clj",
+            "(ns user (:require [types :as t]))\n(defmulti m :k)\n(defmethod m :a [x] x)\n(extend-type String t/Store (-get [x k] 4))\n(def v 1)\n",
+        ),
+    ]);
+
+    for id in [
+        "fn:user/user/m :a",
+        "ext:String#types/Store/-get",
+        "val:user/v",
+    ] {
+        assert!(node(&g, id).test, "{id}");
+    }
 }

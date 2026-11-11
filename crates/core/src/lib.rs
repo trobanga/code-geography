@@ -19,6 +19,9 @@ pub enum NodeKind {
     Package,
     Type,
     Function,
+    /// A top-level value that is not a function (a Clojure `def`). A leaf, a sibling of
+    /// functions.
+    Value,
 }
 
 /// Lines of a declaration in its file: 1-based, inclusive.
@@ -71,6 +74,8 @@ pub enum EdgeKind {
     Imports,
     TypeRef,
     Calls,
+    /// A function or value names a value node (parallel to `TypeRef` for types).
+    ValueRef,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]

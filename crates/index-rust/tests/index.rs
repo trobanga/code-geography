@@ -1098,7 +1098,8 @@ fn arc_new_and_box_new_keep_the_type_of_their_argument() {
             to_function: 3,
             to_type: 0,
             external: 2,
-            unresolved: 0
+            unresolved: 0,
+            to_value: 0,
         }
     );
 }
@@ -1216,7 +1217,8 @@ fn a_chain_continues_through_the_written_return_type_of_a_unique_function() {
             to_function: 5,
             to_type: 1,
             external: 3,
-            unresolved: 1
+            unresolved: 1,
+            to_value: 0,
         }
     );
 }
@@ -1270,7 +1272,8 @@ fn the_receiver_of_a_literal_or_a_cast_is_a_known_external_type() {
             to_function: 0,
             to_type: 0,
             external: 6,
-            unresolved: 0
+            unresolved: 0,
+            to_value: 0,
         }
     );
 }
@@ -1497,7 +1500,8 @@ fn an_explicit_use_of_the_own_lib_wins_over_an_external_glob_import() {
             to_function: 1,
             to_type: 0,
             external: 0,
-            unresolved: 0
+            unresolved: 0,
+            to_value: 0,
         }
     );
 }
@@ -1562,7 +1566,8 @@ fn a_name_that_only_an_external_glob_can_provide_stays_external_and_gives_no_edg
             to_function: 1,
             to_type: 0,
             external: 1,
-            unresolved: 0
+            unresolved: 0,
+            to_value: 0,
         }
     );
 }

@@ -3,6 +3,7 @@
 mod calls;
 mod declare;
 mod deps;
+mod late;
 mod locals;
 mod ns;
 mod syntax;
@@ -29,20 +30,32 @@ pub struct Report {
     pub duplicate_namespaces: Vec<String>,
     /// The top-level forms that give no node, counted by their head symbol.
     pub forms_without_node: BTreeMap<String, usize>,
+    /// The top-level forms that declare a name that an earlier form of the namespace declared
+    /// (`defn` twice, `def` and `defn`, `defmethod` of the same multi and dispatch value
+    /// twice, reader-conditional branches): no node, the first form gives it. By head.
+    pub duplicate_declarations: BTreeMap<String, usize>,
+    /// The nodes of kind value (`def`, `defonce` whose value is no literal `fn`).
+    pub value_nodes: usize,
+    /// The function nodes of a `defmethod`.
+    pub method_nodes: usize,
+    /// The function nodes of a method in `extend-protocol` and `extend-type`.
+    pub extend_nodes: usize,
+    /// The top-level `(extend T P {:m (fn ..)})` forms: their functions are not read.
+    pub extend_forms: usize,
     /// How the symbols in the code of functions were resolved, counted per site
     /// (before the removal of duplicate edges). The same four classes as for Java and Rust.
     pub calls: cg_core::CallReport,
     /// Of the calls to a function: those where the function is named, not called
     /// (`(map a/f xs)`, `#'a/f`).
     pub function_values: usize,
-    /// Of the unresolved calls: those whose namespace declares the name with `def` or
-    /// `defonce`, which give no node. The size of this class decides whether `def` gets a
-    /// node.
+    /// Of the unresolved calls: those whose namespace only `declare`s the name, which gives no
+    /// node (a `def` gives a value node or a function node).
     pub var_without_node: usize,
-    /// Calls to a function and references to a type in code that has no function node
-    /// (the value of a `def`, a `defmethod`, an `extend-protocol`, any other top-level
-    /// form): no edge, not in `calls`. By the head of the top-level form: `def`,
-    /// `defmethod`, `extend-protocol`, `defrecord`, `deftype`, `other`. The size of the gap that stage 2b closes.
+    /// Calls to a function and references to a type or value in code that has no node (a
+    /// duplicate `def`, `defmethod` or extend method; `defrecord` or `deftype` methods that
+    /// no node holds; any other top-level form): no edge, not in `calls`. By the head of the
+    /// top-level form: `def`, `defmethod`, `extend-protocol`, `extend-type`, `defrecord`,
+    /// `deftype`, `other`.
     pub no_source_node: BTreeMap<String, usize>,
     /// The other unresolved calls: a repository namespace that does not declare the name
     /// (a macro of the repository can have made it). `namespace/name` to count.
@@ -83,6 +96,8 @@ pub struct Unqualified {
     pub function_values: usize,
     /// Sites that name a protocol, an interface or a constructor of a type.
     pub to_type: usize,
+    /// Sites that name a value node (`def`).
+    pub to_value: usize,
     /// No edge: a call (the head of a list) whose name also occurs in the same top-level
     /// form at a place where a local could be bound (`locals`). The binder and other
     /// uses of the name are no sites.
@@ -261,6 +276,8 @@ pub fn index_sources_with(
     let mut package_ids: BTreeMap<String, String> = BTreeMap::new();
     let mut vars: HashMap<String, calls::Vars> = HashMap::new();
     let mut read: Vec<calls::File> = Vec::new();
+    // For each file of `read`: its path, whether it is test code, its module.
+    let mut read_info: Vec<(String, bool, String)> = Vec::new();
     let mut own_classes = ClassTable::new();
     for file in files.iter().filter(|f| !f.path.ends_with("deps.edn")) {
         let Some(module) = module_of(&module_dirs, &file.path) else {
@@ -319,8 +336,20 @@ pub fn index_sources_with(
             .collect();
         vars.insert(namespace.clone(), calls::vars(&rest, source, &namespace));
         let mut owned: HashMap<usize, String> = HashMap::new();
-        let decls =
-            declare::declarations(&rest, source, &namespace, &mut report.forms_without_node);
+        let found = declare::declarations(&rest, source, &namespace, &mut report);
+        let late: Vec<late::Late> = found
+            .late
+            .iter()
+            .map(|l| late::Late {
+                forms: std::iter::once(l.decl.node.id())
+                    .chain(l.decl.more_forms.iter().map(|f| f.id()))
+                    .collect(),
+                hash: own_hash(&l.decl, source),
+                span: span_of(&l.decl),
+                spec: l.spec.clone(),
+            })
+            .collect();
+        let decls = found.decls;
         // The methods of a type that was declared before are skipped with it.
         let mut skipped: BTreeSet<String> = BTreeSet::new();
         for decl in decls {
@@ -332,6 +361,9 @@ pub fn index_sources_with(
                 continue;
             }
             owned.insert(decl.node.id(), decl.id.clone());
+            if decl.kind == NodeKind::Value {
+                report.value_nodes += 1;
+            }
             if decl.kind == NodeKind::Type {
                 let class = class_name(&namespace, &decl.name);
                 own_classes.insert(class.clone(), decl.id.clone());
@@ -358,7 +390,9 @@ pub fn index_sources_with(
                 change: None,
             });
         }
+        read_info.push((file.path.clone(), is_test, module.to_string()));
         read.push(calls::File {
+            late,
             source,
             tree,
             ns_form,
@@ -392,6 +426,24 @@ pub fn index_sources_with(
     graph.nodes.append(&mut declared);
     let mut classes = external_classes.clone();
     classes.extend(own_classes);
+    for placed in late::place(&mut read, &vars, &classes, &mut seen, &mut report) {
+        let (path, is_test, module) = &read_info[placed.file];
+        graph.nodes.push(Node {
+            id: placed.id,
+            parent: Some(
+                placed
+                    .parent
+                    .unwrap_or_else(|| package_id(module, &read[placed.file].namespace)),
+            ),
+            kind: NodeKind::Function,
+            name: placed.name,
+            file: Some(path.clone()),
+            span: Some(placed.span),
+            test: *is_test,
+            hash: Some(placed.hash),
+            change: None,
+        });
+    }
     graph.edges = imports(&graph, &package_ids, &requires);
     let tree = NodeTree::new(&graph);
     let mut class_imports = Vec::new();

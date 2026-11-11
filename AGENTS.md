@@ -12,9 +12,9 @@ model. Record each new decision of that weight as a new ADR.
 | Term | Meaning |
 |---|---|
 | graph | Nodes in a tree (`parent`) plus edges between any two nodes. |
-| fact level | A node kind that comes from the language or build system: `module` (unit of build: Maven module, Cargo package, `deps.edn` directory), `package` (namespace: Java package, Rust `mod`, Clojure namespace; nests in all three, ADR 0018), `type`, `function`. |
+| fact level | A node kind that comes from the language or build system: `module` (unit of build: Maven module, Cargo package, `deps.edn` directory), `package` (namespace: Java package, Rust `mod`, Clojure namespace; nests in all three, ADR 0018), `type`, `function`, `value` (a Clojure `def`, ADR 0027). |
 | group | A container that does not come from the language (directory or AI). Not built yet. |
-| edge | A dependency that the indexer can prove from the source: `extends`, `implements`, `imports`, `type_ref`, `calls` (ADR 0014). |
+| edge | A dependency that the indexer can prove from the source: `extends`, `implements`, `imports`, `type_ref`, `calls` (ADR 0014), `value_ref` (ADR 0027). |
 | cut | The set of visible nodes for a given set of expanded containers, with each edge moved to the nearest visible ancestors of its ends. |
 | view | The result of a cut: visible nodes, nodes that can open, aggregated edges with counts. |
 | focus cut | A cut that folds the children that are not of interest into one placeholder `rest:<container id>` (ADR 0011). |
@@ -34,7 +34,7 @@ crates/index-rust  Rust front end on tree-sitter: index_sources(root_name, files
                    (Cargo packages, mod tree, ADR 0016, call edges, ADR 0017); no walk
 crates/index-clojure  Clojure front end on tree-sitter: index_sources(root_name, files) -> Graph + Report
                    (deps.edn modules, namespaces as packages, imports edges, ADR 0023; call
-                   edges, ADR 0024); Layout::test_code(path) for the
+                   edges, ADR 0024; values, defmethod and extend-protocol nodes, ADR 0027); Layout::test_code(path) for the
                    changed files of an overlay
 crates/walk        cg-walk: the one directory walk, read_sources(root, is_input) -> Vec<SourceFile>
                    (the only place with std::fs besides the CLI; used by index-java and index)
@@ -126,9 +126,9 @@ pnpm dev                                     # http://localhost:5173/
 - Clojure (ADR 0023, 0024): an unqualified name gives no edge if its top-level form
   could bind it anywhere (7 % of such call heads on blaze). A static method call of a
   Java class goes to the type, a type hint gives no edge (ADR 0025).
-  Dispatch of protocols and multimethods is not followed. No node for `def`, `defmethod`,
-  `extend-protocol` and for what a macro of the repository declares, so their bodies
-  give no edges and a reference to a `def` has no target. No `.cljs`, no Leiningen.
+  Dispatch of protocols and multimethods is not followed (`implements` edges show the
+  methods, ADR 0027). No node for what a macro of the repository declares.
+  Java and Rust make no value nodes. No `.cljs`, no Leiningen.
   Duplicate namespace names: the first file wins.
   The grammar crate is pinned to 0.2.5 (0.2.9 does not build for wasm32).
 - Local classes and members of anonymous classes get no node.

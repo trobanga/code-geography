@@ -1,10 +1,10 @@
 //! What every front end reports about the call sites it read.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// How the call sites of the sources were resolved. Counts of call sites, before the
 /// removal of duplicate edges.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CallReport {
     /// The call reaches one function of the repository.
     pub to_function: usize,
@@ -14,6 +14,9 @@ pub struct CallReport {
     pub external: usize,
     /// The type of the receiver is not known.
     pub unresolved: usize,
+    /// The reference reaches a value node (a Clojure `def`): an edge `value_ref`.
+    #[serde(default)]
+    pub to_value: usize,
 }
 
 impl std::ops::Add for CallReport {
@@ -25,6 +28,7 @@ impl std::ops::Add for CallReport {
             to_type: self.to_type + other.to_type,
             external: self.external + other.external,
             unresolved: self.unresolved + other.unresolved,
+            to_value: self.to_value + other.to_value,
         }
     }
 }

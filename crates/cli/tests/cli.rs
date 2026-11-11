@@ -62,7 +62,7 @@ fn index_prints_how_the_calls_were_resolved() {
     assert!(output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("calls: 1 to function, 0 to type, 1 external, 1 unresolved\n"),
+        stderr.contains("calls: 1 to function, 0 to type, 0 to value, 1 external, 1 unresolved\n"),
         "{stderr}"
     );
 }
@@ -155,12 +155,12 @@ fn index_prints_what_the_clojure_front_end_did_not_read() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains(
-            "clojure: 1 files outside the source directories, 0 below no deps.edn, 1 without ns form, 1 duplicate namespaces; 3 top-level forms without a node\n"
+            "clojure: 1 files outside the source directories, 0 below no deps.edn, 1 without ns form, 1 duplicate namespaces; 1 top-level forms without a node\n"
         ),
         "{stderr}"
     );
     assert!(
-        stderr.contains("clojure forms without a node: def 2, declare 1\n"),
+        stderr.contains("clojure forms without a node: declare 1\n"),
         "{stderr}"
     );
 }
@@ -171,10 +171,14 @@ fn index_prints_how_the_clojure_calls_were_resolved() {
     let source = dir.path().join("repo");
     fs::create_dir_all(source.join("src")).unwrap();
     fs::write(source.join("deps.edn"), "{}").unwrap();
-    fs::write(source.join("src/x.clj"), "(ns x)\n(defn f [])\n(def v 1)\n").unwrap();
+    fs::write(
+        source.join("src/x.clj"),
+        "(ns x)\n(defn f [])\n(declare v)\n(def w 1)\n",
+    )
+    .unwrap();
     fs::write(
         source.join("src/user.clj"),
-        "(ns user (:require [x :as a]))\n(defn g [] (a/f) (map a/f []) (a/v) (Math/abs 1) (a/none))\n(defn h [] (g))\n(def d (a/f))\n",
+        "(ns user (:require [x :as a]))\n(defn g [] (a/f) (map a/f []) (a/v) (a/w) (Math/abs 1) (a/none))\n(defn h [] (g))\n(def d (a/f))\n(defmethod mm :k [x] x)\n(extend-type String P (m [x] x))\n(a/f)\n",
     )
     .unwrap();
 
@@ -189,9 +193,10 @@ fn index_prints_how_the_clojure_calls_were_resolved() {
     assert!(output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     for line in [
-        "clojure calls: 3 to function (1 as a value), 0 to type, 1 external, 2 unresolved (1 var without node); 1 more in code without a function node, not read\n",
-        "clojure code without a function node, by head: def 1\n",
-        "clojure unqualified: 1 to function (0 as a value), 0 to type, 0 a local could hide, 0 ambiguous\n",
+        "clojure calls: 4 to function (1 as a value), 0 to type, 1 to value, 1 external, 2 unresolved (1 var without node); 1 more in code without a function node, not read\n",
+        "clojure code without a function node, by head: other 1\n",
+        "clojure nodes: 2 values, 1 defmethod, 1 extend methods; 0 duplicate declarations, 0 extend calls with a map not read\n",
+        "clojure unqualified: 1 to function (0 as a value), 0 to type, 0 to value, 0 a local could hide, 0 ambiguous\n",
         "clojure unresolved: x/none 1\n",
     ] {
         assert!(stderr.contains(line), "{line}\n{stderr}");

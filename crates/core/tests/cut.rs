@@ -268,3 +268,82 @@ fn an_edge_from_a_nested_package_to_its_parent_package_shows_only_while_both_end
     let view = g.cut(&expanded(&["M", "u", "u.f"]));
     assert_eq!(view.edges, [view_edge("T1", "T2", &kinds)]);
 }
+
+#[test]
+fn a_value_is_a_leaf_beside_functions_and_value_ref_is_an_edge_kind_of_its_own() {
+    let value = node("v", Some("p"), NodeKind::Value);
+    let json = serde_json::to_string(&value).unwrap();
+    assert!(json.contains(r#""kind":"value""#), "{json}");
+    assert_eq!(serde_json::from_str::<Node>(&json).unwrap(), value);
+    let reference = edge("f", "v", EdgeKind::ValueRef);
+    let json = serde_json::to_string(&reference).unwrap();
+    assert!(json.contains(r#""kind":"value_ref""#), "{json}");
+    assert_eq!(serde_json::from_str::<Edge>(&json).unwrap(), reference);
+
+    let graph = Graph {
+        nodes: vec![
+            node("M", None, NodeKind::Module),
+            node("p", Some("M"), NodeKind::Package),
+            node("f", Some("p"), NodeKind::Function),
+            node("v", Some("p"), NodeKind::Value),
+            node("N", None, NodeKind::Module),
+            node("q", Some("N"), NodeKind::Package),
+            node("w", Some("q"), NodeKind::Value),
+        ],
+        edges: vec![
+            edge("f", "w", EdgeKind::ValueRef),
+            edge("v", "w", EdgeKind::ValueRef),
+            edge("f", "w", EdgeKind::Calls),
+        ],
+        diff: None,
+    };
+    let view = graph.cut(&expanded(&["M", "p"]));
+    assert_eq!(view.nodes, vec!["M", "p", "f", "v", "N"]);
+    assert_eq!(
+        view.edges,
+        vec![
+            view_edge("f", "N", &[(EdgeKind::Calls, 1), (EdgeKind::ValueRef, 1)]),
+            view_edge("v", "N", &[(EdgeKind::ValueRef, 1)]),
+        ]
+    );
+    assert_eq!(view.expandable, vec!["M", "p", "N"]);
+}
+
+#[test]
+fn a_value_ref_makes_an_import_redundant_and_a_test_value_is_removed_with_its_edges() {
+    let graph = Graph {
+        nodes: vec![
+            node("M", None, NodeKind::Module),
+            node("a", Some("M"), NodeKind::Package),
+            node("f", Some("a"), NodeKind::Function),
+            node("b", Some("M"), NodeKind::Package),
+            node("v", Some("b"), NodeKind::Value),
+            node("c", Some("M"), NodeKind::Package),
+            test_node("tv", "c", NodeKind::Value),
+            node("g", Some("c"), NodeKind::Function),
+        ],
+        edges: vec![
+            edge("a", "b", EdgeKind::Imports),
+            edge("f", "v", EdgeKind::ValueRef),
+            edge("g", "tv", EdgeKind::ValueRef),
+        ],
+        ..Graph::default()
+    };
+
+    assert_eq!(
+        graph.without_redundant_imports().edges,
+        vec![
+            edge("f", "v", EdgeKind::ValueRef),
+            edge("g", "tv", EdgeKind::ValueRef)
+        ]
+    );
+    let kept = graph.without_tests();
+    assert!(kept.node("tv").is_none());
+    assert_eq!(
+        kept.edges,
+        vec![
+            edge("a", "b", EdgeKind::Imports),
+            edge("f", "v", EdgeKind::ValueRef)
+        ]
+    );
+}

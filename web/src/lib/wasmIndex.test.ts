@@ -104,8 +104,8 @@ describe('the indexer in WASM', () => {
   it('indexes Clojure sources: the grammar runs inside the module', () => {
     const files: [string, string][] = [
       ['deps.edn', '{:aliases {:test {:extra-paths ["test"]}}}'],
-      ['src/a.clj', '(ns a (:require [b :as x]))\n(defn f [] (x/g))\n(def y 1)\n'],
-      ['src/b.clj', '(ns b)\n(defn g [])\n'],
+      ['src/a.clj', '(ns a (:require [b :as x]))\n(defn f [] (x/g) y)\n(def y 1)\n(defmethod x/m :k [_] (x/g))\n'],
+      ['src/b.clj', '(ns b)\n(defn g [])\n(defmulti m identity)\n'],
       ['test/a_test.clj', '(ns a-test)\n(deftest t)\n'],
       ['build.clj', '(ns build)\n'],
     ];
@@ -116,7 +116,7 @@ describe('the indexer in WASM', () => {
     );
     const { graph, report } = JSON.parse(json) as {
       graph: Graph;
-      report: { clojure: { files_outside_source_dirs: number; forms_without_node: Record<string, number> } };
+      report: { clojure: { files_outside_source_dirs: number; value_nodes: number; method_nodes: number } };
     };
 
     const ids = graph.nodes.map((n) => n.id);
@@ -125,7 +125,12 @@ describe('the indexer in WASM', () => {
     expect(graph.edges).toContainEqual({ from: 'pkg::a', to: 'pkg::b', kind: 'imports' });
     expect(graph.nodes.find((n) => n.id === 'pkg::a-test')?.test).toBe(true);
     expect(report.clojure.files_outside_source_dirs).toBe(1);
-    expect(report.clojure.forms_without_node.def).toBe(1);
+    expect(graph.nodes.find((n) => n.id === 'val:a/y')?.kind).toBe('value');
+    expect(graph.nodes.find((n) => n.id === 'fn:a/b/m :k')?.kind).toBe('function');
+    expect(graph.edges).toContainEqual({ from: 'fn:a/f', to: 'val:a/y', kind: 'value_ref' });
+    expect(graph.edges).toContainEqual({ from: 'fn:a/b/m :k', to: 'fn:b/m', kind: 'implements' });
+    expect(report.clojure.value_nodes).toBe(1);
+    expect(report.clojure.method_nodes).toBe(1);
   });
 
   it('builds the commit overlay from two source sets', () => {

@@ -1398,6 +1398,7 @@ fn the_report_counts_the_call_sites_by_how_they_were_resolved() {
             to_type: 1,
             external: 2,
             unresolved: 1,
+            to_value: 0,
         },
         "duplicates count: the sites are counted, not the edges"
     );
@@ -1428,6 +1429,7 @@ fn a_call_on_a_literal_or_of_a_method_of_object_is_external() {
             to_type: 0,
             external: 4,
             unresolved: 0,
+            to_value: 0,
         }
     );
     assert!(calls_from(&g, "fn:a.User#f()").is_empty());

@@ -59,8 +59,8 @@ fn run(args: Vec<String>) -> Result<(), String> {
     }) = report
     {
         eprintln!(
-            "calls: {} to function, {} to type, {} external, {} unresolved",
-            calls.to_function, calls.to_type, calls.external, calls.unresolved
+            "calls: {} to function, {} to type, {} to value, {} external, {} unresolved",
+            calls.to_function, calls.to_type, calls.to_value, calls.external, calls.unresolved
         );
         let rust_calls = rust.calls;
         eprintln!(
@@ -84,10 +84,11 @@ fn run(args: Vec<String>) -> Result<(), String> {
         let clojure_calls = clojure.calls;
         let no_source: usize = clojure.no_source_node.values().sum();
         eprintln!(
-            "clojure calls: {} to function ({} as a value), {} to type, {} external, {} unresolved ({} var without node); {} more in code without a function node, not read",
+            "clojure calls: {} to function ({} as a value), {} to type, {} to value, {} external, {} unresolved ({} var without node); {} more in code without a function node, not read",
             clojure_calls.to_function,
             clojure.function_values,
             clojure_calls.to_type,
+            clojure_calls.to_value,
             clojure_calls.external,
             clojure_calls.unresolved,
             clojure.var_without_node,
@@ -104,12 +105,21 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 by_head.join(", ")
             );
         }
+        eprintln!(
+            "clojure nodes: {} values, {} defmethod, {} extend methods; {} duplicate declarations, {} extend calls with a map not read",
+            clojure.value_nodes,
+            clojure.method_nodes,
+            clojure.extend_nodes,
+            clojure.duplicate_declarations.values().sum::<usize>(),
+            clojure.extend_forms
+        );
         let unqualified = &clojure.unqualified;
         eprintln!(
-            "clojure unqualified: {} to function ({} as a value), {} to type, {} a local could hide, {} ambiguous",
+            "clojure unqualified: {} to function ({} as a value), {} to type, {} to value, {} a local could hide, {} ambiguous",
             unqualified.to_function,
             unqualified.function_values,
             unqualified.to_type,
+            unqualified.to_value,
             unqualified.maybe_local,
             unqualified.ambiguous
         );

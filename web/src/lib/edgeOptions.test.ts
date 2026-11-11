@@ -182,13 +182,13 @@ describe('edgePipeline', () => {
     expect(edgePipeline([...c.es, e('n0', 'n2', { imports: 1 })], c.tree, { ...DEFAULT_EDGE_OPTIONS, implied: false }).hideImplied).toBe(false);
   });
 
-  it('keeps a changed chord and an extends or implements chord', () => {
+  it('keeps a changed chord and hides a chord of each kind', () => {
     const on = { ...DEFAULT_EDGE_OPTIONS, lift: false, implied: true };
     const base = [e('m1', 'm2', { imports: 1 }), e('m2', 'm3', { imports: 1 })];
     expect(edgePipeline([...base, e('m1', 'm3', { imports: 2 }, 1, 0)], tree, on).implied).toEqual([]);
     expect(edgePipeline([...base, e('m1', 'm3', { imports: 2 }, 0, 1)], tree, on).implied).toEqual([]);
-    expect(edgePipeline([...base, e('m1', 'm3', { imports: 1, extends: 1 })], tree, on).implied).toEqual([]);
-    expect(edgePipeline([...base, e('m1', 'm3', { implements: 1 })], tree, on).implied).toEqual([]);
+    expect(pairs(edgePipeline([...base, e('m1', 'm3', { imports: 1, extends: 1 })], tree, on).implied)).toBe('m1>m3');
+    expect(pairs(edgePipeline([...base, e('m1', 'm3', { implements: 1 })], tree, on).implied)).toBe('m1>m3');
     expect(pairs(edgePipeline([...base, e('m1', 'm3', { calls: 1, type_ref: 2 })], tree, on).implied)).toBe('m1>m3');
   });
 });

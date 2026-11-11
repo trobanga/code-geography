@@ -322,3 +322,39 @@ fn a_package_without_a_hash_is_never_modified_but_added_or_removed_with_its_id()
         ]
     );
 }
+
+#[test]
+fn diff_marks_a_value_by_its_hash_and_a_value_ref_edge_by_presence() {
+    let before = Graph {
+        nodes: vec![
+            node("p", None, NodeKind::Package),
+            hashed("v", "p", NodeKind::Value, "1"),
+            hashed("w", "p", NodeKind::Value, "2"),
+        ],
+        edges: vec![edge("v", "w", EdgeKind::ValueRef)],
+        ..Graph::default()
+    };
+    let after = Graph {
+        nodes: vec![
+            node("p", None, NodeKind::Package),
+            hashed("v", "p", NodeKind::Value, "9"),
+            hashed("w", "p", NodeKind::Value, "2"),
+        ],
+        edges: vec![],
+        ..Graph::default()
+    };
+
+    let marked = diff(&before, &after);
+
+    assert_eq!(
+        changes(&marked),
+        vec![("p", None), ("v", Some(Change::Modified)), ("w", None)]
+    );
+    assert_eq!(
+        marked.edges,
+        vec![Edge {
+            change: Some(Change::Removed),
+            ..edge("v", "w", EdgeKind::ValueRef)
+        }]
+    );
+}

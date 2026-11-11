@@ -23,8 +23,10 @@ stays possible as a second view.
   components. A line between two components is hidden if the condensation has a path
   between them through a third component. A line inside a component is never hidden,
   because the reduction of a cycle is not unique.
-- Never hidden, but used for paths: a changed line of a commit overlay, and a line with
-  an `extends` or `implements` part.
+- Never hidden, but used for paths: a changed line of a commit overlay. The first
+  version also kept each line with an `extends` or `implements` part. With the method
+  nodes of ADR 27 that kept 42 more lines at the module level of blaze, for no reason
+  that the reader can see, so all kinds follow the same rule now.
 - The layout gets the reduced set. A hidden line of the selected box is drawn as a
   dashed straight line, without a new layout. The side panel lists all dependencies of
   the selected box, as before.
@@ -35,7 +37,7 @@ stays possible as a second view.
   and changes no fact of the graph.
 
 ## Measured on blaze
-Module level: 119 lines drawn of 417, 298 hidden; the layout needs 80 ms in place of
+Module level: 120 lines drawn of 419, 299 hidden; the layout needs 80 ms in place of
 570 ms. Packages level: 574 drawn, 370 hidden. The fit scale does not change (0.51):
 the size of the picture comes from the boxes and layers, not from the lines.
 

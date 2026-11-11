@@ -260,3 +260,63 @@ fn a_changed_java_file_in_a_deps_edn_module_follows_the_source_directories_of_it
         ]
     );
 }
+
+#[test]
+fn a_changed_def_is_a_modified_value_and_a_new_defmethod_an_added_function() {
+    let user = |value: &str, extra: &str| {
+        source(
+            "src/user.clj",
+            &format!("(ns user)\n(defmulti m :k)\n(def limit {value})\n{extra}"),
+        )
+    };
+    let before = [source("deps.edn", "{}"), user("1", "")];
+    let after = [
+        source("deps.edn", "{}"),
+        user("2", "(defmethod m :a [x] limit)\n"),
+    ];
+    let spec = DiffSpec {
+        base: "v1".into(),
+        head: "v2".into(),
+        changed: changed(&[("src/user.clj", Change::Modified)]),
+    };
+
+    let (graph, _) = diff_sources("repo", &before, &after, spec);
+
+    let nodes: Vec<_> = graph
+        .nodes
+        .iter()
+        .filter_map(|n| n.change.map(|c| (n.id.as_str(), c)))
+        .collect();
+    assert_eq!(
+        nodes,
+        [
+            ("val:user/limit", Change::Modified),
+            ("fn:user/user/m :a", Change::Added)
+        ]
+    );
+    let edges: Vec<_> = graph
+        .edges
+        .iter()
+        .filter_map(|e| {
+            e.change
+                .map(|c| (e.from.as_str(), e.to.as_str(), e.kind, c))
+        })
+        .collect();
+    assert_eq!(
+        edges,
+        [
+            (
+                "fn:user/user/m :a",
+                "fn:user/m",
+                EdgeKind::Implements,
+                Change::Added
+            ),
+            (
+                "fn:user/user/m :a",
+                "val:user/limit",
+                EdgeKind::ValueRef,
+                Change::Added
+            ),
+        ]
+    );
+}

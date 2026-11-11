@@ -505,3 +505,23 @@ fn a_kind_placeholder_is_not_expandable_and_visible_ancestors_keep_their_change_
     assert_eq!(view.changes["q"].modified, 1);
     assert!(!view.changes.contains_key("rest:p"));
 }
+
+#[test]
+fn a_value_folds_with_the_other_children_of_a_container_that_holds_packages() {
+    let graph = Graph {
+        nodes: vec![
+            node("M", None, NodeKind::Module),
+            node("p", Some("M"), NodeKind::Package),
+            node("q", Some("p"), NodeKind::Package),
+            node("f", Some("p"), NodeKind::Function),
+            node("v", Some("p"), NodeKind::Value),
+        ],
+        edges: vec![edge("f", "v", EdgeKind::ValueRef)],
+        ..Graph::default()
+    };
+    let view = graph.cut_focused(&set(&["M", "p"]), &mixed());
+
+    assert_eq!(view.nodes, vec!["M", "p", "q", "rest:p"]);
+    assert_eq!(view.rest, [("p".to_string(), 2)].into());
+    assert!(view.edges.is_empty());
+}
