@@ -35,9 +35,11 @@ crates/walk        cg-walk: the one directory walk, read_sources(root, is_input)
                    (the only place with std::fs besides the CLI; used by index-java and index)
 crates/index       cg-index: is_input, index_sources, index(root) over all front ends; joins
                    the graphs and reports (a repository can hold Java and Rust)
+                   diff_sources(root_name, base, head, DiffSpec): the overlay of two source sets
+                   (CLI and WASM share it)
 crates/cli         cg index <repo> -o graph.json; cg diff <repo> <rev|A..B> -o diff.json
 crates/wasm        wasm-bindgen binding of core and the indexers: class Explorer,
-                   indexSources(paths, texts, rootName), isInput(path)
+                   indexSources(paths, texts, rootName), diffSources(...), isInput(path)
 scripts/build-wasm.sh   builds crates/wasm into web/src/lib/wasm (generated, committed);
                         sets the C include path for the tree-sitter grammars (needs cargo, jq)
 web/               viewer: Svelte 5, Tailwind 4, ELK layout in a web worker, plain SVG

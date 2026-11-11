@@ -100,22 +100,25 @@ fn diff(repo: &Path, spec: &str) -> Result<cg_core::Graph, String> {
         None => (format!("{spec}^"), spec, true),
     };
     // The head first: an unknown revision is reported as such, not as a missing parent.
-    let after = index_revision(repo, head)?;
-    // A root commit has no parent and is compared with the empty graph.
+    let after = read_revision(repo, head)?;
+    // A root commit has no parent and is compared with the empty source set.
     let root_commit = base_may_be_missing && !has_commit(repo, &base)?;
     let before = if root_commit {
-        cg_core::Graph::default()
+        Vec::new()
     } else {
-        index_revision(repo, &base)?
+        read_revision(repo, &base)?
     };
-    let mut graph = cg_core::diff(&before, &after);
     let changed = changed_files(repo, &base, head, root_commit)?;
-    graph.diff = Some(cg_core::DiffInfo {
+    let name = repo
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let spec = cg_index::DiffSpec {
         base,
         head: head.to_string(),
-        files: cg_core::file_changes(&graph, &changed),
-    });
-    Ok(graph)
+        changed,
+    };
+    Ok(cg_index::diff_sources(&name, &before, &after, spec).0)
 }
 
 /// The files that differ between `base` and `head`, sorted by path as git lists
@@ -170,8 +173,9 @@ fn has_commit(repo: &Path, revision: &str) -> Result<bool, String> {
     Ok(status.success())
 }
 
-/// Unpacks `git archive <revision>` into a temporary directory and indexes it.
-fn index_revision(repo: &Path, revision: &str) -> Result<cg_core::Graph, String> {
+/// Unpacks `git archive <revision>` into a temporary directory and reads the files that
+/// a front end wants.
+fn read_revision(repo: &Path, revision: &str) -> Result<Vec<cg_index::SourceFile>, String> {
     let dir = tempfile::tempdir().map_err(|e| format!("temporary directory: {e}"))?;
     let mut archive = Command::new("git")
         .arg("-C")
@@ -198,5 +202,5 @@ fn index_revision(repo: &Path, revision: &str) -> Result<cg_core::Graph, String>
     if !tar.status.success() {
         return Err(String::from_utf8_lossy(&tar.stderr).trim_end().into());
     }
-    cg_index::index(dir.path()).map_err(|e| format!("{revision}: {e}"))
+    cg_walk::read_sources(dir.path(), cg_index::is_input).map_err(|e| format!("{revision}: {e}"))
 }

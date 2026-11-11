@@ -3,7 +3,7 @@
 // @ts-ignore The project has no @types/node; this test is the only file that reads from disk.
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { Explorer, indexSources, initSync, isInput } from './wasm/cg_wasm.js';
+import { Explorer, diffSources, indexSources, initSync, isInput } from './wasm/cg_wasm.js';
 import type { Graph, View } from './types';
 
 initSync({ module: readFileSync(new URL('./wasm/cg_wasm_bg.wasm', import.meta.url)) });
@@ -94,5 +94,47 @@ describe('the indexer in WASM', () => {
     expect(report.rust.paths.resolved).toBeGreaterThan(0);
     expect(graph.edges).toContainEqual({ from: 'fn:my_app::Top#run', to: 'fn:my_app::a::A#new', kind: 'calls' });
     expect(report.calls.to_function).toBe(1);
+  });
+
+  it('builds the commit overlay from two source sets', () => {
+    const base: [string, string][] = [
+      ['pom.xml', ''],
+      ['src/main/java/a/Base.java', 'package a;\npublic class Base {}\n'],
+      ['src/main/java/a/Gone.java', 'package a;\nclass Gone extends Base {}\n'],
+    ];
+    const head: [string, string][] = [
+      ['pom.xml', ''],
+      ['src/main/java/a/Base.java', 'package a;\npublic class Base {}\n'],
+      ['src/main/java/a/Sub.java', 'package a;\nclass Sub extends Base {}\n'],
+    ];
+    const changed: [string, string][] = [
+      ['src/main/java/a/Gone.java', 'removed'],
+      ['src/main/java/a/Sub.java', 'added'],
+      ['README.md', 'modified'],
+    ];
+    const json = diffSources(
+      base.map(([p]) => p),
+      base.map(([, t]) => t),
+      head.map(([p]) => p),
+      head.map(([, t]) => t),
+      'repo',
+      'v1',
+      'v2',
+      changed.map(([p]) => p),
+      changed.map(([, k]) => k),
+    );
+    const { graph } = JSON.parse(json) as { graph: Graph; report: { calls: Record<string, number> } };
+
+    expect(graph.nodes.find((n) => n.id === 'type:a.Sub')?.change).toBe('added');
+    expect(graph.nodes.find((n) => n.id === 'type:a.Gone')?.change).toBe('removed');
+    expect(graph.edges).toContainEqual({ from: 'type:a.Sub', to: 'type:a.Base', kind: 'extends', change: 'added' });
+    expect(graph.diff?.base).toBe('v1');
+    expect(graph.diff?.head).toBe('v2');
+    expect(graph.diff?.files?.map((f) => f.path)).toEqual(changed.map(([p]) => p));
+  });
+
+  it('throws on parallel arrays of different length and on an unknown kind', () => {
+    expect(() => diffSources(['A.java'], [], [], [], 'repo', 'a', 'b', [], [])).toThrow(/1 base paths but 0 base texts/);
+    expect(() => diffSources([], [], [], [], 'repo', 'a', 'b', ['README.md'], ['renamed'])).toThrow(/renamed/);
   });
 });

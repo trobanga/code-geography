@@ -13,6 +13,14 @@ export class Explorer {
 }
 
 /**
+ * `diffSources(basePaths, baseTexts, headPaths, headTexts, rootName, baseName, headName,
+ * changedPaths, changedKinds)`: JSON of `{graph, report}` with the overlay graph; throws
+ * when two parallel arrays differ in length or a kind is not `added`, `removed` or
+ * `modified`.
+ */
+export function diffSources(base_paths: string[], base_texts: string[], head_paths: string[], head_texts: string[], root_name: string, base_name: string, head_name: string, changed_paths: string[], changed_kinds: string[]): string;
+
+/**
  * `indexSources(paths, texts, rootName)`: JSON of `{graph, report}`; throws on an error.
  */
 export function indexSources(paths: string[], texts: string[], root_name: string): string;
@@ -29,6 +37,7 @@ export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly memcmp: (a: number, b: number, c: number) => number;
     readonly __wbg_explorer_free: (a: number, b: number) => void;
+    readonly diffSources: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number) => [number, number, number, number];
     readonly explorer_focusView: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number];
     readonly explorer_new: (a: number, b: number) => [number, number, number];
     readonly explorer_view: (a: number, b: number, c: number, d: number, e: number) => [number, number];
@@ -64,8 +73,8 @@ export interface InitOutput {
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;
     readonly __externref_table_alloc: () => number;
-    readonly __wbindgen_free: (a: number, b: number, c: number) => void;
     readonly __externref_table_dealloc: (a: number) => void;
+    readonly __wbindgen_free: (a: number, b: number, c: number) => void;
     readonly __wbindgen_start: () => void;
 }
 

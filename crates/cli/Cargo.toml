@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 cg-core = { version = "0.1.0", path = "../core" }
+cg-walk = { version = "0.1.0", path = "../walk" }
 cg-index = { version = "0.1.0", path = "../index" }
 serde_json = "1.0.154"
 tempfile = "3.27.0"

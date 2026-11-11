@@ -45,6 +45,7 @@ version = "0.1.0"
 dependencies = [
  "cg-core",
  "cg-index",
+ "cg-walk",
  "serde_json",
  "tempfile",
 ]

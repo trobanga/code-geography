@@ -84,18 +84,74 @@ pub fn index_sources(
     texts: &[String],
     root_name: &str,
 ) -> Result<String, String> {
+    let files = source_files(paths, texts, "paths", "texts")?;
+    let (graph, report) = cg_index::index_sources(root_name, &files);
+    serde_json::to_string(&serde_json::json!({ "graph": graph, "report": report }))
+        .map_err(|e| e.to_string())
+}
+
+fn source_files(
+    paths: &[String],
+    texts: &[String],
+    path_label: &str,
+    text_label: &str,
+) -> Result<Vec<cg_index::SourceFile>, String> {
     if paths.len() != texts.len() {
-        return Err(format!("{} paths but {} texts", paths.len(), texts.len()));
+        return Err(format!(
+            "{} {path_label} but {} {text_label}",
+            paths.len(),
+            texts.len()
+        ));
     }
-    let files: Vec<cg_index::SourceFile> = paths
+    Ok(paths
         .iter()
         .zip(texts)
         .map(|(path, text)| cg_index::SourceFile {
             path: path.clone(),
             text: text.clone(),
         })
-        .collect();
-    let (graph, report) = cg_index::index_sources(root_name, &files);
+        .collect())
+}
+
+/// The commit overlay of two source sets, as JSON `{"graph": ..., "report": ...}` like
+/// `index_sources`; the report is the one of the head. `changed_kinds[i]` is `added`,
+/// `removed` or `modified` for `changed_paths[i]`. See `cg_index::diff_sources`.
+#[allow(clippy::too_many_arguments)]
+pub fn diff_sources(
+    base_paths: &[String],
+    base_texts: &[String],
+    head_paths: &[String],
+    head_texts: &[String],
+    root_name: &str,
+    base_name: &str,
+    head_name: &str,
+    changed_paths: &[String],
+    changed_kinds: &[String],
+) -> Result<String, String> {
+    let base = source_files(base_paths, base_texts, "base paths", "base texts")?;
+    let head = source_files(head_paths, head_texts, "head paths", "head texts")?;
+    if changed_paths.len() != changed_kinds.len() {
+        return Err(format!(
+            "{} changed paths but {} changed kinds",
+            changed_paths.len(),
+            changed_kinds.len()
+        ));
+    }
+    let changed = changed_paths
+        .iter()
+        .zip(changed_kinds)
+        .map(|(path, kind)| {
+            serde_json::from_value::<cg_core::Change>(serde_json::Value::String(kind.clone()))
+                .map(|change| (path.clone(), change))
+                .map_err(|_| format!("unknown kind of change: {kind}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let spec = cg_index::DiffSpec {
+        base: base_name.to_string(),
+        head: head_name.to_string(),
+        changed,
+    };
+    let (graph, report) = cg_index::diff_sources(root_name, &base, &head, spec);
     serde_json::to_string(&serde_json::json!({ "graph": graph, "report": report }))
         .map_err(|e| e.to_string())
 }
@@ -158,4 +214,35 @@ impl JsExplorer {
             fold_mixed,
         )
     }
+}
+
+/// `diffSources(basePaths, baseTexts, headPaths, headTexts, rootName, baseName, headName,
+/// changedPaths, changedKinds)`: JSON of `{graph, report}` with the overlay graph; throws
+/// when two parallel arrays differ in length or a kind is not `added`, `removed` or
+/// `modified`.
+#[wasm_bindgen(js_name = diffSources)]
+#[allow(clippy::too_many_arguments)]
+pub fn js_diff_sources(
+    base_paths: Vec<String>,
+    base_texts: Vec<String>,
+    head_paths: Vec<String>,
+    head_texts: Vec<String>,
+    root_name: &str,
+    base_name: &str,
+    head_name: &str,
+    changed_paths: Vec<String>,
+    changed_kinds: Vec<String>,
+) -> Result<String, JsError> {
+    diff_sources(
+        &base_paths,
+        &base_texts,
+        &head_paths,
+        &head_texts,
+        root_name,
+        base_name,
+        head_name,
+        &changed_paths,
+        &changed_kinds,
+    )
+    .map_err(|message| JsError::new(&message))
 }

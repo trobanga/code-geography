@@ -81,6 +81,59 @@ export class Explorer {
 if (Symbol.dispose) Explorer.prototype[Symbol.dispose] = Explorer.prototype.free;
 
 /**
+ * `diffSources(basePaths, baseTexts, headPaths, headTexts, rootName, baseName, headName,
+ * changedPaths, changedKinds)`: JSON of `{graph, report}` with the overlay graph; throws
+ * when two parallel arrays differ in length or a kind is not `added`, `removed` or
+ * `modified`.
+ * @param {string[]} base_paths
+ * @param {string[]} base_texts
+ * @param {string[]} head_paths
+ * @param {string[]} head_texts
+ * @param {string} root_name
+ * @param {string} base_name
+ * @param {string} head_name
+ * @param {string[]} changed_paths
+ * @param {string[]} changed_kinds
+ * @returns {string}
+ */
+export function diffSources(base_paths, base_texts, head_paths, head_texts, root_name, base_name, head_name, changed_paths, changed_kinds) {
+    let deferred11_0;
+    let deferred11_1;
+    try {
+        const ptr0 = passArrayJsValueToWasm0(base_paths, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArrayJsValueToWasm0(base_texts, wasm.__wbindgen_malloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passArrayJsValueToWasm0(head_paths, wasm.__wbindgen_malloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ptr3 = passArrayJsValueToWasm0(head_texts, wasm.__wbindgen_malloc);
+        const len3 = WASM_VECTOR_LEN;
+        const ptr4 = passStringToWasm0(root_name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len4 = WASM_VECTOR_LEN;
+        const ptr5 = passStringToWasm0(base_name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len5 = WASM_VECTOR_LEN;
+        const ptr6 = passStringToWasm0(head_name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len6 = WASM_VECTOR_LEN;
+        const ptr7 = passArrayJsValueToWasm0(changed_paths, wasm.__wbindgen_malloc);
+        const len7 = WASM_VECTOR_LEN;
+        const ptr8 = passArrayJsValueToWasm0(changed_kinds, wasm.__wbindgen_malloc);
+        const len8 = WASM_VECTOR_LEN;
+        const ret = wasm.diffSources(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5, ptr6, len6, ptr7, len7, ptr8, len8);
+        var ptr10 = ret[0];
+        var len10 = ret[1];
+        if (ret[3]) {
+            ptr10 = 0; len10 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred11_0 = ptr10;
+        deferred11_1 = len10;
+        return getStringFromWasm0(ptr10, len10);
+    } finally {
+        wasm.__wbindgen_free(deferred11_0, deferred11_1, 1);
+    }
+}
+
+/**
  * `indexSources(paths, texts, rootName)`: JSON of `{graph, report}`; throws on an error.
  * @param {string[]} paths
  * @param {string[]} texts

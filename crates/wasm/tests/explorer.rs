@@ -259,3 +259,132 @@ fn is_input_is_the_rule_of_the_indexer() {
     assert!(cg_wasm::is_input("Cargo.toml"));
     assert!(!cg_wasm::is_input("a/target/lib.rs"));
 }
+
+const OLD_BASE: &str = "package a;\nclass Base {}\n";
+
+fn diff_inputs() -> (Vec<String>, Vec<String>, Vec<String>, Vec<String>) {
+    (
+        strings(&[
+            "pom.xml",
+            "src/main/java/a/Base.java",
+            "src/main/java/a/Gone.java",
+        ]),
+        strings(&["", OLD_BASE, "package a;\nclass Gone extends Base {}\n"]),
+        strings(&[
+            "pom.xml",
+            "src/main/java/a/Base.java",
+            "src/main/java/a/Sub.java",
+        ]),
+        strings(&["", OLD_BASE, "package a;\nclass Sub extends Base {}\n"]),
+    )
+}
+
+#[test]
+fn diff_sources_returns_the_graph_that_cg_index_gives_for_the_same_input() {
+    let (base_paths, base_texts, head_paths, head_texts) = diff_inputs();
+    let changed_paths = strings(&[
+        "src/main/java/a/Gone.java",
+        "src/main/java/a/Sub.java",
+        "README.md",
+    ]);
+    let changed_kinds = strings(&["removed", "added", "modified"]);
+
+    let json = cg_wasm::diff_sources(
+        &base_paths,
+        &base_texts,
+        &head_paths,
+        &head_texts,
+        "repo",
+        "v1",
+        "v2",
+        &changed_paths,
+        &changed_kinds,
+    )
+    .unwrap();
+
+    let sources = |paths: &[String], texts: &[String]| -> Vec<cg_index::SourceFile> {
+        paths
+            .iter()
+            .zip(texts)
+            .map(|(p, t)| cg_index::SourceFile {
+                path: p.clone(),
+                text: t.clone(),
+            })
+            .collect()
+    };
+    let (expected, report) = cg_index::diff_sources(
+        "repo",
+        &sources(&base_paths, &base_texts),
+        &sources(&head_paths, &head_texts),
+        cg_index::DiffSpec {
+            base: "v1".into(),
+            head: "v2".into(),
+            changed: vec![
+                ("src/main/java/a/Gone.java".into(), Change::Removed),
+                ("src/main/java/a/Sub.java".into(), Change::Added),
+                ("README.md".into(), Change::Modified),
+            ],
+        },
+    );
+    let result: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(result["graph"], serde_json::to_value(&expected).unwrap());
+    assert_eq!(result["report"], serde_json::to_value(&report).unwrap());
+    // Sanity: the graph is an overlay.
+    assert_eq!(result["graph"]["diff"]["base"], "v1");
+    assert_eq!(
+        result["graph"]["diff"]["files"].as_array().unwrap().len(),
+        3
+    );
+}
+
+#[test]
+fn diff_sources_refuses_parallel_arrays_of_different_length_and_unknown_kinds() {
+    let (base_paths, base_texts, head_paths, head_texts) = diff_inputs();
+    let call =
+        |bp: &[String],
+         bt: &[String],
+         hp: &[String],
+         ht: &[String],
+         cp: &[String],
+         ck: &[String]| { cg_wasm::diff_sources(bp, bt, hp, ht, "repo", "a", "b", cp, ck) };
+    let one = strings(&["README.md"]);
+
+    let short_base = call(
+        &base_paths,
+        &base_texts[..1],
+        &head_paths,
+        &head_texts,
+        &[],
+        &[],
+    );
+    let short_head = call(
+        &base_paths,
+        &base_texts,
+        &head_paths[..1],
+        &head_texts,
+        &[],
+        &[],
+    );
+    let short_kinds = call(
+        &base_paths,
+        &base_texts,
+        &head_paths,
+        &head_texts,
+        &one,
+        &[],
+    );
+    let unknown = call(
+        &base_paths,
+        &base_texts,
+        &head_paths,
+        &head_texts,
+        &one,
+        &strings(&["renamed"]),
+    );
+
+    assert!(short_base.is_err());
+    assert!(short_head.is_err());
+    assert!(short_kinds.is_err());
+    let message = unknown.unwrap_err();
+    assert!(message.contains("renamed"), "{message}");
+}

@@ -2,7 +2,7 @@
 //! indexes them all. A repository can hold Java and Rust; the graphs are joined.
 
 pub use cg_core::SourceFile;
-use cg_core::{Graph, Node};
+use cg_core::{Change, DiffInfo, Graph, Node};
 use cg_index_java::CallReport;
 use serde::Serialize;
 use std::collections::{BTreeSet, HashSet};
@@ -47,6 +47,38 @@ pub fn index_sources(root_name: &str, files: &[SourceFile]) -> (Graph, Report) {
         calls: calls.calls + rust_report.calls,
         rust: rust_report,
     };
+    (graph, report)
+}
+
+/// What names a commit overlay besides the two source sets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiffSpec {
+    /// Name of the base revision, as `DiffInfo.base`.
+    pub base: String,
+    /// Name of the head revision, as `DiffInfo.head`.
+    pub head: String,
+    /// Every file that differs between the revisions, also those that no front end
+    /// reads, in the order that `DiffInfo.files` gets.
+    pub changed: Vec<(String, Change)>,
+}
+
+/// The overlay of two source sets: both are indexed with `index_sources`, joined with
+/// `cg_core::diff`, and `spec` fills `DiffInfo`. The report is the one of the head index;
+/// the base index only provides the removed nodes and edges.
+pub fn diff_sources(
+    root_name: &str,
+    base: &[SourceFile],
+    head: &[SourceFile],
+    spec: DiffSpec,
+) -> (Graph, Report) {
+    let (before, _) = index_sources(root_name, base);
+    let (after, report) = index_sources(root_name, head);
+    let mut graph = cg_core::diff(&before, &after);
+    graph.diff = Some(DiffInfo {
+        base: spec.base,
+        head: spec.head,
+        files: cg_core::file_changes(&graph, &spec.changed),
+    });
     (graph, report)
 }
 
