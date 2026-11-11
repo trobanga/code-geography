@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import ELK from 'elkjs/lib/elk.bundled.js';
 import type { ElkNode } from 'elkjs/lib/elk-api';
 import { buildTree } from './expansion';
 import { labelWidth, rootOptions, toElkGraph } from './elkGraph';
@@ -166,5 +167,56 @@ describe('toElkGraph when every edge joins two siblings, as after lifting', () =
     const dense = rootOptions(1000);
     for (const k of ['elk.spacing.nodeNode', 'elk.layered.spacing.nodeNodeBetweenLayers', 'elk.spacing.edgeNode', 'elk.spacing.edgeEdge'])
       expect(o[k]).toBe(dense[k]);
+  });
+});
+
+describe('the ELK layout of a container whose children are leaves', () => {
+  // A type with many functions that all call one helper: the callers form one wide layer.
+  const fns = Array.from({ length: 30 }, (_, i) => `f${i}`);
+  const fanTree = buildTree([
+    { id: 'm', parent: null, kind: 'module', name: 'm' },
+    { id: 'p', parent: 'm', kind: 'package', name: 'p' },
+    { id: 't', parent: 'p', kind: 'type', name: 'SomeTestClass' },
+    { id: 'h', parent: 't', kind: 'function', name: 'helper' },
+    ...fns.map((f) => ({ id: f, parent: 't', kind: 'function' as const, name: `${f}RejectsAnInvalidPolicy` })),
+  ]);
+  const edge = (from: string, to: string) => ({ from, to, count: 1, kinds: { calls: 1 }, added: 0, removed: 0 });
+  const box = async (v: View, t: typeof fanTree, id: string) => {
+    const laid = await new ELK().layout(toElkGraph(v, t));
+    const n = find(laid, id)!;
+    return n.width! / n.height!;
+  };
+
+  it('stacks a wide layer of siblings instead of putting it in one row', async () => {
+    const v: View = { nodes: ['m', 'p', 't', 'h', ...fns], expandable: [], changes: {}, edges: fns.map((f) => edge(f, 'h')) };
+    expect(await box(v, fanTree, 't')).toBeLessThan(3);
+  });
+
+  it('keeps a long chain of siblings out of one row', async () => {
+    const chain = fns.slice(0, 12);
+    const v: View = { nodes: ['m', 'p', 't', ...chain], expandable: [], changes: {}, edges: chain.slice(1).map((f, i) => edge(chain[i], f)) };
+    expect(await box(v, fanTree, 't')).toBeLessThan(3);
+  });
+
+  it('stacks a chain of containers that are each wider than high', async () => {
+    const types = ['t1', 't2', 't3', 't4'];
+    const t = buildTree([
+      { id: 'm', parent: null, kind: 'module', name: 'm' },
+      { id: 'p', parent: 'm', kind: 'package', name: 'p' },
+      ...types.flatMap((ty) => [
+        { id: ty, parent: 'p', kind: 'type' as const, name: ty },
+        ...fns.slice(0, 8).map((f) => ({ id: `${ty}.${f}`, parent: ty, kind: 'function' as const, name: `${f}RejectsAnInvalidPolicy` })),
+      ]),
+    ]);
+    const v: View = {
+      nodes: ['m', 'p', ...types, ...types.flatMap((ty) => fns.slice(0, 8).map((f) => `${ty}.${f}`))],
+      expandable: [],
+      changes: {},
+      edges: [
+        ...types.slice(1).map((ty, i) => edge(types[i], ty)),
+        ...types.flatMap((ty) => fns.slice(1, 8).map((f) => edge(`${ty}.${f}`, `${ty}.f0`))),
+      ],
+    };
+    expect(await box(v, t, 'p')).toBeLessThan(3);
   });
 });

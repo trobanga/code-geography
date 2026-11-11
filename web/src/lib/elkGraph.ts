@@ -50,9 +50,9 @@ export function rootOptions(nodeCount: number): Record<string, string> {
   };
 }
 
-function containerPadding(nodeCount: number): string {
+function containerPadding(nodeCount: number) {
   const f = sparseness(nodeCount);
-  return `[top=${BOX.header + Number(lerp(6, 14, f))},left=${lerp(8, 24, f)},bottom=${lerp(8, 24, f)},right=${lerp(8, 24, f)}]`;
+  return { top: BOX.header + Number(lerp(6, 14, f)), side: Number(lerp(8, 24, f)) };
 }
 
 /** Edge ids are `e<index into view.edges>`. */
@@ -64,10 +64,104 @@ export function edgeIndex(elkEdgeId: string): number {
  * With INCLUDE_CHILDREN, ELK lays out the whole hierarchy as one graph in the root direction, so
  * nested chains add up to a wide strip, and a direction set on a container is ignored. When every
  * edge joins two siblings (as after lifting, O3), no edge crosses a container border, and each
- * container is laid out on its own, in a direction that alternates with depth.
+ * container is laid out on its own, in a direction that alternates with depth unless the other one
+ * gives a box much nearer a square (`layOut`).
  */
 function containerDirection(depth: number): string {
   return depth % 2 === 0 ? 'DOWN' : 'RIGHT';
+}
+
+/** Layer of each node by the longest path from a source; edges that close a cycle are skipped. */
+function longestPathLayers(ids: string[], out: Map<string, string[]>): Map<string, number> {
+  const state = new Map<string, 'open' | 'done'>();
+  const order: string[] = [];
+  const visit = (v: string) => {
+    state.set(v, 'open');
+    for (const w of out.get(v) ?? []) if (!state.has(w)) visit(w);
+    state.set(v, 'done');
+    order.push(v);
+  };
+  for (const v of ids) if (!state.has(v)) visit(v);
+  order.reverse();
+  const rank = new Map(order.map((v, i) => [v, i]));
+  const layer = new Map<string, number>(ids.map((v) => [v, 0]));
+  for (const v of order)
+    for (const w of out.get(v) ?? []) if (rank.get(w)! > rank.get(v)!) layer.set(w, Math.max(layer.get(w)!, layer.get(v)! + 1));
+  return layer;
+}
+
+interface Size {
+  w: number;
+  h: number;
+}
+interface Spacing {
+  node: number;
+  layer: number;
+}
+/** Target ratio of ELK's packing of connected components (its default `elk.aspectRatio`). */
+const PACK_RATIO = 1.6;
+
+/**
+ * Estimated box of siblings that the layered algorithm lays out in direction `dir`. Each connected
+ * component is cut into layers by the longest path; in direction DOWN a layer is a row (its width
+ * is the sum of the widths), in direction RIGHT a column. ELK packs the components side by side
+ * near PACK_RATIO.
+ */
+function estimate(kids: string[], inner: { from: string; to: string }[], size: (id: string) => Size, sp: Spacing, dir: string): Size {
+  const root = new Map(kids.map((k) => [k, k]));
+  const find = (v: string): string => (root.get(v) === v ? v : find(root.get(v)!));
+  for (const e of inner) root.set(find(e.from), find(e.to));
+  const comps = new Map<string, string[]>();
+  for (const k of kids) comps.set(find(k), [...(comps.get(find(k)) ?? []), k]);
+  const out = new Map<string, string[]>();
+  for (const e of inner) out.set(e.from, [...(out.get(e.from) ?? []), e.to]);
+  const down = dir === 'DOWN';
+  const boxes = [...comps.values()].map((comp) => {
+    const layers = new Map<number, Size>();
+    for (const [id, l] of longestPathLayers(comp, out)) {
+      const s = size(id);
+      const a = layers.get(l);
+      // Along the layer: sizes add up; across it: the largest counts.
+      layers.set(
+        l,
+        !a
+          ? s
+          : down
+            ? { w: a.w + sp.node + s.w, h: Math.max(a.h, s.h) }
+            : { w: Math.max(a.w, s.w), h: a.h + sp.node + s.h },
+      );
+    }
+    const ls = [...layers.values()];
+    const gaps = sp.layer * (ls.length - 1);
+    return down
+      ? { w: Math.max(...ls.map((l) => l.w)), h: ls.reduce((a, l) => a + l.h, gaps) }
+      : { w: ls.reduce((a, l) => a + l.w, gaps), h: Math.max(...ls.map((l) => l.h)) };
+  });
+  if (boxes.length === 1) return boxes[0];
+  const area = boxes.reduce((a, b) => a + (b.w + sp.node) * (b.h + sp.node), 0);
+  const w = Math.max(...boxes.map((b) => b.w), Math.sqrt(area * PACK_RATIO));
+  return { w, h: Math.max(...boxes.map((b) => b.h), area / w) };
+}
+
+/**
+ * The estimate is rough (no edge routing, no crossing minimisation, packing guessed), so the other
+ * direction must bring the box nearer a square by more than this factor of width:height. Of 1, 1.5
+ * and 2, 2 changed the fewest containers of the plain views of the two test repositories and fixed
+ * the commit strip just as well.
+ */
+const FLIP_GAIN = 2;
+
+/**
+ * The direction of a container and the estimated box of its children: `fallback` (by depth),
+ * unless the other direction is nearer a square by FLIP_GAIN. Boxes are flat, so a wide layer (many
+ * callers of one helper) goes RIGHT, a long chain goes DOWN.
+ */
+function layOut(kids: string[], edges: { from: string; to: string }[], size: (id: string) => Size, sp: Spacing, fallback: string) {
+  const set = new Set(kids);
+  const inner = edges.filter((e) => set.has(e.from) && set.has(e.to) && e.from !== e.to);
+  const skew = (b: Size) => Math.abs(Math.log(b.w / b.h));
+  const [first, second] = [fallback, fallback === 'DOWN' ? 'RIGHT' : 'DOWN'].map((d) => ({ dir: d, box: estimate(kids, inner, size, sp, d) }));
+  return skew(second.box) < skew(first.box) - Math.log(FLIP_GAIN) ? second : first;
 }
 
 export function toElkGraph(view: View, tree: Tree, nodeCount = view.nodes.length, shown?: ReadonlySet<string>): ElkNode {
@@ -112,16 +206,34 @@ export function toElkGraph(view: View, tree: Tree, nodeCount = view.nodes.length
     return Math.round(BOX.height + f * Math.max(0, side * EDGE_ROOM - BOX.height));
   };
 
+  const widthOf = (id: string) => labelWidth(labelOf(tree, view, id, shown), expandable.has(id)) + (tree.byId.get(id)?.change ? BOX.markW : 0);
+  const spacing = { node: Number(dense['elk.spacing.nodeNode']), layer: Number(dense['elk.layered.spacing.nodeNodeBetweenLayers']) };
+  const pad = containerPadding(nodeCount);
+  // Bottom up: the direction of a container from the estimated sizes of its children.
+  const laid = new Map<string, { dir: string; box: Size }>();
+  const sizeOf = (id: string): Size => {
+    if (!hasVisibleChild.has(id)) return { w: widthOf(id), h: leafHeight(id) };
+    const l = layoutOf(id);
+    return { w: Math.max(widthOf(id), l.box.w + 2 * pad.side), h: Math.max(BOX.header + 16, l.box.h + pad.top + pad.side) };
+  };
+  const layoutOf = (id: string) => {
+    let l = laid.get(id);
+    if (!l) {
+      const kids = view.nodes.filter((c) => parentOf(tree, c) === id);
+      laid.set(id, (l = layOut(kids, kept, sizeOf, spacing, containerDirection(depthOf(id)))));
+    }
+    return l;
+  };
+
   for (const id of view.nodes) {
-    const name = labelOf(tree, view, id, shown);
-    const w = labelWidth(name, expandable.has(id)) + (tree.byId.get(id)?.change ? BOX.markW : 0);
+    const w = widthOf(id);
     const node: ElkNode = hasVisibleChild.has(id)
       ? {
           id,
           children: [],
           layoutOptions: {
-            ...(separate ? { ...layered, 'elk.direction': containerDirection(depthOf(id)) } : {}),
-            'elk.padding': containerPadding(nodeCount),
+            ...(separate ? { ...layered, 'elk.direction': layoutOf(id).dir } : {}),
+            'elk.padding': `[top=${pad.top},left=${pad.side},bottom=${pad.side},right=${pad.side}]`,
             'elk.nodeSize.constraints': 'MINIMUM_SIZE',
             'elk.nodeSize.minimum': `(${w}, ${BOX.header + 16})`,
           },
