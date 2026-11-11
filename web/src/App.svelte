@@ -613,6 +613,7 @@
       <DetailPanel
         {tree}
         {view}
+        lines={drawn ? [...drawn.edges, ...drawn.implied] : []}
         {selected}
         {tests}
         commit={diff !== null}

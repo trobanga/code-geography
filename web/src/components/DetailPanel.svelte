@@ -1,6 +1,6 @@
 <script lang="ts">
   import { changeLabel, markedByModule } from '../lib/commit';
-  import { breakdown, edgesOf } from '../lib/detail';
+  import { boxLines, breakdown } from '../lib/detail';
   import type { Tree } from '../lib/expansion';
   import type { ChangedFiles, FileGroup } from '../lib/files';
   import { CHANGE_SIGN, changeColor, KIND_LETTER, kindColor } from '../lib/kinds';
@@ -9,6 +9,7 @@
   let {
     tree,
     view,
+    lines,
     selected,
     tests,
     commit,
@@ -19,6 +20,8 @@
   }: {
     tree: Tree;
     view: View;
+    /** The lines after lift that the diagram draws or hides as implied: the dependencies of an open container. */
+    lines: readonly ViewEdge[];
     selected: string | null;
     tests: boolean;
     commit: boolean;
@@ -36,7 +39,7 @@
       ? (tree.children.get(selected) ?? []).filter((c) => tests || !tree.byId.get(c)?.test).length
       : 0,
   );
-  const lists = $derived(selected ? edgesOf(view, selected) : { outgoing: [], incoming: [] });
+  const lists = $derived(selected ? boxLines(view, tree, lines, selected) : { outgoing: [], incoming: [], summed: false });
   const nameOf = (id: string) => tree.label.get(id) ?? id;
   const marked = $derived(commit ? markedByModule(tree, tests, selected) : []);
   const btn = 'px-2 py-0.5 border border-[var(--line)] hover:border-[var(--muted)]';
@@ -153,6 +156,9 @@
       <dt class="text-[var(--muted)]">children</dt>
       <dd>{childCount}</dd>
     </dl>
+    {#if lists.summed}
+      <div class="mt-3 text-[11px] text-[var(--muted)]">open: the lines at this box, each a sum over its contents</div>
+    {/if}
     {@render edgeList('outgoing', lists.outgoing, (e) => e.to)}
     {@render edgeList('incoming', lists.incoming, (e) => e.from)}
     {#if fileCount > 0}

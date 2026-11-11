@@ -47,3 +47,8 @@ the size of the picture comes from the boxes and layers, not from the lines.
 - At the fit scale the labels stay about 5 px, and ELK still merges lines into trunks
   (`mergeEdges`), so a single line is followed with selection and zoom, not by eye.
 - Where the drawn graph has large cycles, the switch hides little.
+- Measured after the switch existed: without the edge merging of ELK the 120 lines of
+  the module level of blaze have 168 crossings in place of 45 crossing points, and the
+  picture is 16 % wider and 48 % higher. Splines, polylines, other node placement and a
+  higher thoroughness give no better result. So the merging stays, and a single line is
+  still not traceable by eye. A highlight of the path of one line is the open option.
