@@ -10,6 +10,7 @@
   import type { LaidNode, Layout, Point } from '../lib/layout';
   import type { View, ViewEdge } from '../lib/types';
   import { orthoRoutes } from '../lib/ortho';
+  import { impliedSegments } from '../lib/implied';
   import { fitTransform, labelAnchor, reveal as revealBox, zoomAt, type Transform } from '../lib/viewport';
 
   let {
@@ -105,6 +106,7 @@
           ch: edgeChange(ve),
           // A changed edge at a placeholder keeps its change color.
           bg: !edgeChange(ve) && focused && background(tree, ve),
+          implied: false,
         };
       })
       .filter((e) => e.show),
@@ -118,9 +120,28 @@
       const ve = ves[i];
       // Drawn like an ELK line at the selection.
       const key = `real:${ve.from}\u0000${ve.to}`;
-      return { key, ve, touches: true, d: pathOf(pts), w: width(ve.count), lab: labelAnchor(pts), ch: edgeChange(ve), bg: false };
+      return { key, ve, touches: true, d: pathOf(pts), w: width(ve.count), lab: labelAnchor(pts), ch: edgeChange(ve), bg: false, implied: false };
     });
   });
+  // Hide implied: the hidden lines of the selected node, as dashed straight segments between the
+  // boxes as they are, so that they differ from the routed lines; the layout is not run again.
+  const impliedShown = $derived(
+    impliedSegments(
+      drawn.implied.filter((ve) => painted(ve, false, null, null, changesOnly)),
+      selected,
+      rects,
+    ).map(({ line: ve, points }) => ({
+      key: `implied:${ve.from}\u0000${ve.to}`,
+      ve,
+      touches: true,
+      d: pathOf(points),
+      w: Math.min(width(ve.count), 2),
+      lab: labelAnchor(points),
+      ch: edgeChange(ve),
+      bg: false,
+      implied: true,
+    })),
+  );
   const nameOf = (id: string) => labelOf(tree, view, id, shown);
   const placeholders = $derived(placed.nodes.filter((n) => restOf(tree, n.id) !== null));
 
@@ -386,7 +407,7 @@
       {#each containers as n (n.id)}{@render box(n)}{/each}
       {#each leaves as n (n.id)}{@render box(n)}{/each}
       {#each placeholders as n (n.id)}{@render placeholder(n)}{/each}
-      {#each [...edges, ...realLines] as e (e.key)}
+      {#each [...edges, ...realLines, ...impliedShown] as e (e.key)}
         <g
           data-edge
           opacity={(selected === null || e.touches || onSelection ? 1 : 0.15) * (e.bg && !e.touches ? 0.35 : 1)}
@@ -402,7 +423,7 @@
               fill="none"
               stroke={e.touches ? 'var(--accent)' : 'var(--edge)'}
               stroke-width={e.bg ? Math.min(e.w, 1.5) : e.w}
-              stroke-dasharray={e.bg && !e.touches ? '2 3' : undefined}
+              stroke-dasharray={e.implied ? '6 4' : e.bg && !e.touches ? '2 3' : undefined}
               stroke-opacity={commit && !e.touches ? 0.35 : 0.8}
               marker-end={e.ch ? undefined : e.touches ? 'url(#arr-hi)' : 'url(#arr)'}
             />
@@ -420,7 +441,7 @@
           {/if}
         </g>
       {/each}
-      {#each [...edges, ...realLines] as e, i (i)}
+      {#each [...edges, ...realLines, ...impliedShown] as e, i (i)}
         {#if e.ch || (e.ve.count > 1 && !e.bg)}
           {@const hi = e.touches}
           <text

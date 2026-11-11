@@ -5,6 +5,7 @@ export const KIND_LETTER: Record<NodeKind, string> = {
   package: 'P',
   type: 'T',
   function: 'F',
+  value: 'V',
 };
 
 /** CSS variable holding the kind's color; defined in app.css for light and dark. */

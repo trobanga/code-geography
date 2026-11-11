@@ -194,6 +194,20 @@ describe('deeper', () => {
       't1',
     ]);
   });
+  it('ranks a value as a function: a package of values opens with the function layer', () => {
+    const t = buildTree([
+      { id: 'm', parent: null, kind: 'module', name: 'm' },
+      { id: 'p', parent: 'm', kind: 'package', name: 'p' },
+      { id: 'A', parent: 'p', kind: 'type', name: 'A' },
+      { id: 'a', parent: 'A', kind: 'function', name: 'a' },
+      { id: 'q', parent: 'm', kind: 'package', name: 'q' },
+      { id: 'v', parent: 'q', kind: 'value', name: 'v' },
+    ]);
+    const step = (expanded: string[], expandable: string[]) =>
+      sorted(deeper(t, { nodes: [], expandable }, { expanded: new Set(expanded), unfolded: new Set() }).expanded);
+    expect(step(['m'], ['p', 'q'])).toEqual(['m', 'p']);
+    expect(step(['m', 'p'], ['q', 'A'])).toEqual(['A', 'm', 'p', 'q']);
+  });
   it('opens every visible closed container of the view, skips placeholders', () => {
     expect(sorted(deeper(tree, { nodes: [], expandable: ['p1', 'p2', 'rest:m1'] }, { expanded: new Set(['m1']), unfolded: new Set() }).expanded)).toEqual(['m1', 'p1', 'p2']);
   });

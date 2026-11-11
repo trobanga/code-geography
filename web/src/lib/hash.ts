@@ -42,6 +42,8 @@ export function encodeHash(s: HashState): string {
   // A flag is written only when it differs from its default; removed keys are ignored on load.
   for (const [key, field] of FLAGS)
     if (s.edges[field] !== DEFAULT_EDGE_OPTIONS[field]) parts.push(`${key}=${s.edges[field] ? 1 : 0}`);
+  // Absent: auto; only a choice of the user is written.
+  if (s.edges.implied !== null) parts.push(`implied=${s.edges.implied ? 1 : 0}`);
   const ids = (xs: string[]) => xs.map(encodeURIComponent).join(',');
   const f = s.focus;
   if (f?.nodes.length) parts.push(`focus=${ids(f.nodes)}`);
@@ -80,6 +82,7 @@ export function decodeHash(hash: string): HashState {
     // Before ADR 0019 the key belonged to the focus; it is read the same way.
     else if (key === 'unfold' && value !== '') state.unfold = ids(value);
     else if (key === 'kinds') edges.kinds = decodeKinds(value) ?? edges.kinds;
+    else if (key === 'implied' && (value === '1' || value === '0')) edges.implied = value === '1';
     else {
       const flag = FLAGS.find(([k]) => k === key);
       if (flag) edges[flag[1]] = value === '1';

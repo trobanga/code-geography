@@ -171,7 +171,8 @@ export function drawable(tree: Tree, e: { from: string; to: string }): boolean {
   return e.from !== e.to && !isAncestor(tree, e.from, e.to) && !isAncestor(tree, e.to, e.from);
 }
 
-const KIND_RANK: Record<NodeKind, number> = { module: 0, package: 1, type: 2, function: 3 };
+/** A value is a leaf beside the functions of its container and opens with them. */
+const KIND_RANK: Record<NodeKind, number> = { module: 0, package: 1, type: 2, function: 3, value: 3 };
 
 /**
  * Rank of a container: the coarsest kind among its children that the view can show. A type has

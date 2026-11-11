@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_EDGE_OPTIONS, edgePipeline, filterEdges, liftEdges, linesText, painted } from './edgeOptions';
+import { DEFAULT_EDGE_OPTIONS, edgePipeline, filterEdges, IMPLIED_AUTO_FROM, liftEdges, linesText, painted } from './edgeOptions';
 import { buildTree } from './expansion';
 import type { GraphNode, ViewEdge } from './types';
 
@@ -13,7 +13,7 @@ const e = (from: string, to: string, kinds: ViewEdge['kinds'], added = 0, remove
 });
 
 describe('filterEdges (O2)', () => {
-  const all = { extends: true, implements: true, imports: true, type_ref: true, calls: true };
+  const all = { extends: true, implements: true, imports: true, type_ref: true, calls: true, value_ref: true };
 
   it('keeps every edge with all kinds on', () => {
     const edges = [e('a', 'b', { imports: 1 }), e('b', 'c', { type_ref: 2, extends: 1 })];
@@ -24,6 +24,11 @@ describe('filterEdges (O2)', () => {
     const edges = [e('a', 'b', { imports: 4 }), e('b', 'c', { type_ref: 2, imports: 3 })];
     const out = filterEdges(edges, { ...all, imports: false });
     expect(out).toEqual([{ from: 'b', to: 'c', count: 2, kinds: { type_ref: 2 }, added: 0, removed: 0 }]);
+  });
+
+  it('switches value_ref like any other kind', () => {
+    const edges = [e('f', 'v', { value_ref: 2 }), e('g', 'v', { value_ref: 1, calls: 1 })];
+    expect(filterEdges(edges, { ...all, value_ref: false })).toEqual([{ from: 'g', to: 'v', count: 1, kinds: { calls: 1 }, added: 0, removed: 0 }]);
   });
 
   it('applies the kind filter to changed edges and keeps their marks within the new count', () => {
@@ -148,6 +153,44 @@ describe('edgePipeline', () => {
     expect(pairs(r.edges)).toBe('m1>m2 m2>m3 m1>m3');
     expect(r.badges.get('a')).toEqual({ out: 1, in: 0 });
   });
+
+  it('with hide implied on, keeps the implied lines out of the drawn edges', () => {
+    const r = edgePipeline(edges, tree, { ...DEFAULT_EDGE_OPTIONS, implied: true });
+    expect(pairs(r.edges)).toBe('m1>m2 m2>m3');
+    expect(pairs(r.implied)).toBe('m1>m3');
+    expect(r.hideImplied).toBe(true);
+  });
+
+  it('in auto, hides implied lines only above IMPLIED_AUTO_FROM lines', () => {
+    const chain = (n: number) => {
+      const ns: GraphNode[] = Array.from({ length: n }, (_, i) => ({ id: `n${i}`, parent: null, kind: 'module', name: `n${i}` }));
+      const es = ns.slice(1).map((x, i) => e(`n${i}`, x.id, { imports: 1 }));
+      return { tree: buildTree(ns), es };
+    };
+    // A chain of k nodes has k - 1 lines; one chord makes k lines.
+    const at = (lines: number) => {
+      const c = chain(lines);
+      return edgePipeline([...c.es, e('n0', 'n2', { imports: 1 })], c.tree, DEFAULT_EDGE_OPTIONS);
+    };
+    expect(DEFAULT_EDGE_OPTIONS.implied).toBe(null);
+    expect(at(IMPLIED_AUTO_FROM).hideImplied).toBe(false);
+    expect(at(IMPLIED_AUTO_FROM).edges.length).toBe(IMPLIED_AUTO_FROM);
+    expect(at(IMPLIED_AUTO_FROM + 1).hideImplied).toBe(true);
+    expect(at(IMPLIED_AUTO_FROM + 1).implied.map((x) => `${x.from}>${x.to}`)).toEqual(['n0>n2']);
+    // An explicit choice wins over auto.
+    const c = chain(IMPLIED_AUTO_FROM + 1);
+    expect(edgePipeline([...c.es, e('n0', 'n2', { imports: 1 })], c.tree, { ...DEFAULT_EDGE_OPTIONS, implied: false }).hideImplied).toBe(false);
+  });
+
+  it('keeps a changed chord and an extends or implements chord', () => {
+    const on = { ...DEFAULT_EDGE_OPTIONS, lift: false, implied: true };
+    const base = [e('m1', 'm2', { imports: 1 }), e('m2', 'm3', { imports: 1 })];
+    expect(edgePipeline([...base, e('m1', 'm3', { imports: 2 }, 1, 0)], tree, on).implied).toEqual([]);
+    expect(edgePipeline([...base, e('m1', 'm3', { imports: 2 }, 0, 1)], tree, on).implied).toEqual([]);
+    expect(edgePipeline([...base, e('m1', 'm3', { imports: 1, extends: 1 })], tree, on).implied).toEqual([]);
+    expect(edgePipeline([...base, e('m1', 'm3', { implements: 1 })], tree, on).implied).toEqual([]);
+    expect(pairs(edgePipeline([...base, e('m1', 'm3', { calls: 1, type_ref: 2 })], tree, on).implied)).toBe('m1>m3');
+  });
 });
 
 describe('painted with changes only', () => {
@@ -177,5 +220,10 @@ describe('linesText', () => {
   it('names the hidden background lines only when there are any', () => {
     expect(linesText(20, 55, 0)).toBe('lines: 20 / 55');
     expect(linesText(20, 55, 12)).toBe('lines: 20 / 55, 12 background hidden');
+  });
+  it('names the lines hidden as implied only when there are any', () => {
+    expect(linesText(118, 417, 0, 299)).toBe('lines: 118 / 417, 299 hidden as implied');
+    expect(linesText(20, 55, 12, 3)).toBe('lines: 20 / 55, 12 background hidden, 3 hidden as implied');
+    expect(linesText(20, 55, 0, 0)).toBe('lines: 20 / 55');
   });
 });

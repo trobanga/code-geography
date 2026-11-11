@@ -1,5 +1,8 @@
-export type NodeKind = 'module' | 'package' | 'type' | 'function';
-export const EDGE_KINDS = ['extends', 'implements', 'imports', 'type_ref', 'calls'] as const;
+/** `value`: a `def` in Clojure, a leaf beside the functions of a package. */
+export const NODE_KINDS = ['module', 'package', 'type', 'function', 'value'] as const;
+export type NodeKind = (typeof NODE_KINDS)[number];
+/** `value_ref`: a reference to a value. `implements` can also join two functions (a multimethod implementation to its multimethod). */
+export const EDGE_KINDS = ['extends', 'implements', 'imports', 'type_ref', 'calls', 'value_ref'] as const;
 export type EdgeKind = (typeof EDGE_KINDS)[number];
 
 export interface GraphNode {

@@ -549,7 +549,10 @@
       {project.text}
     </div>
   {/if}
-  <EdgeBar {opts} onchange={(patch) => Object.assign(opts, patch)} drawn={paintedCount} total={drawn?.total ?? 0} dropped={drawn?.dropped ?? 0} />
+  <EdgeBar {opts} onchange={(patch) => Object.assign(opts, patch)} drawn={paintedCount} total={drawn?.total ?? 0} dropped={drawn?.dropped ?? 0}
+    hideImplied={drawn?.hideImplied ?? false}
+    implied={drawn?.implied.length ?? 0}
+  />
   {#if diff && totals}
     <CommitStrip
       {diff}

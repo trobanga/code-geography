@@ -12,6 +12,7 @@
   --k-package: #8a6a1f;
   --k-type: #2f7a55;
   --k-function: #7a4a8f;
+  --k-value: #66751c;
   /* commit overlay */
   --c-added: #1a7f37;
   --c-removed: #b4235a;
@@ -32,6 +33,7 @@
     --k-package: #d0ac57;
     --k-type: #6cc095;
     --k-function: #be8ed4;
+    --k-value: #b3c266;
     --c-added: #4cc06a;
     --c-removed: #f0719a;
     --c-modified: #3cc3d4;

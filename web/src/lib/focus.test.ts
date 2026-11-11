@@ -49,6 +49,17 @@ describe('labelOf a kind placeholder', () => {
     expect(labelOf(t, view, 'rest:p', shown)).toBe('2 types, 1 function');
     expect(labelOf(t, { nodes: ['p', 'q', 'f', 'rest:p'], rest: { p: 2 } }, 'rest:p', shown)).toBe('2 types');
   });
+  it('names folded values after the functions', () => {
+    const v = buildTree([
+      { id: 'p', parent: null, kind: 'package', name: 'p' },
+      { id: 'q', parent: 'p', kind: 'package', name: 'q' },
+      { id: 'f', parent: 'p', kind: 'function', name: 'f' },
+      { id: 'x', parent: 'p', kind: 'value', name: 'x' },
+      { id: 'y', parent: 'p', kind: 'value', name: 'y' },
+    ]);
+    expect(labelOf(v, { nodes: ['p', 'q', 'rest:p'], rest: { p: 3 } }, 'rest:p')).toBe('1 function, 2 values');
+    expect(labelOf(v, { nodes: ['p', 'q', 'f', 'y', 'rest:p'], rest: { p: 1 } }, 'rest:p')).toBe('1 value');
+  });
 });
 
 describe('background', () => {

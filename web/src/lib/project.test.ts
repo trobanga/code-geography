@@ -48,6 +48,14 @@ describe('summarize', () => {
     expect(s.tooltip).toContain('unresolved: 3');
   });
 
+  it('counts calls to a value as resolved and names them when the report has some', () => {
+    const s = summarize('repo', [], graph, { calls: { ...report.calls, to_value: 4 } });
+    expect(s.resolved).toBe(11);
+    expect(s.tooltip).toContain('calls to a value: 4');
+    expect(summarize('repo', [], graph, { calls: { ...report.calls, to_value: 0 } }).tooltip).not.toContain('to a value');
+    expect(summarize('repo', [], graph, report).tooltip).not.toContain('to a value');
+  });
+
   it('says where the sources came from in place of the note for a local directory', () => {
     expect(summarize('repo', [], graph, report).tooltip).toContain('A reload returns to graph.json.');
     const s = summarize('a/b@0123456', [], graph, report, 'Fetched from GitHub; a reload opens the same commit.');

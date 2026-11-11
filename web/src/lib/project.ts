@@ -28,6 +28,8 @@ export function chooseInputs<T>(files: Iterable<T>, relativeOf: (f: T) => string
 export interface CallReport {
   to_function: number;
   to_type: number;
+  /** Calls to a value (a Clojure `def`); absent in reports from before values. */
+  to_value?: number;
   external: number;
   unresolved: number;
 }
@@ -37,7 +39,7 @@ export interface Summary {
   sources: number;
   nodes: number;
   edges: number;
-  /** Calls to a function or a type of the graph. */
+  /** Calls to a function, a type or a value of the graph. */
   resolved: number;
   unresolved: number;
   text: string;
@@ -53,13 +55,15 @@ export function summarize(
 ): Summary {
   const c = report.calls;
   const sources = paths.filter(isSourceFile).length;
-  const resolved = c.to_function + c.to_type;
+  const toValue = c.to_value ?? 0;
+  const resolved = c.to_function + c.to_type + toValue;
   const text =
     `${name}: ${sources} source files, ${graph.nodes.length} nodes, ${graph.edges.length} edges, ` +
     `calls: ${resolved} resolved, ${c.unresolved} unresolved`;
   const tooltip = [
     `calls to a function: ${c.to_function}`,
     `calls to a type: ${c.to_type}`,
+    ...(toValue > 0 ? [`calls to a value: ${toValue}`] : []),
     `external: ${c.external}`,
     `unresolved: ${c.unresolved}`,
     origin,

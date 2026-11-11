@@ -60,7 +60,7 @@
         <span class="w-2 font-bold" style="color: {changeColor(n.change!)}" title={n.change}>{CHANGE_SIGN[n.change!]}</span>
         <span class="font-bold" style="color: {kindColor(n.kind)}">{KIND_LETTER[n.kind]}</span>
         <span class="truncate {n.change === 'removed' ? 'line-through' : ''}" title={id}
-          >{#if n.kind === 'function' && n.parent}<span class="text-[var(--muted)]">{nameOf(n.parent)}.</span
+          >{#if (n.kind === 'function' || n.kind === 'value') && n.parent}<span class="text-[var(--muted)]">{nameOf(n.parent)}.</span
             >{/if}{nameOf(id)}</span
         >
       </button>

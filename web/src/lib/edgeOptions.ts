@@ -1,5 +1,6 @@
 import { drawable, parentOf, type Tree } from './expansion';
 import { background } from './focus';
+import { impliedLines } from './implied';
 import { EDGE_KINDS, type EdgeKind, type ViewEdge } from './types';
 
 /** The edge carries at least one added or removed graph edge (ADR 0009). */
@@ -110,26 +111,48 @@ export interface EdgeOptions {
   lift: boolean;
   /** Commit overlay: paint only changed edges. */
   changesOnly: boolean;
+  /** Hide implied lines (a path shows them); null: auto, on above `IMPLIED_AUTO_FROM` lines. */
+  implied: boolean | null;
 }
 
 export const DEFAULT_EDGE_OPTIONS: EdgeOptions = Object.freeze({
   onSelection: false,
-  kinds: Object.freeze({ extends: true, implements: true, imports: true, type_ref: true, calls: true }),
+  kinds: Object.freeze({ extends: true, implements: true, imports: true, type_ref: true, calls: true, value_ref: true }),
   lift: true,
   changesOnly: false,
+  implied: null,
 });
+
+/** A line that hide implied never hides: a change of the commit, or a kind that states a type relation. */
+export const keepsLine = (e: ViewEdge) => changed(e) || (e.kinds.extends ?? 0) > 0 || (e.kinds.implements ?? 0) > 0;
+
+/** In auto, hide implied is on when the view would draw more lines than this without it. */
+export const IMPLIED_AUTO_FROM = 100;
 
 export interface Drawn extends Lifted {
   /** Drawable view edges before any option. */
   total: number;
+  /** The lines that hide implied took out of `edges`: not laid out, drawn only at the selection. */
+  implied: ViewEdge[];
+  /** Whether hide implied is in effect, by choice or by auto. */
+  hideImplied: boolean;
 }
 
-/** Drawable view edges → O2 → O3. O4 is in the WASM view, O1 only decides what is painted. */
+/** Drawable view edges → O2 → O3 → hide implied. O4 is in the WASM view, O1 only decides what is painted. */
 export function edgePipeline(viewEdges: ViewEdge[], tree: Tree, o: EdgeOptions, focused = false): Drawn {
   const all = viewEdges.filter((e) => drawable(tree, e));
   const kept = filterEdges(all, o.kinds);
   const l = o.lift ? liftEdges(kept, tree, focused) : { edges: kept, badges: new Map<string, Badge>(), lifted: [], dropped: 0 };
-  return { ...l, total: all.length };
+  const hideImplied = o.implied ?? l.edges.length > IMPLIED_AUTO_FROM;
+  if (!hideImplied) return { ...l, total: all.length, implied: [], hideImplied };
+  const hidden = impliedLines(l.edges, keepsLine);
+  return {
+    ...l,
+    edges: l.edges.filter((_, i) => !hidden.has(i)),
+    implied: l.edges.filter((_, i) => hidden.has(i)),
+    total: all.length,
+    hideImplied,
+  };
 }
 
 /**
@@ -149,7 +172,11 @@ export function painted(
   return at(selected) || at(hover);
 }
 
-/** Readout of the edge bar: painted lines / drawable view edges, plus dropped background lines. */
-export function linesText(painted: number, total: number, dropped: number): string {
-  return `lines: ${painted} / ${total}` + (dropped > 0 ? `, ${dropped} background hidden` : '');
+/** Readout of the edge bar: painted lines / drawable view edges, plus dropped background lines and implied lines. */
+export function linesText(painted: number, total: number, dropped: number, implied = 0): string {
+  return (
+    `lines: ${painted} / ${total}` +
+    (dropped > 0 ? `, ${dropped} background hidden` : '') +
+    (implied > 0 ? `, ${implied} hidden as implied` : '')
+  );
 }

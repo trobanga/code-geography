@@ -4,7 +4,7 @@
   import type { Collect } from '../lib/walk';
   import type { TokenField } from '../lib/tokenStore';
   import { KIND_LETTER, kindColor } from '../lib/kinds';
-  import { LEVELS, type Level, type NodeKind } from '../lib/types';
+  import { LEVELS, NODE_KINDS, type Level } from '../lib/types';
 
   let {
     src,
@@ -56,7 +56,6 @@
     auth: TokenField;
   } = $props();
 
-  const kinds: NodeKind[] = ['module', 'package', 'type', 'function'];
   const btn = 'px-2 py-0.5 border border-[var(--line)] hover:border-[var(--muted)]';
 </script>
 
@@ -110,7 +109,7 @@
   <OpenButtons {btn} {onfile} {ondir} {onrepo} {auth} />
   <span class="text-[var(--muted)]">{busy ? 'layout…' : ''}</span>
   <div class="ml-auto flex items-center gap-3 text-[var(--muted)]">
-    {#each kinds as k (k)}
+    {#each NODE_KINDS as k (k)}
       <span class="flex items-center gap-1">
         <span class="font-bold" style="color: {kindColor(k)}">{KIND_LETTER[k]}</span>{k}
       </span>

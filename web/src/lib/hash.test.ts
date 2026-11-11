@@ -21,12 +21,26 @@ describe('hash', () => {
       open: [],
       edges: {
         onSelection: true,
-        kinds: { extends: true, implements: false, imports: false, type_ref: true, calls: true },
+        kinds: { extends: true, implements: false, imports: false, type_ref: true, calls: true, value_ref: true },
         lift: false,
         changesOnly: true,
+        implied: false,
       },
     };
     expect(decodeHash(encodeHash(state))).toEqual(state);
+  });
+
+  it('writes an explicit hide implied choice and reads its absence as auto', () => {
+    const base = { level: 'modules' as const, tests: false, open: [] };
+    const on = encodeHash({ ...base, edges: { ...DEFAULT_EDGE_OPTIONS, implied: true } });
+    expect(on).toBe('#level=modules&tests=0&implied=1');
+    expect(decodeHash(on).edges.implied).toBe(true);
+    const off = encodeHash({ ...base, edges: { ...DEFAULT_EDGE_OPTIONS, implied: false } });
+    expect(off).toBe('#level=modules&tests=0&implied=0');
+    expect(decodeHash(off).edges.implied).toBe(false);
+    expect(encodeHash({ ...base, edges: DEFAULT_EDGE_OPTIONS })).toBe('#level=modules&tests=0');
+    expect(decodeHash('#level=modules').edges.implied).toBe(null);
+    expect(decodeHash('#implied=x').edges.implied).toBe(null);
   });
 
   it('round-trips the source and leaves it out when not given', () => {
@@ -52,7 +66,7 @@ describe('hash', () => {
   });
 
   it('round-trips all kinds off', () => {
-    const edges = { ...DEFAULT_EDGE_OPTIONS, kinds: { extends: false, implements: false, imports: false, type_ref: false, calls: false } };
+    const edges = { ...DEFAULT_EDGE_OPTIONS, kinds: { extends: false, implements: false, imports: false, type_ref: false, calls: false, value_ref: false } };
     expect(decodeHash(encodeHash({ level: 'modules', tests: false, open: [], edges })).edges).toEqual(edges);
   });
 
@@ -124,7 +138,7 @@ describe('freshHash', () => {
       level: 'modules',
       tests: true,
       open: [],
-      edges: { ...DEFAULT_EDGE_OPTIONS, kinds: { extends: false, implements: false, imports: false, type_ref: false, calls: true } },
+      edges: { ...DEFAULT_EDGE_OPTIONS, kinds: { extends: false, implements: false, imports: false, type_ref: false, calls: true, value_ref: false } },
     });
   });
 });

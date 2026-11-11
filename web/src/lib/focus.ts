@@ -1,6 +1,6 @@
 import { pathToOpen } from './commit';
 import { foldedChildren, REST, type Tree } from './expansion';
-import type { NodeKind, View } from './types';
+import { NODE_KINDS, type NodeKind, type View } from './types';
 
 /** Focus of the cut (ADR 0011): what the WASM `focusView` folds around. */
 export interface Focus {
@@ -23,8 +23,8 @@ const PLURAL: Record<NodeKind, [string, string]> = {
   package: ['package', 'packages'],
   type: ['type', 'types'],
   function: ['function', 'functions'],
+  value: ['value', 'values'],
 };
-const KIND_ORDER: NodeKind[] = ['module', 'package', 'type', 'function'];
 
 /**
  * Label of a view node: the tree label, or for a placeholder the kinds of its folded children,
@@ -35,7 +35,7 @@ export function labelOf(tree: Tree, view: Pick<View, 'rest'> & { nodes?: string[
   if (c === null) return tree.label.get(id) ?? id;
   const folded = view.nodes ? foldedChildren(tree, new Set(view.nodes), c, shown) : [];
   if (folded.length === 0) return `${view.rest?.[c] ?? 0} more`;
-  return KIND_ORDER.flatMap((k) => {
+  return NODE_KINDS.flatMap((k) => {
     const n = folded.filter((f) => f.kind === k).length;
     return n === 0 ? [] : [`${n} ${PLURAL[k][n === 1 ? 0 : 1]}`];
   }).join(', ');

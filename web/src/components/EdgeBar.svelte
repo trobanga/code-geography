@@ -7,6 +7,8 @@
     drawn,
     total,
     dropped,
+    hideImplied,
+    implied,
     onchange,
   }: {
     opts: EdgeOptions;
@@ -14,6 +16,10 @@
     total: number;
     /** Placeholder lines that lift dropped. */
     dropped: number;
+    /** Whether hide implied is in effect now (by choice or by auto). */
+    hideImplied: boolean;
+    /** Lines hidden as implied. */
+    implied: number;
     onchange: (patch: Partial<EdgeOptions>) => void;
   } = $props();
 
@@ -40,5 +46,12 @@
   <label class="flex items-center gap-1 border-l border-[var(--line)] pl-3">
     <input type="checkbox" checked={opts.lift} onchange={flag('lift')} />lift
   </label>
-  <span class="ml-auto tabular-nums text-[var(--muted)]">{linesText(drawn, total, dropped)}</span>
+  <label
+    class="flex items-center gap-1 border-l border-[var(--line)] pl-3"
+    title="Hides a line A→C when a path A→B→C is drawn. The side panel lists all."
+  >
+    <input type="checkbox" checked={hideImplied} onchange={(e) => onchange({ implied: e.currentTarget.checked })} />hide implied
+    {#if opts.implied === null}<span class="text-[var(--muted)]">(auto)</span>{/if}
+  </label>
+  <span class="ml-auto tabular-nums text-[var(--muted)]">{linesText(drawn, total, dropped, implied)}</span>
 </div>
