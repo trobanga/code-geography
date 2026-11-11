@@ -335,3 +335,44 @@ describe('forgeSession', () => {
     expect(t.shown).toEqual([]);
   });
 });
+
+describe('a choice of the user while an open is pending (F93)', () => {
+  it('a switch to the head makes the pending open stale and ends its progress line', async () => {
+    const t = setup();
+    await t.session.overlay({ ...REPO, ref: HEAD }, { base: BASE, head: HEAD });
+    const pending = t.session.open({ ...REPO, ref: 'slow-old' });
+    await until(() => t.held.has('slow-old'));
+    await t.session.show('graph');
+    await release(t.held, 'slow-old');
+    await pending;
+    expect(t.state()).toMatchObject({ at: `o/r@${HEAD}`, mode: 'graph' });
+    expect(t.shown.map((s) => s.name)).toEqual(['o/r bbbbbbb → aaaaaaa', 'o/r@aaaaaaa']);
+    expect(t.phases.at(-1)).toBeNull();
+  });
+
+  it('a switch to the overlay makes the pending open stale', async () => {
+    const t = setup();
+    await t.session.overlay({ ...REPO, ref: HEAD }, { base: BASE, head: HEAD });
+    await t.session.show('graph');
+    const pending = t.session.open({ ...REPO, ref: 'slow-old' });
+    await until(() => t.held.has('slow-old'));
+    await t.session.show('commit');
+    await release(t.held, 'slow-old');
+    await pending;
+    expect(t.state()).toMatchObject({ at: `o/r@${HEAD}`, mode: 'commit' });
+    expect(t.phases.at(-1)).toBeNull();
+  });
+
+  it('another source (a graph file) makes the pending open stale', async () => {
+    const t = setup();
+    await t.session.open({ ...REPO, ref: 'main' });
+    const pending = t.session.open({ ...REPO, ref: 'slow-old' });
+    await until(() => t.held.has('slow-old'));
+    t.session.forget();
+    await release(t.held, 'slow-old');
+    await pending;
+    expect(t.state()).toEqual(NO_FORGE);
+    expect(t.shown).toHaveLength(1);
+    expect(t.phases.at(-1)).toBeNull();
+  });
+});

@@ -183,16 +183,24 @@ export function forgeSession(d: SessionDeps) {
     }
   }
 
+  /** A choice of the user that is no open: a pending open is stale from now on, and its progress line ends. */
+  function cancel() {
+    d.begin();
+    d.phase(null);
+  }
+
   /** Switches between the plain graph of the head and the overlay, both in memory: no fetch (C5). */
   async function show(mode: Source, hash = d.hash()) {
     if (!s.at) return;
     if (mode === 'graph') {
       if (!s.head || s.mode === 'graph') return;
+      cancel();
       set({ mode: 'graph' });
       await d.show(s.head.text, s.head.summary, hash);
       return;
     }
     if (s.mode === 'commit') return;
+    cancel();
     set({ mode: 'commit' });
     if (s.overlay) await d.show(s.overlay.text, s.overlay.summary, hash);
   }
@@ -276,6 +284,9 @@ export function forgeSession(d: SessionDeps) {
     pick,
     openInput,
     /** Another source is shown: nothing of the repository stays. */
-    forget: () => set(NO_FORGE),
+    forget: () => {
+      cancel();
+      set(NO_FORGE);
+    },
   };
 }
