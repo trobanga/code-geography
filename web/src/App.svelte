@@ -122,6 +122,8 @@
   let laid = $state.raw<{ layout: Layout; drawn: Drawn } | null>(null);
   let busy = $state(false);
   let fitNext = true;
+  /** A container that the user opened or closed: its box is brought into view after the next layout. */
+  let inViewNext: string | null = null;
   let seq = 0;
   let lastHash = '';
   let diagram: ReturnType<typeof Diagram> | undefined = $state();
@@ -164,9 +166,11 @@
   const canDeeper = $derived(deeperSet.expanded.size > expanded.size || deeperSet.unfolded.size > unfolded.size);
   /** "+" history, so that "−" right after it returns to the same set (see `stepBack`). */
   let steps: DepthStep[] = [];
-  /** A "+" that waits for a second click, valid only for the set it was computed for. */
-  let asked = $state.raw<{ to: Depth; boxes: number } | null>(null);
-  const askBoxes = $derived(asked && asked.to === deeperSet ? asked.boxes : null);
+  /** "+" or a level button that waits for a second click, valid only for the view it was asked in. */
+  let asked = $state.raw<{ step: Level | 'deeper'; from: View; boxes: number } | null>(null);
+  const pending = $derived(asked && asked.from === view ? asked : null);
+  const askBoxes = $derived(pending?.step === 'deeper' ? pending.boxes : null);
+  const askLevel = $derived(pending && pending.step !== 'deeper' ? { level: pending.step, boxes: pending.boxes } : null);
   // O2 → O3.
   const drawn = $derived(view && tree ? edgePipeline(view.edges, tree, opts, focusActive(focus)) : null);
   const diff = $derived(graph?.diff ?? null);
@@ -332,23 +336,35 @@
     selected = id;
   }
 
+  /**
+   * Whether the step to `next` may go now: above the box limit only at its second click.
+   * The count comes from the WASM cut of the next set, not from a copy of the cut.
+   */
+  function confirmed(step: Level | 'deeper', next: Depth): boolean {
+    if (!explorer || !view) return false;
+    const again = pending?.step === step;
+    const boxes = again ? pending!.boxes : cut(explorer, next).nodes.length;
+    if (mustConfirm(boxes, again)) {
+      asked = { step, from: view, boxes };
+      return false;
+    }
+    asked = null;
+    return true;
+  }
+
   function setLevel(l: Level) {
     if (!tree) return;
-    expanded = levelExpanded(tree, l, shown);
-    unfolded = levelUnfolded(tree, l, shown);
+    const next = { expanded: levelExpanded(tree, l, shown), unfolded: levelUnfolded(tree, l, shown) };
+    if (!confirmed(l, next)) return;
+    expanded = next.expanded;
+    unfolded = next.unfolded;
     fitNext = true;
   }
 
   function stepDeeper() {
-    if (!explorer || !canDeeper) return;
+    if (!canDeeper) return;
     const next = deeperSet;
-    // The count comes from the WASM cut of the next set, not from a copy of the cut.
-    const boxes = askBoxes ?? cut(explorer, next).nodes.length;
-    if (mustConfirm(boxes, askBoxes !== null)) {
-      asked = { to: next, boxes };
-      return;
-    }
-    asked = null;
+    if (!confirmed('deeper', next)) return;
     steps = stepForward(steps, depth, next);
     expanded = new Set(next.expanded);
     unfolded = new Set(next.unfolded);
@@ -369,7 +385,8 @@
     if (k === null) return;
     e.preventDefault();
     if (k === 'deeper') stepDeeper();
-    else stepShallower();
+    else if (k === 'shallower') stepShallower();
+    else asked = null;
   }
 
   function setFocus(f: Focus) {
@@ -381,6 +398,13 @@
     if (!tree) return;
     if (expanded.has(id)) expanded = collapse(tree, expanded, id);
     else if (view?.expandable.includes(id)) expanded = new Set([...expanded, id]);
+    else return;
+    inViewNext = id;
+  }
+
+  function unfold(id: string) {
+    unfolded = new Set([...unfolded, id]);
+    inViewNext = id;
   }
 
   $effect(() => {
@@ -404,10 +428,15 @@
         console.info(`layout ${v.nodes.length} nodes ${l.edges.length} edges ${Math.round(performance.now() - t0)} ms`);
         laid = { layout: l, drawn: d };
         busy = false;
+        const show = inViewNext;
+        inViewNext = null;
         if (fitNext) {
           fitNext = false;
           await tick();
           diagram?.fit();
+        } else if (show !== null) {
+          await tick();
+          diagram?.reveal(show);
         }
       })
       .catch((e) => {
@@ -486,6 +515,7 @@
 <div class="flex h-full flex-col">
   <Toolbar
     level={activeLevel}
+    ask={askLevel}
     partial={partialLevel}
     depth={{
       canDeeper,
@@ -570,7 +600,7 @@
         {selected}
         {fileCounts}
         onselect={(id) => (selected = id)}
-        onunfold={(c) => (unfolded = new Set([...unfolded, c]))}
+        onunfold={unfold}
         {shown}
         focused={focusActive(focus)}
         ontoggle={toggle}

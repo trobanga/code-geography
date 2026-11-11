@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fitTransform, labelAnchor, polylineMidpoint, zoomAt } from './viewport';
+import { fitTransform, labelAnchor, polylineMidpoint, reveal, zoomAt } from './viewport';
 
 describe('fitTransform', () => {
   it('scales the content into the viewport with a margin and centers it', () => {
@@ -47,5 +47,38 @@ describe('labelAnchor', () => {
 
   it('marks horizontal segments', () => {
     expect(labelAnchor([{ x: 0, y: 5 }, { x: 80, y: 5 }])).toEqual({ x: 40, y: 5, horizontal: true });
+  });
+});
+
+describe('reveal', () => {
+  const vp = { width: 1000, height: 600 };
+  it('keeps the transform when the box is inside the viewport with the margin', () => {
+    const t = { x: 10, y: 20, k: 0.5 };
+    expect(reveal({ x: 100, y: 100, width: 200, height: 100 }, vp, t, 16)).toBe(t);
+  });
+  it('pans the least so that a box off the left edge comes in', () => {
+    // Screen left = 100 * 0.5 - 80 = -30: 46 pixels to the margin.
+    expect(reveal({ x: 100, y: 100, width: 200, height: 100 }, vp, { x: -80, y: 20, k: 0.5 }, 16)).toEqual({ x: -34, y: 20, k: 0.5 });
+  });
+  it('pans the least so that a box off the right edge comes in', () => {
+    // Screen right = 300 * 0.5 + 900 = 1050: 66 pixels past the margin.
+    expect(reveal({ x: 100, y: 100, width: 200, height: 100 }, vp, { x: 900, y: 20, k: 0.5 }, 16)).toEqual({ x: 834, y: 20, k: 0.5 });
+  });
+  it('pans the least so that a box above or below the viewport comes in', () => {
+    const box = { x: 100, y: 100, width: 200, height: 100 };
+    // Screen top = 50 - 60 = -10; screen bottom = 100 + 560 = 660.
+    expect(reveal(box, vp, { x: 10, y: -60, k: 0.5 }, 16)).toEqual({ x: 10, y: -34, k: 0.5 });
+    expect(reveal(box, vp, { x: 10, y: 560, k: 0.5 }, 16)).toEqual({ x: 10, y: 484, k: 0.5 });
+  });
+  it('scales down just enough and centres a box larger than the viewport', () => {
+    // At k = 1 the box is 1936 wide; 1000 - 2 * 16 = 968 fit, so k = 0.5.
+    const t = reveal({ x: 100, y: 100, width: 1936, height: 400 }, vp, { x: 0, y: 0, k: 1 }, 16);
+    expect(t).toEqual({ k: 0.5, x: 500 - (100 + 968) * 0.5, y: 300 - 300 * 0.5 });
+  });
+  it('pans a box that is on screen but within the margin', () => {
+    const box = { x: 0, y: 100, width: 100, height: 100 };
+    const t = { x: 5, y: 0, k: 1 };
+    expect(reveal(box, vp, t, 0)).toBe(t);
+    expect(reveal(box, vp, t, 16)).toEqual({ x: 16, y: 0, k: 1 });
   });
 });

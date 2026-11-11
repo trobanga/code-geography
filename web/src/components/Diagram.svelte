@@ -10,7 +10,7 @@
   import type { LaidNode, Layout, Point } from '../lib/layout';
   import type { View, ViewEdge } from '../lib/types';
   import { orthoRoutes } from '../lib/ortho';
-  import { fitTransform, labelAnchor, zoomAt, type Transform } from '../lib/viewport';
+  import { fitTransform, labelAnchor, reveal as revealBox, zoomAt, type Transform } from '../lib/viewport';
 
   let {
     tree,
@@ -67,6 +67,12 @@
 
   export function fit() {
     if (vw > 0 && vh > 0) t = fitTransform(layout, { width: vw, height: vh }, 16);
+  }
+
+  /** Pans, and zooms out if needed, so that the box of `id` is in view; no change when it is. */
+  export function reveal(id: string) {
+    const r = rects.get(id);
+    if (r && vw > 0 && vh > 0) t = revealBox({ x: r.x, y: r.y, width: r.w, height: r.h }, { width: vw, height: vh }, t, 16);
   }
 
   const expandable = $derived(new Set(view.expandable));

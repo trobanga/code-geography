@@ -23,4 +23,7 @@ describe('depthKey', () => {
     expect(at({ tagName: 'DIV', isContentEditable: true })).toBe(null);
     expect(at({ tagName: 'BUTTON' })).toBe('deeper');
   });
+  it('maps Escape to cancel a step that waits for a second click', () => {
+    expect(key('Escape')).toBe('cancel');
+  });
 });

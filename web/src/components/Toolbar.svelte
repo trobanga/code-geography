@@ -11,6 +11,7 @@
     hasCommit,
     onsrc,
     level,
+    ask,
     partial,
     depth,
     tests,
@@ -30,6 +31,8 @@
     hasCommit: boolean;
     onsrc: (s: Source) => void;
     level: Level | null;
+    /** A level button waits for a second click: the number of boxes it gives. */
+    ask: { level: Level; boxes: number } | null;
     /** Between two levels: the deeper one whose containers are all open; extra containers are open too. */
     partial: { level: Level; extra: number } | null;
     depth: {
@@ -74,9 +77,13 @@
           ? 'bg-[var(--fg)] text-[var(--bg)]'
           : partial?.level === l
             ? 'bg-[var(--line)]'
-            : ''}"
-        title={partial?.level === l ? `${l} and ${partial.extra} more open containers` : undefined}
-        onclick={() => onlevel(l)}>{l}</button
+            : ''} {ask?.level === l ? 'border-[var(--accent)] text-[var(--accent)]' : ''}"
+        title={ask?.level === l
+          ? `click again to show ${ask.boxes} boxes, Escape to cancel`
+          : partial?.level === l
+            ? `${l} and ${partial.extra} more open containers`
+            : undefined}
+        onclick={() => onlevel(l)}>{ask?.level === l ? `${l} ${ask.boxes.toLocaleString('en')} boxes?` : l}</button
       >
     {/each}
   </div>
@@ -89,7 +96,7 @@
     >
     <button
       class="{btn} -ml-px disabled:opacity-40 {depth.ask !== null ? 'border-[var(--accent)] text-[var(--accent)]' : ''}"
-      title={depth.ask !== null ? `click again to show ${depth.ask} boxes` : 'one layer more (+)'}
+      title={depth.ask !== null ? `click again to show ${depth.ask} boxes, Escape to cancel` : 'one layer more (+)'}
       disabled={!depth.canDeeper}
       onclick={depth.ondeeper}>{depth.ask !== null ? `+ ${depth.ask.toLocaleString('en')} boxes?` : '+'}</button
     >

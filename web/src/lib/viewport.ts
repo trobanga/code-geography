@@ -8,6 +8,11 @@ interface Size {
   height: number;
 }
 
+interface Box extends Size {
+  x: number;
+  y: number;
+}
+
 export const MAX_FIT_SCALE = 1.5;
 
 /** Screen = world * k + (x, y). */
@@ -20,6 +25,35 @@ export function fitTransform(content: Size, viewport: Size, margin: number): Tra
     x: (viewport.width - content.width * k) / 2,
     y: (viewport.height - content.height * k) / 2,
   };
+}
+
+/**
+ * The transform that shows `box` (world coordinates) inside the viewport, `margin` pixels from
+ * its edges, with the least change: `t` itself when the box is in view.
+ */
+export function reveal(box: Box, viewport: Size, t: Transform, margin: number): Transform {
+  // The scale rule of `fitTransform`, capped by the present scale: never zooms in.
+  const fit = fitTransform(box, viewport, margin);
+  if (fit.k < t.k) {
+    return {
+      k: fit.k,
+      x: viewport.width / 2 - (box.x + box.width / 2) * fit.k,
+      y: viewport.height / 2 - (box.y + box.height / 2) * fit.k,
+    };
+  }
+  const left = box.x * t.k + t.x;
+  const top = box.y * t.k + t.y;
+  const dx = shift(left, left + box.width * t.k, viewport.width, margin);
+  const dy = shift(top, top + box.height * t.k, viewport.height, margin);
+  if (dx === 0 && dy === 0) return t;
+  return { k: t.k, x: t.x + dx, y: t.y + dy };
+}
+
+/** Pan along one axis that brings the screen span `lo`..`hi` inside 0..`size` less the margins. */
+function shift(lo: number, hi: number, size: number, margin: number): number {
+  if (lo < margin) return margin - lo;
+  if (hi > size - margin) return size - margin - hi;
+  return 0;
 }
 
 export function polylineMidpoint(pts: { x: number; y: number }[]): { x: number; y: number } {
