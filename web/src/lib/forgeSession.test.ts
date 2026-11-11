@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { memoryCache, type Entry, type Forge, type Repo } from './forge';
 import { forgeSession, NO_FORGE, type ForgeState, type SessionDeps } from './forgeSession';
-import { parseRepo } from './github';
+import { parseSource } from './forges';
 
 const HEAD = 'a'.repeat(40);
 const BASE = 'b'.repeat(40);
@@ -24,8 +24,11 @@ function setup() {
   /** Answers of `resolve` held back until released: for stale replies. */
   const held = new Map<string, () => void>();
   const sha = (ref: string | undefined) => (ref === 'old' ? BASE : ref && /^[0-9a-f]{40}$/.test(ref) ? ref : HEAD);
+  /** The origin of each repository that the session asked a forge for. */
+  const origins: (string | undefined)[] = [];
   const forge: Forge = {
     host: 'example.org',
+    name: 'Example',
     async resolve(repo: Repo) {
       calls.push(`resolve ${repo.ref}`);
       if (repo.ref?.startsWith('slow')) await new Promise<void>((ok) => held.set(repo.ref!, ok));
@@ -56,9 +59,11 @@ function setup() {
   let state: ForgeState = NO_FORGE;
   const cache = memoryCache();
   const deps: SessionDeps = {
-    forge,
-    name: 'Example',
-    parse: parseRepo,
+    forge: (repo) => {
+      origins.push(repo.origin);
+      return forge;
+    },
+    parse: parseSource,
     cache: async () => cache,
     isInput,
     ready: async () => {},
@@ -84,7 +89,7 @@ function setup() {
     hash: () => '#now',
     onState: (s) => (state = s),
   };
-  return { session: forgeSession(deps), calls, phases, errors, shown, held, state: () => state, cancelOther: () => ++seq };
+  return { session: forgeSession(deps), origins, calls, phases, errors, shown, held, state: () => state, cancelOther: () => ++seq };
 }
 
 const REPO = { owner: 'o', name: 'r' };
@@ -101,6 +106,18 @@ async function release(held: Map<string, () => void>, ref: string) {
 }
 
 describe('forgeSession', () => {
+  it('opens a repository of another host with the forge of its origin, at `kind:host/owner/repo@sha`, and keeps the origin for the commit list', async () => {
+    const t = setup();
+    expect(t.session.openInput('https://git.example.org/o/r/src/branch/main')).toBeNull();
+    await until(() => t.shown.length > 0);
+    expect(t.state()).toMatchObject({ at: `forgejo:git.example.org/o/r@${HEAD}`, repo: { ...REPO, origin: 'https://git.example.org', kind: 'forgejo' } });
+    t.session.toggleList();
+    await until(() => t.state().commits !== null);
+    expect(new Set(t.origins)).toEqual(new Set(['https://git.example.org']));
+    // The hash form of `at` opens the same commit and costs no open.
+    expect(t.session.followHash(`forgejo:git.example.org/o/r@${HEAD}`, '#h', undefined)).toBe(false);
+  });
+
   it('opens a repository: shows the head graph, at `owner/repo@sha`', async () => {
     const t = setup();
     await t.session.open({ ...REPO, ref: 'main' }, undefined, '#view');
@@ -277,7 +294,7 @@ describe('forgeSession', () => {
 
   it('the input field: an error for what is not a repository; an overlay for a range; a note in the summary', async () => {
     const t = setup();
-    expect(t.session.openInput('nonsense')).toMatch(/^not a GitHub repository: "nonsense"/);
+    expect(t.session.openInput('nonsense')).toMatch(/^not a repository: "nonsense"/);
     expect(t.calls).toEqual([]);
     expect(t.session.openInput(`o/r@${BASE}..${HEAD}`)).toBeNull();
     await until(() => t.shown.length > 0);

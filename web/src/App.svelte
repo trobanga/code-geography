@@ -33,7 +33,8 @@
   import { openCache, type TextCache } from './lib/forge';
   import { commitRows } from './lib/forgeDiff';
   import { forgeSession, NO_FORGE, shownBase, type ForgeState } from './lib/forgeSession';
-  import { github, parseRepo } from './lib/github';
+  import { forgeFor, parseSource } from './lib/forges';
+  import { tokenStore, type TokenField } from './lib/tokenStore';
   import { diffInWorker, indexInWorker } from './lib/indexProject';
   import { inputError, summarize, type Summary } from './lib/project';
   import { collectDir, fromEntry, type Collect, type DirEntry } from './lib/walk';
@@ -53,10 +54,16 @@
   /** The repository of a forge shown (ADR 0020, 0021); `at` is null for any other source. */
   let fs = $state.raw<ForgeState>(NO_FORGE);
   let forgeCache: Promise<TextCache> | null = null;
+  // Storage getters, since reading `sessionStorage` itself throws where site data is blocked.
+  const tokens = tokenStore(
+    () => globalThis.sessionStorage,
+    () => globalThis.localStorage,
+  );
+  const net = { fetch: (url: string, i?: Parameters<typeof fetch>[1]) => fetch(url, i) };
   const forge = forgeSession({
-    forge: github({ fetch: (url, i) => fetch(url, i) }),
-    name: 'GitHub',
-    parse: parseRepo,
+    // A new forge per open, with the token of its origin as stored now (ADR 0022).
+    forge: (repo) => (repo.origin && repo.kind ? forgeFor(repo.kind, repo.origin, net, tokens.get(repo.origin)) : forgeFor('github', 'https://github.com', net)),
+    parse: parseSource,
     cache: () => (forgeCache ??= openCache()),
     isInput,
     ready: init,
@@ -72,6 +79,24 @@
     show: (text, summary, hash) => loadOpened(text, summary, hash, true),
     hash: () => location.hash,
     onState: (s) => (fs = s),
+  });
+  /** The origin of a non-GitHub repository that the hash asks for: its token field shows also when the open failed. */
+  let hashOrigin = $state<string | null>(null);
+  let tokenRev = $state(0);
+  const auth: TokenField = $derived({
+    origin: fs.repo?.origin ?? hashOrigin,
+    rev: tokenRev,
+    kept: (o) => tokens.kept(o),
+    save: (o, t, keep) => {
+      tokens.set(o, t, keep);
+      tokenRev++;
+    },
+    forget: (o) => {
+      tokens.forget(o);
+      tokenRev++;
+      (forgeCache ??= openCache()).then((c) => c.clear()).catch(() => {});
+    },
+    retry: () => followForgeHash(location.hash, true),
   });
   /** /graph.json is missing: show the start screen. */
   let missing = $state(false);
@@ -261,6 +286,20 @@
     }
   }
 
+  /**
+   * A hash with `gh=` or `forge=`: the same commit (ADR 0020, 0022). False: it names what is shown.
+   * `again`: after a token was given, also when the hash names what is shown.
+   */
+  function followForgeHash(hash: string, again = false): boolean {
+    const d = decodeHash(hash);
+    const spec = d.gh ?? d.forge;
+    if (!spec) return false;
+    const p = d.forge ? parseSource(d.forge) : null;
+    hashOrigin = p?.ok ? (p.repo.origin ?? null) : null;
+    if (again) error = null;
+    return forge.followHash(spec, hash, d.base);
+  }
+
   /** The text of the repository field: a clear message for anything that is not a repository (G1). */
   function openForgeInput(input: string) {
     const e = forge.openInput(input);
@@ -383,7 +422,8 @@
     if (!hashState) return;
     const h = encodeHash({
       src: src ?? undefined,
-      gh: fs.at ?? undefined,
+      gh: fs.repo && !fs.repo.origin ? (fs.at ?? undefined) : undefined,
+      forge: fs.repo?.origin ? (fs.at ?? undefined) : undefined,
       base: shownBase(fs),
       level: hashState.level,
       tests,
@@ -400,8 +440,8 @@
     const onHash = () => {
       if (location.hash === lastHash) return;
       const d = decodeHash(location.hash);
-      if (d.gh) {
-        if (!forge.followHash(d.gh, location.hash, d.base)) applyHash(location.hash);
+      if (d.gh || d.forge) {
+        if (!followForgeHash(location.hash)) applyHash(location.hash);
         return;
       }
       const s = d.src ?? 'graph';
@@ -414,7 +454,7 @@
       .then((r) => (hasCommit = r.ok && !!r.headers.get('content-type')?.includes('json')))
       .catch(() => (hasCommit = false));
     const start = decodeHash(location.hash);
-    if (start.gh) forge.followHash(start.gh, location.hash, start.base);
+    if (start.gh || start.forge) followForgeHash(location.hash);
     else fetchSource(start.src ?? 'graph');
     return () => window.removeEventListener('hashchange', onHash);
   });
@@ -469,7 +509,8 @@
     onreset={() => (offsets = new Map())}
     onfile={(f) => f.text().then((t) => loadOpened(t, null))}
     ondir={openDirectory}
-    ongithub={openForgeInput}
+    onrepo={openForgeInput}
+    {auth}
   />
   {#if phase}
     <div class="border-b border-[var(--line)] px-3 py-1 text-[var(--muted)]" data-phase>{phase}…</div>
@@ -555,14 +596,15 @@
     {:else if missing}
       <div class="flex flex-1 items-center justify-center">
         <div class="flex max-w-md flex-col gap-3" data-start>
-          <p>No <code>graph.json</code> here. Open a project directory, or drop one anywhere on this page, to index it in this browser (Java and Rust). Or give a public GitHub repository. Or open a graph file made by <code>cg index</code>.</p>
-          <p class="text-[var(--muted)]">A local directory is not stored: a reload returns to this screen. A GitHub repository stays in the link.</p>
+          <p>No <code>graph.json</code> here. Open a project directory, or drop one anywhere on this page, to index it in this browser (Java and Rust). Or give a repository of GitHub or of a Forgejo host (a private one with a token). Or open a graph file made by <code>cg index</code>.</p>
+          <p class="text-[var(--muted)]">A local directory is not stored: a reload returns to this screen. A repository stays in the link; its token does not.</p>
           <div class="flex flex-wrap gap-2">
             <OpenButtons
               btn="px-2 py-0.5 border border-[var(--line)] hover:border-[var(--muted)]"
               onfile={(f) => f.text().then((t) => loadOpened(t, null))}
               ondir={openDirectory}
-              ongithub={openForgeInput}
+              onrepo={openForgeInput}
+              {auth}
             />
           </div>
         </div>

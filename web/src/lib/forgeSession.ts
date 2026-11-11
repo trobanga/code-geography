@@ -52,9 +52,8 @@ const COMMITS = 30;
 type Indexed = { graphText: string; report: { calls: CallReport } };
 
 export interface SessionDeps {
-  forge: Forge;
-  /** The name of the forge for the user, e.g. `GitHub`. */
-  name: string;
+  /** The forge of the repository's origin, with the token of that origin (ADR 0022); asked for each open. */
+  forge: (repo: Repo) => Forge;
   /** The text of the input field or of the hash: a repository, a ref and maybe an overlay, or why it is not one. */
   parse: (input: string) => Parsed;
   cache: () => Promise<TextCache>;
@@ -78,6 +77,11 @@ export interface SessionDeps {
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
+/** The repository at a sha as the hash holds it: `owner/repo@sha` for GitHub, else `kind:host/owner/repo@sha` (ADR 0022). */
+const atOf = (repo: Repo, sha: string) => `${repo.origin ? `${repo.kind}:${new URL(repo.origin).host}/` : ''}${repo.owner}/${repo.name}@${sha}`;
+/** Only the repository, no ref. */
+const bare = (repo: Repo): Repo => ({ owner: repo.owner, name: repo.name, ...(repo.origin ? { origin: repo.origin, kind: repo.kind } : {}) });
+
 export function forgeSession(d: SessionDeps) {
   let s = NO_FORGE;
   const set = (patch: Partial<ForgeState>) => d.onState((s = { ...s, ...patch }));
@@ -93,7 +97,8 @@ export function forgeSession(d: SessionDeps) {
       await d.ready();
       const t0 = performance.now();
       d.phase(`opening ${id}`);
-      const f = await fetchRepo(d.forge, repo, await d.cache(), d.isInput, (p) => {
+      const forge = d.forge(repo);
+      const f = await fetchRepo(forge, repo, await d.cache(), d.isInput, (p) => {
         if (current()) d.phase(p);
       });
       if (!current()) return;
@@ -106,11 +111,11 @@ export function forgeSession(d: SessionDeps) {
       d.phase(null);
       const short = f.sha.slice(0, 7);
       const label = repo.ref && repo.ref.toLowerCase() !== f.sha ? `${id}@${repo.ref} (${short})` : `${id}@${short}`;
-      const summary = summarize(label, f.paths, g, r.report, `Fetched from ${d.name} at ${f.sha}; cached by blob sha in this browser. A reload opens the same commit.`);
+      const summary = summarize(label, f.paths, g, r.report, `Fetched from ${forge.name} at ${f.sha}; cached by blob sha in this browser. A reload opens the same commit.`);
       if (note) summary.text += ` (${note})`;
       set({
-        at: `${id}@${f.sha}`,
-        repo: { owner: repo.owner, name: repo.name },
+        at: atOf(repo, f.sha),
+        repo: bare(repo),
         head: { text: r.graphText, summary },
         overlay: null,
         mode: 'graph',
@@ -138,18 +143,19 @@ export function forgeSession(d: SessionDeps) {
       const t0 = performance.now();
       d.phase(`opening ${id}`);
       const cache = await d.cache();
+      const forge = d.forge(repo);
       let range: Range;
       if ('kind' in how) {
         d.phase(`resolving ${how.kind === 'pull' ? `pull request #${how.n}` : how.kind === 'commit' ? `commit ${repo.ref}` : `${how.base}${how.mergeBase ? '...' : '..'}${repo.ref}`} of ${id}`);
-        range = await resolveRange(d.forge, repo, how);
+        range = await resolveRange(forge, repo, how);
       } else range = how;
       if (!current()) return;
-      if (s.at === `${id}@${range.head}` && s.overlay && s.overlay.range.base === range.base) {
+      if (s.at === atOf(repo, range.head) && s.overlay && s.overlay.range.base === range.base) {
         d.phase(null);
         await show('commit', hash);
         return;
       }
-      const inputs = await fetchOverlay(d.forge, repo, range, cache, d.isInput, (p) => {
+      const inputs = await fetchOverlay(forge, repo, range, cache, d.isInput, (p) => {
         if (current()) d.phase(p);
       });
       if (!current()) return;
@@ -162,15 +168,15 @@ export function forgeSession(d: SessionDeps) {
       const head = headOf(graph);
       console.info(`overlay ${id} ${names.base}..${names.head}: ${graph.nodes.length} nodes ${graph.edges.length} edges ${Math.round(performance.now() - t0)} ms`);
       d.phase(null);
-      const origin = `Fetched from ${d.name}; cached by blob sha in this browser. The overlay of ${range.base ?? 'nothing'} to ${range.head} is built here; a reload shows the same overlay.`;
+      const origin = `Fetched from ${forge.name}; cached by blob sha in this browser. The overlay of ${range.base ?? 'nothing'} to ${range.head} is built here; a reload shows the same overlay.`;
       const headSummary = summarize(`${id}@${names.head}`, inputs.head.paths, head, r.report, origin);
       if (note) headSummary.text += ` (${note})`;
       const summary = summarize(`${id} ${names.base} → ${names.head}`, inputs.head.paths, graph, r.report, origin);
       summary.text += `, ${inputs.changed.length} changed files${note ? ` (${note})` : ''}`;
       set({
         ...(keepList ? {} : { commits: null, listOpen: false }),
-        at: `${id}@${range.head}`,
-        repo: { owner: repo.owner, name: repo.name },
+        at: atOf(repo, range.head),
+        repo: bare(repo),
         head: { text: JSON.stringify(head), summary: headSummary },
         overlay: { text: r.graphText, summary, range },
         mode: 'commit',
@@ -235,7 +241,7 @@ export function forgeSession(d: SessionDeps) {
     const anchor = s.at.slice(s.at.lastIndexOf('@') + 1);
     set({ listStatus: `listing the last ${COMMITS} commits` });
     try {
-      const list = await cachedCommits(d.forge, repo, anchor, COMMITS, await d.cache());
+      const list = await cachedCommits(d.forge(repo), repo, anchor, COMMITS, await d.cache());
       if (s.repo !== repo) return;
       set({ commits: { anchor, list }, listStatus: null });
     } catch (e) {

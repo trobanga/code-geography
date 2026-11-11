@@ -26,6 +26,7 @@ function twoCommits(commits: Record<string, Record<string, string>>) {
   const calls: string[] = [];
   const forge: Forge = {
     host: 'example.org',
+    name: 'Example',
     async tree(_repo, sha) {
       calls.push(`tree ${sha[0]}`);
       return Object.entries(commits[sha]).map(([path, text]): Entry => ({ path, blobSha: `blob:${text}` }));
@@ -104,7 +105,7 @@ describe('fetchOverlay', () => {
 describe('resolveRange', () => {
   it('takes a commit and its first parent from one history call; a root commit has no base', async () => {
     const calls: string[] = [];
-    const forge = { host: 'h', tree: async () => [], text: async () => '', ...history(calls) };
+    const forge = { host: 'h', name: 'h', tree: async () => [], text: async () => '', ...history(calls) };
     expect(await resolveRange(forge, { ...REPO, ref: 'abc1234' }, { kind: 'commit' })).toEqual({ base: BASE, head: HEAD });
     expect(await resolveRange(forge, { ...REPO, ref: 'root' }, { kind: 'commit' })).toEqual({ base: null, head: 'r'.repeat(40) });
     expect(calls).toEqual(['commits abc1234 1', 'commits root 1']);
@@ -112,7 +113,7 @@ describe('resolveRange', () => {
 
   it('resolves both ends of A..B; for A...B the head, then the merge base of A and it', async () => {
     const calls: string[] = [];
-    const forge = { host: 'h', tree: async () => [], text: async () => '', ...history(calls) };
+    const forge = { host: 'h', name: 'h', tree: async () => [], text: async () => '', ...history(calls) };
     expect(await resolveRange(forge, { ...REPO, ref: 'v2' }, { kind: 'range', base: 'v1', mergeBase: false })).toEqual({ base: 'v1-sha', head: 'v2-sha' });
     expect(await resolveRange(forge, { ...REPO, ref: 'f' }, { kind: 'range', base: 'main', mergeBase: true })).toEqual({ base: 'mb-of-main-f-sha', head: 'f-sha' });
     expect(calls).toEqual(['resolve v2', 'resolve v1', 'resolve f', 'mergeBase main f-sha']);
@@ -120,7 +121,7 @@ describe('resolveRange', () => {
 
   it('takes the head of a pull request and its merge base from the forge', async () => {
     const calls: string[] = [];
-    const forge = { host: 'h', tree: async () => [], text: async () => '', ...history(calls) };
+    const forge = { host: 'h', name: 'h', tree: async () => [], text: async () => '', ...history(calls) };
     expect(await resolveRange(forge, REPO, { kind: 'pull', n: 3 })).toEqual({ base: 'pull-base', head: 'pull-head' });
     expect(calls).toEqual(['pull 3']);
   });
@@ -129,7 +130,7 @@ describe('resolveRange', () => {
 describe('cachedCommits', () => {
   it('asks the forge once for the history of a commit sha, which never changes', async () => {
     const calls: string[] = [];
-    const forge = { host: 'h', tree: async () => [], text: async () => '', ...history(calls) };
+    const forge = { host: 'h', name: 'h', tree: async () => [], text: async () => '', ...history(calls) };
     const cache = memoryCache();
     const first = await cachedCommits(forge, REPO, HEAD, 2, cache);
     expect(first.map((c) => c.sha)).toEqual([HEAD, BASE]);

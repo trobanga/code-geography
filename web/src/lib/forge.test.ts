@@ -9,6 +9,7 @@ function fakeForge(files: Record<string, string>, host = 'example.org') {
   const calls: string[] = [];
   const forge: Forge = {
     host,
+    name: host,
     async resolve(repo) {
       calls.push(`resolve ${repo.ref ?? 'HEAD'}`);
       return { sha: SHA };
@@ -110,6 +111,15 @@ describe('openCache', () => {
       await cache.put('k', 'v');
       expect(await cache.get('k')).toBe('v');
     }
+  });
+
+  it('clears every entry, as "forget token" asks', async () => {
+    const cache = await openCache(undefined);
+    await cache.put('blob', 'text');
+    await cache.put('tree:h/o/r@s', '[]');
+    await cache.clear();
+    expect(await cache.get('blob')).toBeUndefined();
+    expect(await cache.get('tree:h/o/r@s')).toBeUndefined();
   });
 });
 

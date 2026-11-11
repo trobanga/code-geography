@@ -105,6 +105,13 @@ describe('hash', () => {
     expect(encodeHash({ ...state, base: null })).toContain('&base=none&');
   });
 
+  it('keeps a repository of another host as forge=kind:host/owner/repo@sha, with its base', () => {
+    const head = 'forgejo:git.example.org:3000/o.x/r@0123456789abcdef0123456789abcdef01234567';
+    const state = { forge: head, base: null, level: 'modules' as const, tests: false, open: [], edges: DEFAULT_EDGE_OPTIONS };
+    expect(encodeHash(state)).toBe(`#forge=${head}&base=none&level=modules&tests=0`);
+    expect(decodeHash(encodeHash(state))).toEqual(state);
+  });
+
   it('accepts a hash with leading # and missing fields', () => {
     expect(decodeHash('#level=packages')).toEqual({ level: 'packages', tests: false, open: [], edges: DEFAULT_EDGE_OPTIONS });
   });

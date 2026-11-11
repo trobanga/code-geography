@@ -44,7 +44,11 @@ scripts/build-wasm.sh   builds crates/wasm into web/src/lib/wasm (generated, com
                         sets the C include path for the tree-sitter grammars (needs cargo, jq)
 web/               viewer: Svelte 5, Tailwind 4, ELK layout in a web worker, plain SVG
 web/src/lib/forge.ts   opens a repository of a forge: pool, cache by blob sha, progress (ADR 0020);
-                   github.ts is the only Forge (URLs, answers, errors, input parse); hash gh=owner/repo@sha
+                   github.ts and forgejo.ts are the Forges (URLs, answers, errors, URL forms);
+web/src/lib/forges.ts  kind of forge (github, forgejo, later gitlab): kindOf(host), forgeFor(kind, ...),
+                   parseSource; hash gh=owner/repo@sha, forge=kind:host/owner/repo@sha (ADR 0022)
+web/src/lib/tokenStore.ts  tokens by origin (session/local storage) and authorized(): the only
+                   place that adds a token, refuses any other origin (ADR 0022)
 docs/adr/          architecture decision records (0016: how Rust maps onto the graph)
 ```
 
@@ -103,6 +107,12 @@ pnpm dev                                     # http://localhost:5173/
   `mod` reaches and `#[path]` mods are missing (the report lists them); `[lib]` and
   `[[bin]]` paths other than the Cargo defaults are not read (ADR 0016).
 - No AI grouping (deferred, ADR 0010). GitHub: public repositories only (no token yet,
-  60 API calls per hour); the overlay from GitHub compares trees by blob sha (ADR 0021).
+  60 API calls per hour); the overlay from a forge compares trees by blob sha (ADR 0021).
+- Forgejo (ADR 0022): an unknown host is taken as Forgejo (`kindOf`); GitLab is
+  planned, not built ("not supported yet"). A private
+  repository needs a token and `[cors] ENABLED = true` with the viewer origin in
+  `ALLOW_DOMAIN` on that host. The token path ran only against a mock. One API call per
+  file (Codeberg: seconds per file). "forget token" clears the text cache of all hosts.
+  No Forgejo under a sub-path; no OAuth; no CSP (the host is free input).
 - Local classes and members of anonymous classes get no node.
 - A rename of a type or method looks like one removal and one addition.

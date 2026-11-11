@@ -8,7 +8,14 @@ export interface Repo {
   name: string;
   /** As typed: a branch, a tag or a commit sha. Absent: the default branch. */
   ref?: string;
+  /** The forge host, e.g. `https://codeberg.org` (ADR 0022). Absent: GitHub. */
+  origin?: string;
+  /** The kind of the forge at `origin` (ADR 0022); with `origin`. */
+  kind?: ForgeKind;
 }
+
+/** The kinds of forge. `gitlab` is planned and not built (ADR 0022). */
+export type ForgeKind = 'github' | 'forgejo' | 'gitlab';
 
 /** One commit of a history list. */
 export interface Commit {
@@ -28,7 +35,7 @@ export interface Entry {
 }
 
 /** The network as `fetch` gives it; a parameter, so that tests and later steps can pass their own. */
-export type Fetch = (url: string, init?: { headers?: Record<string, string> }) => Promise<Response>;
+export type Fetch = (url: string, init?: { headers?: Record<string, string>; redirect?: RequestRedirect }) => Promise<Response>;
 
 /**
  * One host with its API. All of its requests carry its own token, if any, so a token never
@@ -37,6 +44,8 @@ export type Fetch = (url: string, init?: { headers?: Record<string, string> }) =
 export interface Forge {
   /** E.g. `github.com`; part of the cache key of a tree. */
   host: string;
+  /** The name for the user, e.g. `GitHub` or `codeberg.org`. */
+  name: string;
   /** The commit sha of the ref, of the default branch when the ref is absent. */
   resolve(repo: Repo): Promise<{ sha: string }>;
   /** All files of the commit with their blob shas; rejects rather than give a part. */
@@ -75,6 +84,8 @@ export async function pool<T, R>(items: T[], limit: number, work: (item: T) => P
 export interface TextCache {
   get(key: string): Promise<string | undefined>;
   put(key: string, text: string): Promise<void>;
+  /** Removes every entry, of all hosts: a text by blob sha does not know its host. */
+  clear(): Promise<void>;
 }
 
 export function memoryCache(): TextCache {
@@ -82,6 +93,7 @@ export function memoryCache(): TextCache {
   return {
     get: async (k) => m.get(k),
     put: async (k, v) => void m.set(k, v),
+    clear: async () => m.clear(),
   };
 }
 
@@ -124,6 +136,9 @@ export async function openCache(factory: IDBFactory | undefined = globalThis.ind
       } catch {
         // Full or blocked: the next open fetches the file again.
       }
+    },
+    async clear() {
+      await req(db.transaction(STORE, 'readwrite').objectStore(STORE).clear());
     },
   };
 }

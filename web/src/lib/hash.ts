@@ -10,7 +10,9 @@ export interface HashState {
   src?: Source;
   /** A GitHub repository at a commit, `owner/repo@sha` (ADR 0020); instead of `src`. */
   gh?: string;
-  /** With `gh`: the overlay of the commit `base` to the head (ADR 0021); null for a root commit, compared with nothing. */
+  /** A repository of another forge host at a commit, `kind:host/owner/repo@sha` (ADR 0022); instead of `src`. */
+  forge?: string;
+  /** With `gh` or `forge`: the overlay of the commit `base` to the head (ADR 0021); null for a root commit, compared with nothing. */
   base?: string | null;
   level: Level;
   tests: boolean;
@@ -31,8 +33,9 @@ const FLAGS = [
 export function encodeHash(s: HashState): string {
   const parts = [`level=${s.level}`, `tests=${s.tests ? 1 : 0}`];
   if (s.src) parts.unshift(`src=${s.src}`);
-  if (s.gh && s.base !== undefined) parts.unshift(`base=${s.base === null ? 'none' : encodeURIComponent(s.base)}`);
-  if (s.gh) parts.unshift(`gh=${encodeURIComponent(s.gh).replace(/%2F/g, '/').replace(/%40/g, '@')}`);
+  const repo = s.gh ?? s.forge;
+  if (repo && s.base !== undefined) parts.unshift(`base=${s.base === null ? 'none' : encodeURIComponent(s.base)}`);
+  if (repo) parts.unshift(`${s.gh ? 'gh' : 'forge'}=${encodeURIComponent(repo).replace(/%2F/g, '/').replace(/%40/g, '@').replace(/%3A/g, ':')}`);
   if (s.open.length > 0) parts.push(`open=${s.open.map(encodeURIComponent).join(',')}`);
   const on = EDGE_KINDS.filter((k) => s.edges.kinds[k]);
   if (on.length < EDGE_KINDS.length) parts.push(`kinds=${on.length > 0 ? on.join(',') : 'none'}`);
@@ -66,6 +69,7 @@ export function decodeHash(hash: string): HashState {
     const value = part.slice(eq + 1);
     if (key === 'src' && (SOURCES as readonly string[]).includes(value)) state.src = value as Source;
     else if (key === 'gh' && value !== '') state.gh = decodeURIComponent(value);
+    else if (key === 'forge' && value !== '') state.forge = decodeURIComponent(value);
     else if (key === 'base' && value !== '') state.base = value === 'none' ? null : decodeURIComponent(value);
     else if (key === 'level' && (LEVELS as readonly string[]).includes(value)) state.level = value as Level;
     else if (key === 'tests') state.tests = value === '1';

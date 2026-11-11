@@ -11,8 +11,8 @@ const REF = /^[^\s~^:?*[\\]+$/;
 const FORMS =
   'give owner/repo, owner/repo@ref, owner/repo@A..B, owner/repo@A...B, or a URL https://github.com/owner/repo[/tree/<ref> | /commit/<sha> | /compare/A...B | /pull/<n>]';
 
-function make(owner: string, name: string, ref: string | undefined): Repo | null {
-  if (!OWNER.test(owner) || !NAME.test(name) || name === '.' || name === '..') return null;
+function make(owner: string, name: string, ref: string | undefined, ownerRe = OWNER): Repo | null {
+  if (!ownerRe.test(owner) || !NAME.test(name) || name === '.' || name === '..') return null;
   if (ref !== undefined && !REF.test(ref)) return null;
   return ref === undefined ? { owner, name } : { owner, name, ref };
 }
@@ -47,16 +47,19 @@ export function parseRepo(input: string): Parsed {
   return withRange(parts[0], parts[1], at < 0 ? undefined : s.slice(at + 1)) ?? bad;
 }
 
-/** The repository at `ref`; a ref `A..B` or `A...B` is the overlay of a range (git forbids `..` in a ref name). */
-function withRange(owner: string, name: string, ref: string | undefined): Parsed | null {
+/**
+ * The repository at `ref`; a ref `A..B` or `A...B` is the overlay of a range (git forbids `..`
+ * in a ref name). `ownerRe`: the owner names of the host; GitHub's by default.
+ */
+export function withRange(owner: string, name: string, ref: string | undefined, ownerRe = OWNER): Parsed | null {
   const dots = ref === undefined ? -1 : ref.indexOf('..');
   if (ref === undefined || dots < 0) {
-    const repo = make(owner, name, ref);
+    const repo = make(owner, name, ref, ownerRe);
     return repo && { ok: true, repo };
   }
   const mergeBase = ref.startsWith('...', dots);
   const base = ref.slice(0, dots);
-  const repo = make(owner, name, ref.slice(dots + (mergeBase ? 3 : 2)));
+  const repo = make(owner, name, ref.slice(dots + (mergeBase ? 3 : 2)), ownerRe);
   if (!repo || !REF.test(base) || base.includes('..') || repo.ref!.includes('..')) return null;
   return { ok: true, repo, overlay: { kind: 'range', base, mergeBase } };
 }
@@ -74,6 +77,7 @@ const RAW = 'https://raw.githubusercontent.com';
 export function github(net: Net): Forge {
   return {
     host: 'github.com',
+    name: 'GitHub',
 
     /** One API call; none for a full sha. */
     async resolve(repo) {

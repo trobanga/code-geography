@@ -2,6 +2,7 @@
   import type { Source } from '../lib/hash';
   import OpenButtons from './OpenButtons.svelte';
   import type { Collect } from '../lib/walk';
+  import type { TokenField } from '../lib/tokenStore';
   import { KIND_LETTER, kindColor } from '../lib/kinds';
   import { LEVELS, type Level, type NodeKind } from '../lib/types';
 
@@ -21,7 +22,8 @@
     onreset,
     onfile,
     ondir,
-    ongithub,
+    onrepo,
+    auth,
   }: {
     /** null: a file opened from disk. */
     src: Source | null;
@@ -47,7 +49,8 @@
     onreset: () => void;
     onfile: (f: File) => void;
     ondir: (collect: Collect) => void;
-    ongithub: (input: string) => void;
+    onrepo: (input: string) => void;
+    auth: TokenField;
   } = $props();
 
   const kinds: NodeKind[] = ['module', 'package', 'type', 'function'];
@@ -97,7 +100,7 @@
   </label>
   <button class={btn} onclick={onfit}>fit</button>
   <button class="{btn} disabled:opacity-40" disabled={!moved} onclick={onreset}>reset positions</button>
-  <OpenButtons {btn} {onfile} {ondir} {ongithub} />
+  <OpenButtons {btn} {onfile} {ondir} {onrepo} {auth} />
   <span class="text-[var(--muted)]">{busy ? 'layout…' : ''}</span>
   <div class="ml-auto flex items-center gap-3 text-[var(--muted)]">
     {#each kinds as k (k)}
