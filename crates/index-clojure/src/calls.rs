@@ -7,7 +7,7 @@
 use crate::declare::head;
 use crate::syntax::{flat_items, items, keyword, plain_symbol, private, symbol};
 use crate::{Report, locals};
-use cg_core::{Edge, EdgeKind};
+use cg_core::{ClassTable, Edge, EdgeKind};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use tree_sitter::{Node as Ts, Tree};
 
@@ -135,12 +135,20 @@ pub struct File<'s> {
     pub refer_all: Vec<(String, Vec<String>)>,
     /// The declarations that became nodes: `Node::id` of the form to the id of the node.
     pub owned: HashMap<usize, String>,
+    /// The classes that the file can name by their short name: the `:import` clauses and
+    /// the classes of its own `defrecord`, `deftype` and `definterface`. Short name to
+    /// class name.
+    pub imports: HashMap<String, String>,
+    /// The classes of the `:import` clauses: short name and class name, in source order.
+    pub explicit_imports: Vec<(String, String)>,
 }
 
 /// What a name means in one file.
 #[derive(Clone, Copy)]
 struct Scope<'a> {
     vars: &'a HashMap<String, Vars>,
+    /// The classes of the repository: class name to the id of the type node.
+    classes: &'a ClassTable,
     file: &'a File<'a>,
 }
 
@@ -213,7 +221,12 @@ impl<'a> Scope<'a> {
 }
 
 /// The edges that the code of `files` names. `vars` holds the namespaces of the repository.
-pub fn read(files: &[File], vars: &HashMap<String, Vars>, report: &mut Report) -> BTreeSet<Edge> {
+pub fn read(
+    files: &[File],
+    vars: &HashMap<String, Vars>,
+    classes: &ClassTable,
+    report: &mut Report,
+) -> BTreeSet<Edge> {
     let mut edges = BTreeSet::new();
     for file in files {
         for form in flat_items(file.tree.root_node()) {
@@ -221,7 +234,11 @@ pub fn read(files: &[File], vars: &HashMap<String, Vars>, report: &mut Report) -
                 continue;
             }
             let form_head = head(form, file.source);
-            let scope = Scope { vars, file };
+            let scope = Scope {
+                vars,
+                classes,
+                file,
+            };
             if matches!(form_head.as_deref(), Some("defrecord" | "deftype"))
                 && let Some(from) = file.owned.get(&form.id())
             {
@@ -373,6 +390,14 @@ impl Reader<'_> {
             self.unqualified(name, at_head);
             return;
         };
+        // A name that no alias and no namespace of the repository has can be a class.
+        let file = self.scope.file;
+        if !file.aliases.contains_key(namespace)
+            && !self.scope.vars.contains_key(namespace)
+            && self.class_reference(namespace, false)
+        {
+            return;
+        }
         let (to, kind) = match self.scope.qualified(namespace, name) {
             Resolved::External => {
                 self.report.calls.external += 1;
@@ -423,14 +448,74 @@ impl Reader<'_> {
 }
 
 impl Reader<'_> {
+    /// A symbol without namespace part that no var names: a class by its short name, by its
+    /// constructor form (`Foo.`) or by its full name.
+    fn class_symbol(&mut self, name: &str) {
+        if name.starts_with('.') {
+            // A member (`.method`) or the macro `..`.
+        } else if let Some(class) = name.strip_suffix('.') {
+            self.class_reference(class, false);
+        } else {
+            self.class_reference(name, !name.contains('.'));
+        }
+    }
+
+    /// A reference to the class `written`: a short name of the file, or a full name. A local
+    /// can hide a short name (`hideable`). Whether `written` is a class site at all: a name
+    /// with dots that is no class of the repository is one only if its last segment starts
+    /// with an upper-case letter, so that `clojure.string` is not counted as a class. This
+    /// decides the count only, never an edge.
+    fn class_reference(&mut self, written: &str, hideable: bool) -> bool {
+        let file = self.scope.file;
+        let class = if let Some(class) = file.imports.get(written) {
+            class
+        } else if written.contains('.') {
+            written
+        } else {
+            return false;
+        };
+        if hideable && self.locals.contains(written) {
+            self.report.classes.maybe_local += 1;
+            return true;
+        }
+        let Some(to) = self.scope.classes.get(class) else {
+            let last = class.rsplit('.').next().unwrap_or(class);
+            if !file.imports.contains_key(written) && !last.starts_with(char::is_uppercase) {
+                return false;
+            }
+            self.report.classes.external += 1;
+            self.report.calls.external += 1;
+            return true;
+        };
+        let Some(from) = self.from else {
+            *self
+                .report
+                .no_source_node
+                .entry(self.key.to_string())
+                .or_default() += 1;
+            return true;
+        };
+        self.report.classes.to_type += 1;
+        self.report.calls.to_type += 1;
+        self.edges.insert(Edge {
+            from: from.to_string(),
+            to: to.clone(),
+            kind: EdgeKind::TypeRef,
+            change: None,
+        });
+        true
+    }
+
     /// A symbol without namespace part: a function that the namespace of the file or a
     /// `:refer` names.
     fn unqualified(&mut self, name: &str, at_head: bool) {
         let candidates = self.scope.candidates(name);
+        if candidates.is_empty() {
+            self.class_symbol(name);
+            return;
+        }
         // A var that has no node is not a site (the `def` of a constant is named everywhere).
-        if candidates.is_empty()
-            || (candidates.len() == 1 && candidates.values().all(|t| matches!(t, Target::Var)))
-        {
+        if candidates.len() == 1 && candidates.values().all(|t| matches!(t, Target::Var)) {
             return;
         }
         // The function itself (recursion): no edge, and no site.
@@ -519,6 +604,19 @@ fn implemented(form: Ts, from: &str, scope: Scope, edges: &mut BTreeSet<Edge>) {
                 kind: EdgeKind::Implements,
                 change: None,
             });
+        } else if target.is_none() && namespace.is_none() {
+            // A class of the `:import` clauses or by its full name. A record or type can
+            // only name interfaces here, so a class of the repository is one.
+            let class = scope.file.imports.get(name).map(String::as_str);
+            let class = class.or(name.contains('.').then_some(name));
+            if let Some(to) = class.and_then(|c| scope.classes.get(c)) {
+                edges.insert(Edge {
+                    from: from.to_string(),
+                    to: to.clone(),
+                    kind: EdgeKind::Implements,
+                    change: None,
+                });
+            }
         }
     }
 }

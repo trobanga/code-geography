@@ -8,7 +8,7 @@ mod ns;
 mod syntax;
 
 pub use cg_core::SourceFile;
-use cg_core::{Edge, EdgeKind, Graph, Node, NodeKind, PackageNode, Span};
+use cg_core::{ClassTable, Edge, EdgeKind, Graph, Node, NodeKind, PackageHolds, Span};
 use deps::SourceDirs;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -49,6 +49,25 @@ pub struct Report {
     pub unresolved_names: BTreeMap<String, usize>,
     /// The sites of unqualified symbols that name a var of the repository (stage 2b).
     pub unqualified: Unqualified,
+    /// The sites that name a class (`:import`, stage 3).
+    pub classes: ClassRefs,
+}
+
+/// The sites in the code of functions that name a class: `(Foo. ..)`, `(new Foo ..)`,
+/// `Foo/member`, `Foo` as a symbol, where `Foo` is a class of an `:import` clause or of the
+/// `defrecord`, `deftype` or `definterface` of the file, or a full class name. The sites that
+/// give a count are part of `Report::calls`, too (`to_type`, `external`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct ClassRefs {
+    /// Sites that name a type of the repository: Java or Clojure (an edge, unless it would
+    /// join a node with itself or its ancestor).
+    pub to_type: usize,
+    /// Sites that name a class that is not in the repository (`java.util.Date`).
+    pub external: usize,
+    /// No edge: an occurrence of the short name of an imported class, in a top-level form
+    /// where a local could bind this name (`locals`). Counts the binder and each other
+    /// occurrence, so it is an upper bound of the lost references.
+    pub maybe_local: usize,
 }
 
 /// The unqualified symbols in the code of functions that the namespace of the file or
@@ -112,6 +131,24 @@ impl Layout {
         Layout { modules }
     }
 
+    /// The directories of the `deps.edn` files, relative to the root (empty: the root).
+    pub fn module_dirs(&self) -> impl Iterator<Item = &str> {
+        self.modules.iter().map(|(dir, _)| dir.as_str())
+    }
+
+    /// Whether a file of any language, here a Java file, in the nearest module above `path`
+    /// is test code by the source directories of its `deps.edn`: the longest one that
+    /// contains it comes from an alias. A file outside every source directory is not test
+    /// code. `None`: no `deps.edn` above the path.
+    pub fn module_test_code(&self, path: &str) -> Option<bool> {
+        let (dir, dirs) = self
+            .modules
+            .iter()
+            .filter(|(dir, _)| in_directory(dir, path))
+            .max_by_key(|(dir, _)| dir.len())?;
+        Some(dirs.test_code(relative_to(dir, path)).unwrap_or(false))
+    }
+
     /// Whether the Clojure file at `path` is test code by ADR 23: the longest source
     /// directory of the nearest `deps.edn` above it comes from an alias. `None` for a
     /// path that is no `.clj` or `.cljc` file, has no `deps.edn` above it, or lies in no
@@ -150,6 +187,31 @@ fn relative_to<'a>(dir: &str, path: &'a str) -> &'a str {
 /// Indexes sources that are given as data. The result does not depend on the order of
 /// `files`. Files that `is_input` rejects are ignored.
 pub fn index_sources(root_name: &str, files: &[SourceFile]) -> (Graph, Report) {
+    let indexed = index_sources_with(root_name, files, &ClassTable::new());
+    (indexed.graph, indexed.report)
+}
+
+/// What `index_sources_with` gives.
+#[derive(Debug, Clone)]
+pub struct Indexed {
+    pub graph: Graph,
+    pub report: Report,
+    /// The namespaces that are package nodes by themselves, per module directory, with
+    /// whether the file is test code. A caller that joins the graph with the packages of
+    /// another language nests the packages of a module over the union of both.
+    pub packages: PackageHolds,
+}
+
+/// Like `index_sources`, with what a caller needs to join the graph with those of other
+/// front ends. `classes` are the classes that these front ends declare (Java types): a
+/// class name in an `:import` clause or in code that is in `classes` is a reference to the
+/// type node. The classes of `defrecord`, `deftype`, `definterface` and `defprotocol` of
+/// the sources are known without it.
+pub fn index_sources_with(
+    root_name: &str,
+    files: &[SourceFile],
+    external_classes: &ClassTable,
+) -> Indexed {
     let mut files: Vec<&SourceFile> = files.iter().filter(|f| is_input(&f.path)).collect();
     // The order of the components, as `Path` compares, not of the bytes.
     files.sort_by(|a, b| {
@@ -191,7 +253,7 @@ pub fn index_sources(root_name: &str, files: &[SourceFile]) -> (Graph, Report) {
     }
 
     let mut report = Report::default();
-    let mut packages: BTreeMap<(Option<&str>, String), bool> = BTreeMap::new();
+    let mut packages: PackageHolds = BTreeMap::new();
     let mut declared: Vec<Node> = Vec::new();
     let mut seen: BTreeSet<String> = BTreeSet::new();
     let mut namespaces: BTreeSet<String> = BTreeSet::new();
@@ -199,6 +261,7 @@ pub fn index_sources(root_name: &str, files: &[SourceFile]) -> (Graph, Report) {
     let mut package_ids: BTreeMap<String, String> = BTreeMap::new();
     let mut vars: HashMap<String, calls::Vars> = HashMap::new();
     let mut read: Vec<calls::File> = Vec::new();
+    let mut own_classes = ClassTable::new();
     for file in files.iter().filter(|f| !f.path.ends_with("deps.edn")) {
         let Some(module) = module_of(&module_dirs, &file.path) else {
             report.files_without_deps_edn += 1;
@@ -221,7 +284,7 @@ pub fn index_sources(root_name: &str, files: &[SourceFile]) -> (Graph, Report) {
             report.duplicate_namespaces.push(file.path.clone());
             continue;
         }
-        packages.insert((Some(module), namespace.clone()), is_test);
+        packages.insert((module.to_string(), namespace.clone()), is_test);
         package_ids.insert(namespace.clone(), package_id(module, &namespace));
         requires.push((namespace.clone(), ns::requires(ns_form, source)));
         let specs: Vec<ns::Spec> = ns::specs(ns_form, source)
@@ -246,6 +309,8 @@ pub fn index_sources(root_name: &str, files: &[SourceFile]) -> (Graph, Report) {
             .filter(|s| s.refer_all)
             .map(|s| (s.name.clone(), s.except.clone()))
             .collect();
+        let mut class_imports = ns::class_imports(ns_form, source);
+        let explicit_imports = class_imports.clone();
         let ns_form = ns_form.id();
         let rest: Vec<_> = forms
             .iter()
@@ -267,6 +332,13 @@ pub fn index_sources(root_name: &str, files: &[SourceFile]) -> (Graph, Report) {
                 continue;
             }
             owned.insert(decl.node.id(), decl.id.clone());
+            if decl.kind == NodeKind::Type {
+                let class = class_name(&namespace, &decl.name);
+                own_classes.insert(class.clone(), decl.id.clone());
+                if decl.imports_class {
+                    class_imports.push((decl.name.clone(), class));
+                }
+            }
             for form in &decl.more_forms {
                 owned.insert(form.id(), decl.id.clone());
             }
@@ -295,57 +367,85 @@ pub fn index_sources(root_name: &str, files: &[SourceFile]) -> (Graph, Report) {
             refers,
             refer_all,
             owned,
+            imports: class_imports.into_iter().collect(),
+            explicit_imports,
         });
     }
-    for (module, nodes) in cg_core::package_nodes(&packages) {
-        let module = module.expect("every namespace has a module");
-        for node in &nodes {
-            // A namespace of test code is test code, so that hiding the tests also
-            // hides the namespaces that hold no node (a file of `deftest` only). Unless
-            // a namespace below it is main code: it would be hidden with its parent.
-            let is_test = |n: &PackageNode| {
-                packages
-                    .get(&(Some(module), n.name.clone()))
-                    .copied()
-                    .unwrap_or(n.test)
-            };
-            let test = is_test(node)
-                && nodes
-                    .iter()
-                    .filter(|n| is_below(&n.name, &node.name))
-                    .all(is_test);
+    for (module, nodes) in cg_core::marked_package_nodes(&packages) {
+        for node in nodes {
             graph.nodes.push(Node {
-                id: package_id(module, &node.name),
+                id: package_id(&module, &node.name),
                 parent: Some(match &node.parent {
-                    Some(parent) => package_id(module, parent),
+                    Some(parent) => package_id(&module, parent),
                     None => format!("mod:{module}"),
                 }),
                 kind: NodeKind::Package,
-                name: node.display.clone(),
+                name: node.display,
                 file: None,
                 span: None,
-                test,
+                test: node.test,
                 hash: None,
                 change: None,
             });
         }
     }
     graph.nodes.append(&mut declared);
+    let mut classes = external_classes.clone();
+    classes.extend(own_classes);
     graph.edges = imports(&graph, &package_ids, &requires);
     let tree = NodeTree::new(&graph);
-    let reached: Vec<Edge> = calls::read(&read, &vars, &mut report)
+    let mut class_imports = Vec::new();
+    for file in &read {
+        let from = &package_ids[&file.namespace];
+        for (_, class) in &file.explicit_imports {
+            if let Some(to) = classes.get(class)
+                && !tree.related(from, to)
+            {
+                class_imports.push(Edge {
+                    from: from.clone(),
+                    to: to.clone(),
+                    kind: EdgeKind::Imports,
+                    change: None,
+                });
+            }
+        }
+    }
+    let reached: Vec<Edge> = calls::read(&read, &vars, &classes, &mut report)
         .into_iter()
         .filter(|e| !tree.related(&e.from, &e.to))
         .collect();
+    graph.edges.extend(class_imports);
     graph.edges.extend(reached);
     graph.edges.sort();
-    (graph, report)
+    Indexed {
+        graph,
+        report,
+        packages,
+    }
 }
 
-/// Whether `name` is a namespace below `prefix`, on `.` boundaries.
-fn is_below(name: &str, prefix: &str) -> bool {
-    name.strip_prefix(prefix)
-        .is_some_and(|rest| rest.starts_with('.'))
+/// The binary name of the class that `defrecord` and its relatives make for `name` in
+/// `namespace`: the names are munged (`x.y-z` gives `x.y_z`).
+fn class_name(namespace: &str, name: &str) -> String {
+    format!("{}.{}", munge(namespace), munge(name))
+}
+
+fn munge(name: &str) -> String {
+    let mut out = String::new();
+    for c in name.chars() {
+        match c {
+            '-' => out.push('_'),
+            '?' => out.push_str("_QMARK_"),
+            '!' => out.push_str("_BANG_"),
+            '*' => out.push_str("_STAR_"),
+            '>' => out.push_str("_GT_"),
+            '<' => out.push_str("_LT_"),
+            '=' => out.push_str("_EQ_"),
+            '+' => out.push_str("_PLUS_"),
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 fn package_id(module: &str, namespace: &str) -> String {

@@ -156,7 +156,8 @@ fn a_changed_clojure_file_is_test_code_by_the_source_directories_of_its_deps_edn
             ("modules/gone/test/x_test.clj", Change::Removed),
             ("modules/gone/src/x.clj", Change::Removed),
             ("src/blaze/other.clj", Change::Modified),
-            // Not Clojure: the rule of ADR 8 stays.
+            // A Java file of a `deps.edn` module follows the `deps.edn` too: `src` is a main
+            // path here. Not Clojure and not Java: the rule of ADR 8 stays.
             ("src/test/java/a/FooTest.java", Change::Modified),
             ("src/main/java/a/Foo.java", Change::Modified),
             ("README.md", Change::Modified),
@@ -197,9 +198,65 @@ fn a_changed_clojure_file_is_test_code_by_the_source_directories_of_its_deps_edn
             ),
             ("modules/gone/src/x.clj", Some("mod:modules/gone"), false),
             ("src/blaze/other.clj", Some("mod:"), false),
-            ("src/test/java/a/FooTest.java", Some("mod:"), true),
+            ("src/test/java/a/FooTest.java", Some("mod:"), false),
             ("src/main/java/a/Foo.java", Some("mod:"), false),
             ("README.md", Some("mod:"), false),
+        ]
+    );
+}
+
+#[test]
+fn a_changed_java_file_in_a_deps_edn_module_follows_the_source_directories_of_its_deps_edn() {
+    let deps = "{:paths [\"src\" \"java\"] :aliases {:test {:extra-paths [\"java-test\"]}}}";
+    let before = [
+        source("modules/gone/deps.edn", deps),
+        source("modules/db/deps.edn", deps),
+        source("modules/mvn/pom.xml", ""),
+        source("modules/mvn/deps.edn", deps),
+    ];
+    let after = [
+        source("modules/db/deps.edn", deps),
+        source("modules/mvn/pom.xml", ""),
+        source("modules/mvn/deps.edn", deps),
+    ];
+    let spec = DiffSpec {
+        base: "a".into(),
+        head: "b".into(),
+        changed: changed(&[
+            ("modules/db/java/a/Foo.java", Change::Modified),
+            ("modules/db/java-test/a/FooTest.java", Change::Modified),
+            // `src` is a main path of the module: ADR 8 would say test code.
+            ("modules/db/src/test/java/a/Bar.java", Change::Modified),
+            ("modules/db/other/a/Baz.java", Change::Modified),
+            ("modules/gone/java-test/a/Gone.java", Change::Removed),
+            // A module with a `pom.xml` keeps the rule of ADR 8.
+            ("modules/mvn/src/test/java/a/Mvn.java", Change::Modified),
+            ("modules/mvn/java-test/a/Mvn2.java", Change::Modified),
+            // No module at all.
+            ("src/test/java/a/Free.java", Change::Modified),
+        ]),
+    };
+
+    let (graph, _) = diff_sources("repo", &before, &after, spec);
+
+    let files: Vec<_> = graph
+        .diff
+        .expect("diff info")
+        .files
+        .iter()
+        .map(|f| (f.path.clone(), f.test))
+        .collect();
+    assert_eq!(
+        files,
+        [
+            ("modules/db/java/a/Foo.java".to_string(), false),
+            ("modules/db/java-test/a/FooTest.java".to_string(), true),
+            ("modules/db/src/test/java/a/Bar.java".to_string(), false),
+            ("modules/db/other/a/Baz.java".to_string(), false),
+            ("modules/gone/java-test/a/Gone.java".to_string(), true),
+            ("modules/mvn/src/test/java/a/Mvn.java".to_string(), true),
+            ("modules/mvn/java-test/a/Mvn2.java".to_string(), false),
+            ("src/test/java/a/Free.java".to_string(), true),
         ]
     );
 }

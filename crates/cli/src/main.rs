@@ -113,6 +113,10 @@ fn run(args: Vec<String>) -> Result<(), String> {
             unqualified.maybe_local,
             unqualified.ambiguous
         );
+        eprintln!(
+            "clojure classes: {} to a type of the repository, {} external, {} a local could hide",
+            clojure.classes.to_type, clojure.classes.external, clojure.classes.maybe_local
+        );
         // The most frequent names first: which macros of the repository make them.
         let mut names: Vec<_> = clojure.unresolved_names.iter().collect();
         names.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));

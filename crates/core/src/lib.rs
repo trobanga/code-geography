@@ -6,7 +6,7 @@ mod packages;
 mod report;
 
 pub use input::{SourceFile, holds_no_sources, outside_excluded_directories, text_hash};
-pub use packages::{PackageNode, package_nodes};
+pub use packages::{ClassTable, PackageHolds, PackageNode, marked_package_nodes, package_nodes};
 pub use report::CallReport;
 
 use serde::{Deserialize, Serialize};

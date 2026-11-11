@@ -1358,3 +1358,141 @@ fn a_hidden_name_that_is_not_called_is_no_site() {
     assert_eq!(report.unqualified, cg_index_clojure::Unqualified::default());
     assert_eq!(report.calls.unresolved, 0);
 }
+
+#[test]
+fn import_gives_an_imports_edge_to_the_record_type_or_interface_of_the_repository_by_class_name() {
+    let g = index(&[
+        DEPS,
+        (
+            "src/x/y_z.clj",
+            "(ns x.y-z)\n(defrecord Rec [a])\n(deftype Ty [a])\n(definterface Iface)\n(defprotocol Proto (m [x]))\n(defn f [])\n",
+        ),
+        (
+            "src/u.clj",
+            "(ns u\n  (:import [x.y_z Rec Ty]\n           (x.y_z Iface)\n           x.y_z.Proto\n           [java.util Date]\n           [x.y_z Nope]\n           x.y-z.Rec))\n",
+        ),
+        // A namespace gets no edge to a type in itself.
+        (
+            "src/x/own.clj",
+            "(ns x.own (:import x.own.Mine))\n(defrecord Mine [])\n",
+        ),
+    ]);
+
+    assert_eq!(
+        imports(&g),
+        [
+            ("pkg::u", "type:x.y-z/Iface"),
+            ("pkg::u", "type:x.y-z/Proto"),
+            ("pkg::u", "type:x.y-z/Rec"),
+            ("pkg::u", "type:x.y-z/Ty"),
+        ]
+    );
+}
+
+const CLASSES: &str = "(ns x.y-z)\n(defrecord R1 [a])\n(defrecord R2 [a])\n(defrecord R3 [a])\n\
+(defrecord R4 [a])\n(defrecord R5 [a])\n(defrecord R6 [a])\n(defrecord R7 [a])\n\
+(defrecord R8 [a])\n(defrecord R9 [a])\n(defrecord R10 [a])\n(defrecord R11 [a])\n\
+(defrecord R12 [a])\n";
+
+#[test]
+fn an_imported_or_fully_named_class_in_the_code_of_a_function_gives_a_type_ref_edge() {
+    let (g, report) = run(&[
+        DEPS,
+        ("src/x/y_z.clj", CLASSES),
+        (
+            "src/user.clj",
+            "(ns user (:import [x.y_z R1 R2 R3 R4 R5 R6 R7 R9 R10 R12] [java.util Date]))\n\
+             (defn a [] (R1. 1))\n\
+             (defn b [] (new R2 1))\n\
+             (defn c [] (R3/create 1))\n\
+             (defn d [] R4/CONSTANT)\n\
+             (defn e [x] (instance? R5 x))\n\
+             (defn f [x] (try x (catch R6 e e)))\n\
+             (defn g [x] (.isInstance R7 x))\n\
+             (defn h [] [(x.y_z.R8. 1) x.y_z.R8/make x.y_z.R8])\n\
+             (defn i [^R9 x] x)\n\
+             (defn j [R10] R10)\n\
+             (defn k [] (R11. 1))\n\
+             (defn l [] (Date. 1))\n\
+             (defn m [] [Date/from java.util.Date (java.util.Date. 1)])\n\
+             (defn n [] '(R12 x.y_z.R12))\n",
+        ),
+    ]);
+
+    let mut found = edges_of(&g, EdgeKind::TypeRef);
+    found.sort();
+    assert_eq!(
+        found,
+        vec![
+            ("fn:user/a", "type:x.y-z/R1"),
+            ("fn:user/b", "type:x.y-z/R2"),
+            ("fn:user/c", "type:x.y-z/R3"),
+            ("fn:user/d", "type:x.y-z/R4"),
+            ("fn:user/e", "type:x.y-z/R5"),
+            ("fn:user/f", "type:x.y-z/R6"),
+            ("fn:user/g", "type:x.y-z/R7"),
+            ("fn:user/h", "type:x.y-z/R8"),
+        ]
+    );
+    // The sites: `a` to `g` one each, `h` three; outside the repository `Date.` in `l` and
+    // three in `m`. `j` has the name of a class as a local: both occurrences are counted
+    // as hidden, and give no edge.
+    assert_eq!(report.classes.to_type, 10);
+    assert_eq!(report.classes.external, 4);
+    assert_eq!(report.classes.maybe_local, 2);
+    assert_eq!(report.calls.to_type, 10);
+    assert_eq!(report.calls.external, 4);
+    assert_eq!(report.calls.unresolved, 0);
+}
+
+#[test]
+fn a_full_namespace_name_and_an_alias_are_no_class_references_and_an_alias_wins_over_a_class() {
+    let (g, report) = run(&[
+        DEPS,
+        ("src/x/y_z.clj", CLASSES),
+        (
+            "src/user.clj",
+            "(ns user (:require [clojure.string :as s] [x.y-z :as R1]) (:import [x.y_z R1]))\n\
+             (defn a [] [(clojure.string/join \",\" []) (s/join \",\" []) (R1/->R1 1) (clojure.core/inc 1)])\n",
+        ),
+    ]);
+
+    // `R1/name` names the namespace `x.y-z` by its alias, as the compiler resolves it.
+    let mut found = edges_of(&g, EdgeKind::TypeRef);
+    found.sort();
+    assert_eq!(found, vec![("fn:user/a", "type:x.y-z/R1")]);
+    assert_eq!(report.classes.to_type, 0);
+    assert_eq!(report.classes.external, 0);
+    assert_eq!(report.calls.external, 3);
+}
+
+#[test]
+fn an_imported_or_fully_named_interface_in_the_body_of_a_record_or_type_gives_an_implements_edge() {
+    let g = index(&[
+        DEPS,
+        (
+            "src/x/y_z.clj",
+            "(ns x.y-z)\n(definterface I1)\n(definterface I2)\n(definterface I3)\n(defrecord NotAnInterface [])\n",
+        ),
+        (
+            "src/user.clj",
+            "(ns user (:import [x.y_z I1 I2 NotAnInterface] [java.io Closeable]))\n\
+             (defrecord R [a] I1 (m [this] this) x.y_z.I3 java.io.Closeable (close [_]))\n\
+             (deftype T [a] I2)\n\
+             (defrecord Mine [a] Own)\n\
+             (definterface Own)\n",
+        ),
+    ]);
+
+    let mut found = edges_of(&g, EdgeKind::Implements);
+    found.sort();
+    assert_eq!(
+        found,
+        vec![
+            ("type:user/Mine", "type:user/Own"),
+            ("type:user/R", "type:x.y-z/I1"),
+            ("type:user/R", "type:x.y-z/I3"),
+            ("type:user/T", "type:x.y-z/I2"),
+        ]
+    );
+}

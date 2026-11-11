@@ -38,7 +38,8 @@ crates/index-clojure  Clojure front end on tree-sitter: index_sources(root_name,
 crates/walk        cg-walk: the one directory walk, read_sources(root, is_input) -> Vec<SourceFile>
                    (the only place with std::fs besides the CLI; used by index-java and index)
 crates/index       cg-index: is_input, index_sources, index(root) over all front ends; joins
-                   the graphs and reports (a repository can hold Java and Rust)
+                   the graphs and reports (a repository can hold several languages; Java in a
+                   deps.edn module and one package tree per module, ADR 0025)
                    diff_sources(root_name, base, head, DiffSpec): the overlay of two source sets
                    (CLI and WASM share it)
 crates/cli         cg index <repo> -o graph.json; cg diff <repo> <rev|A..B> -o diff.json
@@ -122,11 +123,12 @@ pnpm dev                                     # http://localhost:5173/
   file (Codeberg: seconds per file). "forget token" clears the text cache of all hosts.
   No Forgejo under a sub-path; no OAuth; no CSP (the host is free input).
 - Clojure (ADR 0023, 0024): an unqualified name gives no edge if its top-level form
-  could bind it anywhere (7 % of such call heads on blaze). `:import` is not read.
+  could bind it anywhere (7 % of such call heads on blaze). A static method call of a
+  Java class goes to the type, a type hint gives no edge (ADR 0025).
   Dispatch of protocols and multimethods is not followed. No node for `def`, `defmethod`,
   `extend-protocol` and for what a macro of the repository declares, so their bodies
-  give no edges and a reference to a `def` has no target. Java files in a `deps.edn` module get no module (their packages stand at the
-  top level). No `.cljs`, no Leiningen. Duplicate namespace names: the first file wins.
+  give no edges and a reference to a `def` has no target. No `.cljs`, no Leiningen.
+  Duplicate namespace names: the first file wins.
   The grammar crate is pinned to 0.2.5 (0.2.9 does not build for wasm32).
 - Local classes and members of anonymous classes get no node.
 - A rename of a type or method looks like one removal and one addition.

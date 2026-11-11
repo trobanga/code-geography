@@ -7,7 +7,7 @@
 mod calls;
 
 pub use cg_core::SourceFile;
-use cg_core::{Edge, EdgeKind, Graph, Node, NodeKind, Span};
+use cg_core::{ClassTable, Edge, EdgeKind, Graph, Node, NodeKind, PackageHolds, Span};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io;
@@ -151,6 +151,48 @@ pub fn index_with_report(root: &Path) -> io::Result<(Graph, Report)> {
 /// `files`. `root_name` names the module of a `pom.xml` in the root. Files that
 /// `is_input` rejects are ignored.
 pub fn index_sources(root_name: &str, files: &[SourceFile]) -> (Graph, Report) {
+    let indexed = index_sources_in(root_name, files, &Modules::none());
+    (indexed.graph, indexed.report)
+}
+
+/// What `index_sources_in` gives.
+#[derive(Debug, Clone)]
+pub struct Indexed {
+    pub graph: Graph,
+    pub report: Report,
+    /// The packages that hold a type, in the modules of `Modules::dirs` only, per module
+    /// directory, with whether all their types are test code. A caller that joins the graph
+    /// with the packages of another language nests the packages of such a module over the
+    /// union of both (`graph` has the packages of this front end alone).
+    pub packages: PackageHolds,
+    /// The types of the graph by binary class name (`a.b.Outer$Inner`), for a front end
+    /// whose code names Java classes (Clojure `:import`).
+    pub classes: ClassTable,
+}
+
+/// Modules that another build file than `pom.xml` declares (`deps.edn`, ADR 23). A Java
+/// file belongs to the nearest directory above it that has a `pom.xml` or is one of these.
+pub struct Modules<'a> {
+    /// The directories of the modules, relative to the root, `/` as separator, the root
+    /// is the empty string.
+    pub dirs: Vec<String>,
+    /// Whether a Java file in one of these modules is test code, given its path. A module
+    /// that has a `pom.xml` too keeps the rule of ADR 8 and does not ask.
+    pub test_code: &'a dyn Fn(&str) -> bool,
+}
+
+impl Modules<'_> {
+    /// No other module than those of a `pom.xml`.
+    pub fn none() -> Modules<'static> {
+        Modules {
+            dirs: Vec::new(),
+            test_code: &|_| false,
+        }
+    }
+}
+
+/// Like `index_sources`, and the directories of `modules` are modules of their own.
+pub fn index_sources_in(root_name: &str, files: &[SourceFile], modules: &Modules) -> Indexed {
     let mut files: Vec<&SourceFile> = files.iter().filter(|f| is_input(&f.path)).collect();
     // The order of the components, as `Path` compares, not of the bytes.
     files.sort_by(|a, b| {
@@ -160,13 +202,18 @@ pub fn index_sources(root_name: &str, files: &[SourceFile]) -> (Graph, Report) {
             .then_with(|| a.text.cmp(&b.text))
     });
     files.dedup_by(|a, b| a.path == b.path);
-    let module_dirs: HashSet<&str> = files
+    let pom_dirs: HashSet<&str> = files
         .iter()
         .filter_map(|f| match f.path.rsplit_once('/') {
             _ if f.path == "pom.xml" => Some(""),
             Some((dir, "pom.xml")) => Some(dir),
             _ => None,
         })
+        .collect();
+    let module_dirs: HashSet<&str> = pom_dirs
+        .iter()
+        .copied()
+        .chain(modules.dirs.iter().map(String::as_str))
         .collect();
 
     let mut report = Report::default();
@@ -214,7 +261,10 @@ pub fn index_sources(root_name: &str, files: &[SourceFile]) -> (Graph, Report) {
         let package_id = package_id(module, &package);
 
         let file = relative.to_string();
-        let is_test = cg_core::in_test_sources(&file);
+        let is_test = match module {
+            Some(dir) if !pom_dirs.contains(dir) => (modules.test_code)(&file),
+            _ => cg_core::in_test_sources(&file),
+        };
         let decls = declarations(tree.root_node(), &source, &package);
         if !decls.is_empty() {
             let all_test = package_holds
@@ -326,7 +376,53 @@ pub fn index_sources(root_name: &str, files: &[SourceFile]) -> (Graph, Report) {
         }
     }
     graph.edges = edges.into_iter().collect();
-    (graph, report)
+    let shared: HashSet<&str> = modules.dirs.iter().map(String::as_str).collect();
+    let packages = package_holds
+        .into_iter()
+        .filter_map(|((module, name), test)| {
+            Some((
+                (module.filter(|m| shared.contains(m))?.to_string(), name),
+                test,
+            ))
+        })
+        .collect();
+    let classes = class_table(&graph);
+    Indexed {
+        graph,
+        report,
+        packages,
+        classes,
+    }
+}
+
+/// The binary class name of each type node: the qualified name, with `$` before the name of
+/// a member type.
+fn class_table(graph: &Graph) -> ClassTable {
+    let types: HashMap<&str, &Node> = graph
+        .nodes
+        .iter()
+        .filter(|n| n.kind == NodeKind::Type)
+        .map(|n| (n.id.as_str(), n))
+        .collect();
+    let mut classes = ClassTable::new();
+    for node in types.values() {
+        // The member types, innermost first.
+        let mut names = vec![node.name.as_str()];
+        let mut top = *node;
+        while let Some(outer) = top.parent.as_deref().and_then(|p| types.get(p)) {
+            names.push(outer.name.as_str());
+            top = outer;
+        }
+        let Some(qualified) = top.id.strip_prefix("type:") else {
+            continue;
+        };
+        let package = qualified
+            .strip_suffix(top.name.as_str())
+            .unwrap_or_default();
+        names.reverse();
+        classes.insert(format!("{package}{}", names.join("$")), node.id.clone());
+    }
+    classes
 }
 
 fn package_id(module: Option<&str>, package: &str) -> String {

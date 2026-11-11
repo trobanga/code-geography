@@ -197,3 +197,35 @@ fn index_prints_how_the_clojure_calls_were_resolved() {
         assert!(stderr.contains(line), "{line}\n{stderr}");
     }
 }
+
+#[test]
+fn index_prints_how_the_clojure_class_references_were_resolved() {
+    let dir = TempDir::new().unwrap();
+    let source = dir.path().join("repo");
+    fs::create_dir_all(source.join("src")).unwrap();
+    fs::create_dir_all(source.join("java/a")).unwrap();
+    fs::write(source.join("deps.edn"), "{:paths [\"src\" \"java\"]}").unwrap();
+    fs::write(
+        source.join("java/a/Foo.java"),
+        "package a;\npublic class Foo {}\n",
+    )
+    .unwrap();
+    fs::write(
+        source.join("src/user.clj"),
+        "(ns user (:import [a Foo] [java.util Date]))\n(defn f [] [(Foo.) (Foo.) (Date.)])\n(defn g [Foo] Foo)\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_cg"))
+        .arg("index")
+        .arg(&source)
+        .arg("-o")
+        .arg(dir.path().join("graph.json"))
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let line = "clojure classes: 2 to a type of the repository, 1 external, 2 a local could hide\n";
+    assert!(stderr.contains(line), "{line}\n{stderr}");
+}

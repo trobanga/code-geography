@@ -159,3 +159,47 @@ fn collect(spec: Ts, prefix: &str, is_use: bool, source: &str, out: &mut Vec<Spe
         _ => {}
     }
 }
+
+/// The classes that the `:import` clauses of an `ns` form name, as (simple name, full class
+/// name): `[a.b C D]` and `(a.b C D)` give `a.b.C` and `a.b.D`, a symbol `a.b.C` gives
+/// itself. In source order.
+pub fn class_imports(ns_form: Ts, source: &str) -> Vec<(String, String)> {
+    let mut found = Vec::new();
+    for clause in flat_items(ns_form).into_iter().skip(2) {
+        if clause.kind() != "list_lit" {
+            continue;
+        }
+        let parts = flat_items(clause);
+        let Some((head, rest)) = parts.split_first() else {
+            continue;
+        };
+        if keyword(*head, source) != Some("import") {
+            continue;
+        }
+        for spec in rest {
+            match spec.kind() {
+                "sym_lit" => {
+                    if let Some(full) = plain_symbol(*spec, source)
+                        && let Some((_, simple)) = full.rsplit_once('.')
+                    {
+                        found.push((simple.to_string(), full.to_string()));
+                    }
+                }
+                "vec_lit" | "list_lit" => {
+                    let parts = flat_items(*spec);
+                    let Some((package, classes)) = parts.split_first() else {
+                        continue;
+                    };
+                    let Some(package) = plain_symbol(*package, source) else {
+                        continue;
+                    };
+                    for class in classes.iter().filter_map(|c| plain_symbol(*c, source)) {
+                        found.push((class.to_string(), format!("{package}.{class}")));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    found
+}

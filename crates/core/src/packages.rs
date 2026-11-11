@@ -69,6 +69,52 @@ pub fn package_nodes<'a>(
     out
 }
 
+/// The packages that are nodes by themselves, per module (the key is the directory of the
+/// module) and name, with whether everything in them is test code.
+pub type PackageHolds = BTreeMap<(String, String), bool>;
+
+/// The classes that a front end declares, for another front end that names them: the
+/// binary class name (`a.b.Outer$Inner`) to the id of the type node.
+pub type ClassTable = BTreeMap<String, String>;
+
+/// Like `package_nodes`, with the `test` flag of the Clojure front end (ADR 23) for each
+/// node, also for a package that holds something: it is test code if all it holds is, and
+/// so are all packages below it. A package of test code that holds no node (a file of
+/// `deftest` forms) is hidden with the tests this way, unless a package of main code is
+/// below it.
+pub fn marked_package_nodes(holds: &PackageHolds) -> Vec<(String, Vec<PackageNode>)> {
+    let by_module: BTreeMap<(Option<&str>, String), bool> = holds
+        .iter()
+        .map(|((module, name), test)| ((Some(module.as_str()), name.clone()), *test))
+        .collect();
+    package_nodes(&by_module)
+        .into_iter()
+        .map(|(module, mut nodes)| {
+            let module = module.expect("every package has a module");
+            let is_test = |n: &PackageNode| {
+                holds
+                    .get(&(module.to_string(), n.name.clone()))
+                    .copied()
+                    .unwrap_or(n.test)
+            };
+            let flags: Vec<bool> = nodes
+                .iter()
+                .map(|node| {
+                    is_test(node)
+                        && nodes
+                            .iter()
+                            .filter(|n| is_below(&n.name, &node.name))
+                            .all(is_test)
+                })
+                .collect();
+            for (node, test) in nodes.iter_mut().zip(flags) {
+                node.test = test;
+            }
+            (module.to_string(), nodes)
+        })
+        .collect()
+}
+
 /// Whether `name` is a package below `prefix`, on `.` boundaries.
 fn is_below(name: &str, prefix: &str) -> bool {
     name.strip_prefix(prefix)

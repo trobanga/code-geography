@@ -21,6 +21,9 @@ pub struct Decl<'t> {
     /// Whether the forms of all arities follow one another: then the span of the node
     /// runs from the first to the last, else it is the span of the first.
     pub adjacent: bool,
+    /// The declaration also imports its class into the namespace (`defrecord`, `deftype`,
+    /// `definterface`), so that the bare class name is valid in the rest of the file.
+    pub imports_class: bool,
 }
 
 /// The head of a list form: its first symbol, with the namespace as written.
@@ -52,10 +55,12 @@ pub fn declarations<'t>(
             Some("defn" | "defn-" | "defmacro" | "defmulti") => {
                 function(&items, *form, source, namespace).map(|f| vec![f])
             }
-            Some("defprotocol" | "definterface") => {
-                declared_type(&items, *form, source, namespace, 2)
+            Some(kind @ ("defprotocol" | "definterface")) => {
+                declared_type(&items, *form, source, namespace, 2, kind == "definterface")
             }
-            Some("defrecord" | "deftype") => declared_type(&items, *form, source, namespace, 3),
+            Some("defrecord" | "deftype") => {
+                declared_type(&items, *form, source, namespace, 3, true)
+            }
             _ => None,
         };
         match made {
@@ -84,6 +89,7 @@ fn function<'t>(items: &[Ts<'t>], form: Ts<'t>, source: &str, namespace: &str) -
         members: Vec::new(),
         more_forms: Vec::new(),
         adjacent: true,
+        imports_class: false,
     })
 }
 
@@ -96,6 +102,7 @@ fn declared_type<'t>(
     source: &str,
     namespace: &str,
     first_member: usize,
+    imports_class: bool,
 ) -> Option<Vec<Decl<'t>>> {
     let name = plain_symbol(*items.get(1)?, source)?;
     let id = format!("type:{namespace}/{name}");
@@ -116,6 +123,7 @@ fn declared_type<'t>(
         members: methods.iter().map(|(_, m)| *m).collect(),
         more_forms: Vec::new(),
         adjacent: true,
+        imports_class,
     }];
     let mut by_name: Vec<(&str, Vec<(usize, Ts<'t>)>)> = Vec::new();
     for (position, method) in &methods {
@@ -140,6 +148,7 @@ fn declared_type<'t>(
             members: Vec::new(),
             more_forms: forms[1..].iter().map(|(_, f)| *f).collect(),
             adjacent: forms.windows(2).all(|w| w[1].0 == w[0].0 + 1),
+            imports_class: false,
         });
     }
     Some(decls)
