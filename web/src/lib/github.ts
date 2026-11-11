@@ -1,12 +1,6 @@
-// Opening a public GitHub repository in the browser (ADR 0020): tree API, raw host, cache by blob sha.
-import { inputError } from './project';
-
-export interface Repo {
-  owner: string;
-  name: string;
-  /** As typed: a branch, a tag or a commit sha. Absent: the default branch. */
-  ref?: string;
-}
+// GitHub as a `Forge` (ADR 0020): the only place that knows GitHub URLs and answers.
+// The tree comes from the API (one call), the texts from the raw host (no API limit).
+import type { Entry, Fetch, Forge, Repo } from './forge';
 
 export type Parsed = { ok: true; repo: Repo; note?: string } | { ok: false; error: string };
 
@@ -45,23 +39,44 @@ export function parseRepo(input: string): Parsed {
   return repo ? { ok: true, repo } : bad;
 }
 
-/** The network as `fetch` gives it; a parameter, so that tests and S3 can pass their own. */
-export type Fetch = (url: string, init?: { headers?: Record<string, string> }) => Promise<Response>;
-
 export interface Net {
   fetch: Fetch;
-  /** For private repositories (S3); unused for now. */
+  /** For private repositories, later; sent to the hosts of GitHub only. Unused for now. */
   token?: string;
 }
 
 const API = 'https://api.github.com';
+const RAW = 'https://raw.githubusercontent.com';
 
-/** The commit sha of the ref (default branch if absent): one API call. */
-export async function resolve(repo: Repo, net: Net): Promise<{ sha: string }> {
-  if (repo.ref && /^[0-9a-f]{40}$/i.test(repo.ref)) return { sha: repo.ref.toLowerCase() };
-  const url = `${API}/repos/${repo.owner}/${repo.name}/commits/${encodeURIComponent(repo.ref ?? 'HEAD')}`;
-  const r = await get(net, url, repo, { Accept: 'application/vnd.github.sha' });
-  return { sha: (await r.text()).trim() };
+/** GitHub with the given network. */
+export function github(net: Net): Forge {
+  return {
+    host: 'github.com',
+
+    /** One API call; none for a full sha. */
+    async resolve(repo) {
+      if (repo.ref && /^[0-9a-f]{40}$/i.test(repo.ref)) return { sha: repo.ref.toLowerCase() };
+      const url = `${API}/repos/${repo.owner}/${repo.name}/commits/${encodeURIComponent(repo.ref ?? 'HEAD')}`;
+      const r = await get(net, url, repo, { Accept: 'application/vnd.github.sha' });
+      return { sha: (await r.text()).trim() };
+    },
+
+    /** One API call. */
+    async tree(repo, sha) {
+      const url = `${API}/repos/${repo.owner}/${repo.name}/git/trees/${sha}?recursive=1`;
+      const body = (await (await get(net, url, repo)).json()) as { truncated: boolean; tree: { path: string; type: string; sha: string }[] };
+      // A part of the tree would give a graph that looks whole and is not.
+      if (body.truncated)
+        throw new Error(`${repo.owner}/${repo.name}: too large; GitHub truncated the file list (about 100,000 entries or 7 MB), and a part would give a wrong graph`);
+      return body.tree.filter((e) => e.type === 'blob').map((e): Entry => ({ path: e.path, blobSha: e.sha }));
+    },
+
+    /** From the raw host, which does not count against the API limit. */
+    async text(repo, sha, path) {
+      const p = path.split('/').map(encodeURIComponent).join('/');
+      return (await get(net, `${RAW}/${repo.owner}/${repo.name}/${sha}/${p}`, repo)).text();
+    },
+  };
 }
 
 /** One request; a failed one rejects with the message of `httpError` or of the network. */
@@ -87,160 +102,4 @@ export function httpError(r: Response, repo: Repo): string {
   }
   if (r.status === 422 && repo.ref) return `${id}: no branch, tag or commit "${repo.ref}"`;
   return `${id}: HTTP ${r.status}`;
-}
-
-export interface Entry {
-  path: string;
-  blobSha: string;
-}
-
-/** The files of a commit with their blob shas: one API call, none when the cache has the tree of this commit. */
-export async function tree(repo: Repo, sha: string, net: Net, cache: TextCache = memoryCache()): Promise<Entry[]> {
-  // A commit sha names its tree, so the key never goes stale; it cannot clash with a blob sha.
-  const key = `tree:${repo.owner}/${repo.name}@${sha}`;
-  const kept = await cache.get(key);
-  if (kept !== undefined) return JSON.parse(kept) as Entry[];
-  const url = `${API}/repos/${repo.owner}/${repo.name}/git/trees/${sha}?recursive=1`;
-  const body = (await (await get(net, url, repo)).json()) as { truncated: boolean; tree: { path: string; type: string; sha: string }[] };
-  // A part of the tree would give a graph that looks whole and is not.
-  if (body.truncated)
-    throw new Error(`${repo.owner}/${repo.name}: too large; GitHub truncated the file list (about 100,000 entries or 7 MB), and a part would give a wrong graph`);
-  const entries = body.tree.filter((e) => e.type === 'blob').map((e) => ({ path: e.path, blobSha: e.sha }));
-  await cache.put(key, JSON.stringify(entries));
-  return entries;
-}
-
-/** `work` on each item with at most `limit` running at a time; the results in the order of the items. Rejects on the first failure. */
-export async function pool<T, R>(items: T[], limit: number, work: (item: T) => Promise<R>): Promise<R[]> {
-  const out: R[] = new Array(items.length);
-  let next = 0;
-  let failed = false;
-  async function lane() {
-    while (!failed && next < items.length) {
-      const i = next++;
-      try {
-        out[i] = await work(items[i]);
-      } catch (e) {
-        failed = true;
-        throw e;
-      }
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, lane));
-  return out;
-}
-
-/** File texts by blob sha (G4). A blob sha names its content, so an entry never goes stale. */
-export interface TextCache {
-  get(blobSha: string): Promise<string | undefined>;
-  put(blobSha: string, text: string): Promise<void>;
-}
-
-export function memoryCache(): TextCache {
-  const m = new Map<string, string>();
-  return {
-    get: async (k) => m.get(k),
-    put: async (k, v) => void m.set(k, v),
-  };
-}
-
-const DB = 'code-geography';
-const STORE = 'blobs';
-
-function req<T>(r: IDBRequest<T>): Promise<T> {
-  return new Promise((ok, err) => {
-    r.onsuccess = () => ok(r.result);
-    r.onerror = () => err(r.error);
-  });
-}
-
-/**
- * The cache in IndexedDB, which outlives a reload; in memory when IndexedDB is missing or
- * refuses (private window, blocked site data). A failed read or write later counts as a miss.
- */
-export async function openCache(factory: IDBFactory | undefined = globalThis.indexedDB): Promise<TextCache> {
-  let db: IDBDatabase;
-  try {
-    if (!factory) return memoryCache();
-    const open = factory.open(DB, 1);
-    open.onupgradeneeded = () => open.result.createObjectStore(STORE);
-    db = await req(open);
-  } catch {
-    return memoryCache();
-  }
-  return {
-    async get(k) {
-      try {
-        const v = await req(db.transaction(STORE).objectStore(STORE).get(k));
-        return typeof v === 'string' ? v : undefined;
-      } catch {
-        return undefined;
-      }
-    },
-    async put(k, v) {
-      try {
-        await req(db.transaction(STORE, 'readwrite').objectStore(STORE).put(v, k));
-      } catch {
-        // Full or blocked: the next open fetches the file again.
-      }
-    },
-  };
-}
-
-const RAW = 'https://raw.githubusercontent.com';
-/** Requests to the raw host at a time. */
-export const PARALLEL = 10;
-
-/** The texts of the entries at commit `sha`, from the cache or else the raw host, which does not count against the API limit. */
-export async function texts(
-  repo: Repo,
-  sha: string,
-  entries: Entry[],
-  net: Net,
-  cache: TextCache,
-  onProgress: (done: number, all: number) => void = () => {},
-): Promise<{ path: string; text: string }[]> {
-  let done = 0;
-  return pool(entries, PARALLEL, async (e) => {
-    let text = await cache.get(e.blobSha);
-    if (text === undefined) {
-      const path = e.path.split('/').map(encodeURIComponent).join('/');
-      text = await (await get(net, `${RAW}/${repo.owner}/${repo.name}/${sha}/${path}`, repo)).text();
-      await cache.put(e.blobSha, text);
-    }
-    onProgress(++done, entries.length);
-    return { path: e.path, text };
-  });
-}
-
-/** The entries that the indexer reads (`isInput` of the WASM module), sorted by path as the walk sorts them. */
-export function inputsOf(entries: Entry[], isInput: (path: string) => boolean): Entry[] {
-  return entries.filter((e) => isInput(e.path)).sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-}
-
-export interface Fetched {
-  sha: string;
-  /** The repository name: the root name of the graph. */
-  root: string;
-  paths: string[];
-  texts: string[];
-}
-
-/** The inputs of the indexer at the ref: at most two API calls (G2), none for a cached commit given by sha. */
-export async function fetchRepo(
-  repo: Repo,
-  net: Net,
-  cache: TextCache,
-  isInput: (path: string) => boolean,
-  onPhase: (phase: string) => void = () => {},
-): Promise<Fetched> {
-  const id = `${repo.owner}/${repo.name}`;
-  onPhase(`resolving ${id}${repo.ref ? '@' + repo.ref : ''}`);
-  const { sha } = await resolve(repo, net);
-  onPhase(`listing the files of ${id}@${sha.slice(0, 7)}`);
-  const inputs = inputsOf(await tree(repo, sha, net, cache), isInput);
-  const err = inputError({ root: id, inputs: inputs.map((e) => ({ path: e.path, file: e })) });
-  if (err) throw new Error(err);
-  const got = await texts(repo, sha, inputs, net, cache, (done, all) => onPhase(`fetched ${done} / ${all} files of ${id}`));
-  return { sha, root: repo.name, paths: got.map((g) => g.path), texts: got.map((g) => g.text) };
 }

@@ -29,7 +29,8 @@
   } from './lib/expansion';
   import { depthKey } from './lib/keys';
   import { decodeHash, encodeHash, freshHash, type Source } from './lib/hash';
-  import { fetchRepo, openCache, parseRepo, type Repo, type TextCache } from './lib/github';
+  import { fetchRepo, openCache, type Repo, type TextCache } from './lib/forge';
+  import { github, parseRepo } from './lib/github';
   import { indexInWorker } from './lib/indexProject';
   import { inputError, summarize, type Summary } from './lib/project';
   import { collectDir, fromEntry, type Collect, type DirEntry } from './lib/walk';
@@ -250,7 +251,7 @@
       const t0 = performance.now();
       phase = `opening ${id}`;
       ghCache ??= openCache();
-      const f = await fetchRepo(repo, { fetch: (url, i) => fetch(url, i) }, await ghCache, isInput, (p) => {
+      const f = await fetchRepo(github({ fetch: (url, i) => fetch(url, i) }), repo, await ghCache, isInput, (p) => {
         if (my === openSeq) phase = p;
       });
       if (my !== openSeq) return;

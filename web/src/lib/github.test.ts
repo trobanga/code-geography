@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { fetchRepo, inputsOf, memoryCache, openCache, parseRepo, pool, resolve, texts, tree, type Fetch } from './github';
+import { fetchRepo, memoryCache, type Fetch, type Repo } from './forge';
+import { github, parseRepo } from './github';
+
+const resolve = (repo: Repo, net: { fetch: Fetch }) => github(net).resolve(repo);
 
 const SHA = '0123456789abcdef0123456789abcdef01234567';
 
@@ -106,7 +109,7 @@ describe('tree', () => {
         ],
       }),
     });
-    expect(await tree({ owner: 'a', name: 'b' }, SHA, { fetch: net.fetch })).toEqual([
+    expect(await github({ fetch: net.fetch }).tree({ owner: 'a', name: 'b' }, SHA)).toEqual([
       { path: 'src/A.java', blobSha: 'b1' },
       { path: 'pom.xml', blobSha: 'b2' },
     ]);
@@ -115,105 +118,21 @@ describe('tree', () => {
 
   it('refuses a truncated tree rather than index a part of it', async () => {
     const net = fakeFetch({ [TREE_URL]: json({ truncated: true, tree: [] }) });
-    await expect(tree({ owner: 'a', name: 'b' }, SHA, { fetch: net.fetch })).rejects.toThrow('a/b: too large; GitHub truncated the file list');
+    await expect(github({ fetch: net.fetch }).tree({ owner: 'a', name: 'b' }, SHA)).rejects.toThrow('a/b: too large; GitHub truncated the file list');
   });
 
-  it('keeps the tree of a commit in the cache, so a second open by sha needs no call', async () => {
-    const net = fakeFetch({ [TREE_URL]: json({ truncated: false, tree: [{ path: 'A.java', type: 'blob', sha: 'b1' }] }) });
-    const cache = memoryCache();
-    const first = await tree({ owner: 'a', name: 'b' }, SHA, { fetch: net.fetch }, cache);
-    const second = await tree({ owner: 'a', name: 'b' }, SHA, { fetch: net.fetch }, cache);
-    expect(second).toEqual(first);
-    expect(net.calls).toHaveLength(1);
-  });
-});
-
-describe('pool', () => {
-  it('runs at most `limit` jobs at a time and keeps the order of the results', async () => {
-    let running = 0;
-    let most = 0;
-    const out = await pool([5, 1, 4, 2, 3, 0, 6], 3, async (x) => {
-      most = Math.max(most, ++running);
-      await new Promise((r) => setTimeout(r, x));
-      running--;
-      return x * 10;
-    });
-    expect(out).toEqual([50, 10, 40, 20, 30, 0, 60]);
-    expect(most).toBe(3);
-  });
-
-  it('starts no new job after one has failed', async () => {
-    const started: number[] = [];
-    const run = pool([0, 1, 2, 3, 4, 5], 2, async (x) => {
-      started.push(x);
-      if (x === 1) throw new Error('boom');
-      await new Promise((r) => setTimeout(r, 1));
-      return x;
-    });
-    await expect(run).rejects.toThrow('boom');
-    await new Promise((r) => setTimeout(r, 20));
-    expect(started).toEqual([0, 1]);
-  });
 });
 
 const raw = (path: string) => `https://raw.githubusercontent.com/a/b/${SHA}/${path}`;
 
-describe('texts', () => {
-  it('fetches each file from the raw host and reports progress', async () => {
-    const net = fakeFetch({
-      [raw('src/A.java')]: () => new Response('class A {}'),
-      [raw('my%20dir/B%23.java')]: () => new Response('class B {}'),
-    });
-    const progress: string[] = [];
-    const out = await texts({ owner: 'a', name: 'b' }, SHA, [{ path: 'src/A.java', blobSha: 'b1' }, { path: 'my dir/B#.java', blobSha: 'b2' }], { fetch: net.fetch }, memoryCache(), (done, all) => progress.push(`${done}/${all}`));
-    expect(out).toEqual([{ path: 'src/A.java', text: 'class A {}' }, { path: 'my dir/B#.java', text: 'class B {}' }]);
-    expect(progress).toEqual(['1/2', '2/2']);
-  });
-
-  it('takes a text from the cache by blob sha, and stores what it fetched', async () => {
-    const cache = memoryCache();
-    await cache.put('b1', 'class A {}');
-    const net = fakeFetch({ [raw('B.java')]: () => new Response('class B {}') });
-    const entries = [{ path: 'renamed/A.java', blobSha: 'b1' }, { path: 'B.java', blobSha: 'b2' }];
-    const out = await texts({ owner: 'a', name: 'b' }, SHA, entries, { fetch: net.fetch }, cache);
-    expect(out.map((o) => o.text)).toEqual(['class A {}', 'class B {}']);
-    expect(net.calls.map((c) => c.url)).toEqual([raw('B.java')]);
-    expect(await cache.get('b2')).toBe('class B {}');
+describe('text', () => {
+  it('fetches a file from the raw host at the commit, with each path segment encoded', async () => {
+    const net = fakeFetch({ [raw('my%20dir/B%23.java')]: () => new Response('class B {}') });
+    expect(await github({ fetch: net.fetch }).text({ owner: 'a', name: 'b' }, SHA, 'my dir/B#.java')).toBe('class B {}');
   });
 });
 
-describe('openCache', () => {
-  it('falls back to memory when IndexedDB is missing or refuses to open', async () => {
-    const refusing = { open: () => { throw new DOMException('denied', 'SecurityError'); } } as unknown as IDBFactory;
-    const failing = {
-      open: () => {
-        const req = {} as IDBOpenDBRequest;
-        setTimeout(() => (req.onerror as () => void)?.());
-        return req;
-      },
-    } as unknown as IDBFactory;
-    for (const factory of [undefined, refusing, failing]) {
-      const cache = await openCache(factory);
-      await cache.put('k', 'v');
-      expect(await cache.get('k')).toBe('v');
-    }
-  });
-});
-
-describe('inputsOf', () => {
-  it('keeps the entries that the rule of the indexer wants, sorted by path', () => {
-    const isInput = (p: string) => p.endsWith('.java') || p.endsWith('pom.xml');
-    const entries = [
-      { path: 'z/Z.java', blobSha: '1' },
-      { path: 'README.md', blobSha: '2' },
-      { path: 'pom.xml', blobSha: '3' },
-      { path: 'a/A.java', blobSha: '4' },
-    ];
-    expect(inputsOf(entries, isInput).map((e) => e.path)).toEqual(['a/A.java', 'pom.xml', 'z/Z.java']);
-  });
-});
-
-describe('fetchRepo', () => {
+describe('fetchRepo from GitHub', () => {
   const isInput = (p: string) => p.endsWith('.java') || p === 'pom.xml';
   const routes = () => ({
     'https://api.github.com/repos/a/b/commits/HEAD': () => new Response(SHA),
@@ -226,19 +145,14 @@ describe('fetchRepo', () => {
     const net = fakeFetch(routes());
     const cache = memoryCache();
     const phases: string[] = [];
-    const got = await fetchRepo({ owner: 'a', name: 'b' }, { fetch: net.fetch }, cache, isInput, (p) => phases.push(p));
+    const got = await fetchRepo(github({ fetch: net.fetch }), { owner: 'a', name: 'b' }, cache, isInput, (p) => phases.push(p));
     expect(got).toEqual({ sha: SHA, root: 'b', paths: ['A.java', 'pom.xml'], texts: ['class A {}', '<project/>'] });
     expect(net.calls.filter((c) => c.url.startsWith('https://api.github.com'))).toHaveLength(2);
     expect(phases.at(-1)).toBe('fetched 2 / 2 files of a/b');
 
     const again = fakeFetch(routes());
-    expect(await fetchRepo({ owner: 'a', name: 'b', ref: SHA }, { fetch: again.fetch }, cache, isInput)).toEqual(got);
+    expect(await fetchRepo(github({ fetch: again.fetch }), { owner: 'a', name: 'b', ref: SHA }, cache, isInput)).toEqual(got);
     expect(again.calls).toHaveLength(0);
   });
 
-  it('fails before any file fetch when the repository has no Java or Rust sources', async () => {
-    const net = fakeFetch({ ...routes(), [TREE_URL]: json({ truncated: false, tree: [{ path: 'pom.xml', type: 'blob', sha: 'p' }, { path: 'x.py', type: 'blob', sha: 'x' }] }) });
-    await expect(fetchRepo({ owner: 'a', name: 'b' }, { fetch: net.fetch }, memoryCache(), isInput)).rejects.toThrow('no Java or Rust sources found in a/b');
-    expect(net.calls.some((c) => c.url.startsWith('https://raw.githubusercontent.com'))).toBe(false);
-  });
 });

@@ -43,8 +43,8 @@ crates/wasm        wasm-bindgen binding of core and the indexers: class Explorer
 scripts/build-wasm.sh   builds crates/wasm into web/src/lib/wasm (generated, committed);
                         sets the C include path for the tree-sitter grammars (needs cargo, jq)
 web/               viewer: Svelte 5, Tailwind 4, ELK layout in a web worker, plain SVG
-web/src/lib/github.ts  opens a public GitHub repository: tree API + raw host, texts cached by
-                   blob sha in IndexedDB, hash gh=owner/repo@sha (ADR 0020)
+web/src/lib/forge.ts   opens a repository of a forge: pool, cache by blob sha, progress (ADR 0020);
+                   github.ts is the only Forge (URLs, answers, errors, input parse); hash gh=owner/repo@sha
 docs/adr/          architecture decision records (0016: how Rust maps onto the graph)
 ```
 
