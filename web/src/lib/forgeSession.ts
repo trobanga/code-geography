@@ -255,6 +255,11 @@ export function forgeSession(d: SessionDeps) {
     if (s.listOpen) loadCommits();
   }
 
+  /** Escape, or a click outside the list. */
+  function closeList() {
+    if (s.listOpen) set({ listOpen: false });
+  }
+
   /** The source switch of the toolbar. Without an overlay the commit view is the list to pick one from. */
   function switchTo(mode: Source) {
     show(mode);
@@ -264,10 +269,11 @@ export function forgeSession(d: SessionDeps) {
     }
   }
 
-  /** A commit of the list: its overlay against the first parent; the list stays. */
+  /** A commit of the list: its overlay against the first parent; the list closes at once and keeps its commits. */
   async function pick(sha: string) {
     const c = s.commits?.list.find((x) => x.sha === sha);
     if (!c || !s.repo) return;
+    set({ listOpen: false });
     await overlay({ ...s.repo, ref: c.sha }, { base: c.parents[0] ?? null, head: c.sha }, undefined, undefined, true);
   }
 
@@ -286,6 +292,7 @@ export function forgeSession(d: SessionDeps) {
     show,
     followHash,
     toggleList,
+    closeList,
     switchTo,
     pick,
     openInput,

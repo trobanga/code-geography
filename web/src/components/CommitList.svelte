@@ -22,7 +22,7 @@
     <div class="text-[var(--muted)]">{status}</div>
   {:else if rows}
     <div class="text-[var(--muted)]">
-      pick a commit to see its overlay against its first parent{#if hidden > 0}<span data-hidden-commits>
+      pick a commit to see its overlay against its first parent{#if hidden > 0}<span class="ml-2" data-hidden-commits>
           · {hidden} commit{hidden === 1 ? '' : 's'} of dependency updates by a bot not shown</span
         >{/if}
     </div>

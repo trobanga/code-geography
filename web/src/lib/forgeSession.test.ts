@@ -292,16 +292,31 @@ describe('forgeSession', () => {
     expect(t.shown).toHaveLength(1);
   });
 
-  it('a commit picked from the list: its overlay against the first parent; the list stays; an unknown sha does nothing', async () => {
+  it('a commit picked from the list: its overlay against the first parent; the list closes at once and keeps its commits; an unknown sha does nothing', async () => {
     const t = setup();
     await t.session.open({ ...REPO, ref: 'main' });
     t.session.switchTo('commit');
     await until(() => t.state().commits !== null);
     t.session.pick('nope');
-    await t.session.pick(HEAD);
+    expect(t.state().listOpen).toBe(true);
+    const picked = t.session.pick(HEAD);
+    expect(t.state().listOpen).toBe(false);
+    await picked;
     expect(t.state().overlay!.range).toEqual({ base: BASE, head: HEAD });
-    expect(t.state()).toMatchObject({ listOpen: true, commits: { anchor: HEAD } });
+    expect(t.state()).toMatchObject({ listOpen: false, commits: { anchor: HEAD } });
     expect(t.shown).toHaveLength(2);
+  });
+
+  it('closeList closes the open list and keeps its commits; on a closed list it does nothing', async () => {
+    const t = setup();
+    await t.session.open({ ...REPO, ref: 'main' });
+    t.session.toggleList();
+    await until(() => t.state().commits !== null);
+    t.session.closeList();
+    expect(t.state()).toMatchObject({ listOpen: false, commits: { anchor: HEAD } });
+    const before = t.state();
+    t.session.closeList();
+    expect(t.state()).toBe(before);
   });
 
   it('the input field: an error for what is not a repository; an overlay for a range; a note in the summary', async () => {

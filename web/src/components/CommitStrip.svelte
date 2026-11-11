@@ -19,7 +19,7 @@
     onchanges: (v: boolean) => void;
     onopen: () => void;
     listOpen?: boolean;
-    /** Absent: no commit list (a commit.json from the CLI). */
+    /** A click on the commit at the left opens or closes the commit list. Absent: no commit list (a commit.json from the CLI). */
     onlist?: () => void;
   } = $props();
 
@@ -31,8 +31,23 @@
 </script>
 
 <div class="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-[var(--line)] bg-[var(--panel)] px-3 py-1 tabular-nums">
-  <span class="text-[var(--muted)]">commit</span>
-  <span>{diff.base} → {diff.head}</span>
+  {#if onlist}
+    <button
+      class="{btn} flex items-center gap-2 {listOpen ? 'bg-[var(--line)]' : ''}"
+      onclick={onlist}
+      title="pick another commit"
+      aria-haspopup="listbox"
+      aria-expanded={listOpen}
+      data-list-toggle
+    >
+      <span class="text-[var(--muted)]">commit</span>
+      <span>{diff.base} → {diff.head}</span>
+      <span class="text-[var(--muted)]" aria-hidden="true">▾</span>
+    </button>
+  {:else}
+    <span class="text-[var(--muted)]">commit</span>
+    <span>{diff.base} → {diff.head}</span>
+  {/if}
   <span class="border-l border-[var(--line)] pl-3">
     <span class="text-[var(--muted)]">nodes</span>
     <span style={tint(totals.nodes.added, 'added')}>+{totals.nodes.added}</span>
@@ -61,7 +76,4 @@
     <input type="checkbox" checked={changesOnly} onchange={(e) => onchanges(e.currentTarget.checked)} />changes only
   </label>
   <button class={btn} onclick={onopen} title="Opens down to the changed types. A second click opens the changed types also.">open changed</button>
-  {#if onlist}
-    <button class="{btn} {listOpen ? 'bg-[var(--line)]' : ''}" onclick={onlist} data-list-toggle>commits</button>
-  {/if}
 </div>
