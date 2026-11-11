@@ -184,19 +184,25 @@ impl<'a, 't> World<'a, 't> {
         if let Some((entity, consumed)) = start {
             return self.follow_as(entity, consumed, segments, ns, depth);
         }
-        match self.lookup(module, head, head_ns, depth) {
+        // An external glob may bind any name, but it proves none: the own crate and the
+        // dependencies come first, and the glob only decides what stays (ADR 0001).
+        match self.lookup_with(module, head, head_ns, depth, false) {
             Some(Res::Item(entity, _)) => self.follow_as(entity, 1, segments, ns, depth),
             Some(other) => other,
             None => match self.lib_roots.get(head.replace('-', "_").as_str()).copied() {
                 Some(root) => self.follow_as(Entity::Mod(root), 1, segments, ns, depth),
-                None => {
-                    let package = self.mods[module].package;
-                    if is_external_head(head) || self.dependencies[package].contains(head) {
-                        Res::External
-                    } else {
-                        Res::Unresolved
+                None => match self.lookup_with(module, head, head_ns, depth, true) {
+                    Some(Res::Item(entity, _)) => self.follow_as(entity, 1, segments, ns, depth),
+                    Some(other) => other,
+                    None => {
+                        let package = self.mods[module].package;
+                        if is_external_head(head) || self.dependencies[package].contains(head) {
+                            Res::External
+                        } else {
+                            Res::Unresolved
+                        }
                     }
-                }
+                },
             },
         }
     }
@@ -250,6 +256,18 @@ impl<'a, 't> World<'a, 't> {
     /// What `name` means in `module`: its own items, then its `use` declarations, then the
     /// globs. `None` if the mod does not bind the name.
     fn lookup(&self, module: usize, name: &str, ns: Ns, depth: usize) -> Option<Res> {
+        self.lookup_with(module, name, ns, depth, true)
+    }
+
+    /// `lookup`; without `external_globs` a glob of an external path binds nothing.
+    fn lookup_with(
+        &self,
+        module: usize,
+        name: &str,
+        ns: Ns,
+        depth: usize,
+        external_globs: bool,
+    ) -> Option<Res> {
         if depth == 0 {
             return None;
         }
@@ -286,11 +304,13 @@ impl<'a, 't> World<'a, 't> {
             let segments: Vec<&str> = path.iter().map(String::as_str).collect();
             match self.resolve_from(module, &segments, Ns::Type, depth - 1) {
                 Res::Item(Entity::Mod(target), consumed) if consumed == segments.len() => {
-                    if let Some(found) = self.lookup(target, name, ns, depth - 1) {
+                    if let Some(found) =
+                        self.lookup_with(target, name, ns, depth - 1, external_globs)
+                    {
                         return Some(found);
                     }
                 }
-                Res::External => return Some(Res::External),
+                Res::External if external_globs => return Some(Res::External),
                 _ => {}
             }
         }

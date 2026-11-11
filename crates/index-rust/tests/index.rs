@@ -1465,3 +1465,104 @@ fn a_test_target_that_another_target_declares_as_a_mod_is_not_merged_with_the_co
     assert!(g.node("type:my_app::tests/support::S").is_some());
     assert!(g.node("type:my_app::tests/a::support::S").is_some());
 }
+
+const API_WITH_DEP: (&str, &str) = (
+    "Cargo.toml",
+    "[package]\nname = \"api\"\n\n[dependencies]\nx = \"1\"\n",
+);
+
+#[test]
+fn an_explicit_use_of_the_own_lib_wins_over_an_external_glob_import() {
+    let (g, report) = run(&[
+        API_WITH_DEP,
+        ("src/lib.rs", "pub mod config;\n"),
+        ("src/config.rs", "pub fn load() {}\n"),
+        (
+            "src/main.rs",
+            "use api::config;\nuse x::prelude::*;\nfn main() {\n    config::load();\n}\n",
+        ),
+    ]);
+
+    let callers: Vec<&str> = g
+        .edges
+        .iter()
+        .filter(|e| e.kind == EdgeKind::Calls && e.to == "fn:api::config::load")
+        .map(|e| e.from.as_str())
+        .collect();
+    assert_eq!(callers.len(), 1, "{:?}", g.edges);
+    assert!(callers[0].ends_with("::main"), "{callers:?}");
+    assert_eq!(
+        report.calls,
+        CallReport {
+            to_function: 1,
+            to_type: 0,
+            external: 0,
+            unresolved: 0
+        }
+    );
+}
+
+#[test]
+fn an_external_glob_in_a_use_list_does_not_turn_imports_and_type_refs_of_the_own_lib_external() {
+    let (g, report) = run(&[
+        API_WITH_DEP,
+        ("src/lib.rs", "pub mod config;\n"),
+        ("src/config.rs", "pub struct Settings;\npub struct Other;\n"),
+        (
+            "src/main.rs",
+            "use api::config::Settings;\nuse x::{prelude::*, Y};\n\
+             fn main(s: Settings, o: api::config::Other) {}\n",
+        ),
+    ]);
+
+    let to_settings = |kind| {
+        g.edges
+            .iter()
+            .filter(|e| e.kind == kind && e.to == "type:api::config::Settings")
+            .count()
+    };
+    assert_eq!(to_settings(EdgeKind::Imports), 1, "{:?}", g.edges);
+    assert_eq!(to_settings(EdgeKind::TypeRef), 1, "{:?}", g.edges);
+    assert!(
+        g.edges
+            .iter()
+            .any(|e| e.kind == EdgeKind::TypeRef && e.to == "type:api::config::Other"),
+        "{:?}",
+        g.edges
+    );
+    assert_eq!(
+        report.paths,
+        PathReport {
+            resolved: 3,
+            external: 2,
+            unresolved: 0
+        }
+    );
+}
+
+#[test]
+fn a_name_that_only_an_external_glob_can_provide_stays_external_and_gives_no_edge() {
+    let (g, report) = run(&[
+        API_WITH_DEP,
+        ("src/lib.rs", "pub mod config;\n"),
+        ("src/config.rs", "pub fn load() {}\n"),
+        (
+            "src/main.rs",
+            "use api::config;\nuse x::prelude::*;\nfn main() {\n    helper();\n    config::load();\n}\n",
+        ),
+    ]);
+
+    assert_eq!(
+        calls_from(&g, "fn:api::main::main"),
+        ["fn:api::config::load"]
+    );
+    assert_eq!(
+        report.calls,
+        CallReport {
+            to_function: 1,
+            to_type: 0,
+            external: 1,
+            unresolved: 0
+        }
+    );
+}
