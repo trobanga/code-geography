@@ -85,7 +85,7 @@
     bind:value={repoText}
     placeholder="owner/repo[@ref]"
     aria-label="GitHub repository"
-    title="A public GitHub repository: owner/repo, owner/repo@ref, or a github.com URL. The files are fetched by this browser and indexed here."
+    title="A public GitHub repository: owner/repo, owner/repo@ref, or a github.com URL. With owner/repo@A..B, @A...B, or a URL /commit/<sha>, /compare/A...B or /pull/<n>: the commit overlay. The files are fetched by this browser and indexed here."
     class="w-44 border border-[var(--line)] bg-transparent px-1 py-0.5"
     spellcheck="false"
   />

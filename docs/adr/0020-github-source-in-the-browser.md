@@ -48,5 +48,5 @@ look at a GitHub repository without a checkout, a server or a login. Measured on
 - A link with a sha does not follow its branch; to see a newer commit, open the
   repository again.
 - A private repository needs a token, which is not built yet. Gitea pages its tree API,
-  so a Forgejo `tree` makes more than one call; the interface hides that. The commit overlay (ADR 9) can reuse the fetch layer and the cache with
-  the WASM `diffSources`.
+  so a Forgejo `tree` makes more than one call; the interface hides that. The commit overlay of a forge repository is built
+  in the browser on the same fetch layer and cache (ADR 21).

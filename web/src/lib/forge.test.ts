@@ -21,6 +21,9 @@ function fakeForge(files: Record<string, string>, host = 'example.org') {
       calls.push(`text ${sha.slice(0, 4)} ${path}`);
       return files[path];
     },
+    commits: async () => [],
+    mergeBase: async () => SHA,
+    pull: async () => ({ base: SHA, head: SHA }),
   };
   return { forge, calls };
 }

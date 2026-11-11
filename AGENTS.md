@@ -103,6 +103,6 @@ pnpm dev                                     # http://localhost:5173/
   `mod` reaches and `#[path]` mods are missing (the report lists them); `[lib]` and
   `[[bin]]` paths other than the Cargo defaults are not read (ADR 0016).
 - No AI grouping (deferred, ADR 0010). GitHub: public repositories only (no token yet,
-  60 API calls per hour), no commit overlay from GitHub yet.
+  60 API calls per hour); the overlay from GitHub compares trees by blob sha (ADR 0021).
 - Local classes and members of anonymous classes get no node.
 - A rename of a type or method looks like one removal and one addition.

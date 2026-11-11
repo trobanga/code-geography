@@ -95,6 +95,16 @@ describe('hash', () => {
     expect(decodeHash(h)).toEqual(state);
   });
 
+  it('keeps the base of a GitHub overlay after the head, none for a root commit', () => {
+    const head = 'a/b@0123456789abcdef0123456789abcdef01234567';
+    const base = 'fedcba9876543210fedcba9876543210fedcba98';
+    const state = { gh: head, base, level: 'modules' as const, tests: false, open: [], edges: DEFAULT_EDGE_OPTIONS };
+    expect(encodeHash(state)).toBe(`#gh=${head}&base=${base}&level=modules&tests=0`);
+    expect(decodeHash(encodeHash(state))).toEqual(state);
+    expect(decodeHash(encodeHash({ ...state, base: null }))).toEqual({ ...state, base: null });
+    expect(encodeHash({ ...state, base: null })).toContain('&base=none&');
+  });
+
   it('accepts a hash with leading # and missing fields', () => {
     expect(decodeHash('#level=packages')).toEqual({ level: 'packages', tests: false, open: [], edges: DEFAULT_EDGE_OPTIONS });
   });

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, tick, untrack } from 'svelte';
+  import CommitList from './components/CommitList.svelte';
   import CommitStrip from './components/CommitStrip.svelte';
   import DetailPanel from './components/DetailPanel.svelte';
   import Diagram from './components/Diagram.svelte';
@@ -10,7 +11,7 @@
   import type { Offset } from './lib/drag';
   import { DEFAULT_EDGE_OPTIONS, edgePipeline, painted, type Drawn, type EdgeOptions } from './lib/edgeOptions';
   import { toElkGraph } from './lib/elkGraph';
-  import { commitTotals, openChanged, pathToOpen } from './lib/commit';
+  import { commitTotals, headOf, openChanged, pathToOpen } from './lib/commit';
   import { changedFiles } from './lib/files';
   import { focusActive, focusOn, NO_FOCUS, type Focus } from './lib/focus';
   import {
@@ -29,9 +30,10 @@
   } from './lib/expansion';
   import { depthKey } from './lib/keys';
   import { decodeHash, encodeHash, freshHash, type Source } from './lib/hash';
-  import { fetchRepo, openCache, type Repo, type TextCache } from './lib/forge';
+  import { fetchRepo, openCache, type Commit, type Forge, type Repo, type TextCache } from './lib/forge';
+  import { cachedCommits, commitRows, fetchOverlay, overlayNames, resolveRange, type OverlaySpec, type Range } from './lib/forgeDiff';
   import { github, parseRepo } from './lib/github';
-  import { indexInWorker } from './lib/indexProject';
+  import { diffInWorker, indexInWorker } from './lib/indexProject';
   import { inputError, summarize, type Summary } from './lib/project';
   import { collectDir, fromEntry, type Collect, type DirEntry } from './lib/walk';
   import { runLayout, type Layout } from './lib/layout';
@@ -50,6 +52,23 @@
   /** The GitHub repository shown, `owner/repo@sha` (ADR 0020); null for any other source. */
   let gh = $state<string | null>(null);
   let ghCache: Promise<TextCache> | null = null;
+  /**
+   * The GitHub repository shown (ADR 0020, 0021): the plain graph of the head and, once built,
+   * the overlay. Both stay in memory, so a switch between them fetches nothing.
+   */
+  type Kept = { text: string; summary: Summary };
+  let ghRepo = $state.raw<Repo | null>(null);
+  let ghHead = $state.raw<Kept | null>(null);
+  let ghOverlay = $state.raw<(Kept & { range: Range }) | null>(null);
+  let ghMode = $state<Source>('graph');
+  /** The last commits reachable from the sha at which the list was asked for; kept while its commits are picked. */
+  let commitList = $state.raw<{ anchor: string; list: Commit[] } | null>(null);
+  let listStatus = $state<string | null>(null);
+  let listOpen = $state(false);
+  const COMMITS = 30;
+  /** The base of the overlay shown: undefined for the plain graph, null for a root commit. */
+  const shownBase = $derived(gh && ghMode === 'commit' && ghOverlay ? ghOverlay.range.base : undefined);
+  const ghForge = (): Forge => github({ fetch: (url, i) => fetch(url, i) });
   /** /graph.json is missing: show the start screen. */
   let missing = $state(false);
   /** What an opened directory gave; null for any other source. */
@@ -178,6 +197,7 @@
       const text = await r.text();
       src = s;
       gh = null;
+      forgetGh();
       selected = null;
       project = null;
       await load(text);
@@ -188,6 +208,7 @@
 
   /** Replaces the graph by one opened from disk or GitHub: by default nothing open, no focus, no selection. */
   async function loadOpened(text: string, summary: Summary | null, hash = freshHash(location.hash), from: string | null = null) {
+    if (from === null) forgetGh();
     selected = null;
     src = null;
     gh = from;
@@ -232,10 +253,20 @@
     }
   }
 
+  function forgetGh() {
+    ghRepo = null;
+    ghHead = null;
+    ghOverlay = null;
+    ghMode = 'graph';
+    commitList = null;
+    listOpen = false;
+  }
+
   /** The text of the GitHub field: a clear message for anything that is not a repository (G1). */
   function openGithubInput(input: string) {
     const p = parseRepo(input);
     if (!p.ok) error = p.error;
+    else if (p.overlay) openOverlay(p.repo, p.overlay, undefined, p.note);
     else openGithub(p.repo, p.note);
   }
 
@@ -266,6 +297,12 @@
       const label = repo.ref && repo.ref.toLowerCase() !== f.sha ? `${id}@${repo.ref} (${short})` : `${id}@${short}`;
       const summary = summarize(label, f.paths, g, r.report, `Fetched from GitHub at ${f.sha}; cached by blob sha in this browser. A reload opens the same commit.`);
       if (note) summary.text += ` (${note})`;
+      if (commitList?.anchor !== f.sha) commitList = null;
+      ghRepo = { owner: repo.owner, name: repo.name };
+      ghHead = { text: r.graphText, summary };
+      ghOverlay = null;
+      ghMode = 'graph';
+      listOpen = false;
       await loadOpened(r.graphText, summary, hash, `${id}@${f.sha}`);
     } catch (e) {
       if (my !== openSeq) return;
@@ -276,13 +313,122 @@
     }
   }
 
-  /** A reload or a shared link: the same commit, with the view that the hash holds (G5). */
-  function openFromHash(spec: string, hash: string) {
+  /**
+   * Builds the commit overlay of a GitHub repository in this browser (ADR 0021): resolve the
+   * range (none for a range of shas), two trees, the files that the cache lacks, `diffSources`
+   * in the worker. A failed overlay leaves the present picture (C6). `keepList`: picked from the
+   * commit list, which stays.
+   */
+  async function openOverlay(repo: Repo, how: OverlaySpec | Range, hash?: string, note?: string, keepList = false) {
+    const my = ++openSeq;
+    const id = `${repo.owner}/${repo.name}`;
+    try {
+      await init();
+      const t0 = performance.now();
+      phase = `opening ${id}`;
+      const forge = ghForge();
+      ghCache ??= openCache();
+      const cache = await ghCache;
+      let range: Range;
+      if ('kind' in how) {
+        phase = `resolving ${how.kind === 'pull' ? `pull request #${how.n}` : how.kind === 'commit' ? `commit ${repo.ref}` : `${how.base}${how.mergeBase ? '...' : '..'}${repo.ref}`} of ${id}`;
+        range = await resolveRange(forge, repo, how);
+      } else range = how;
+      if (my !== openSeq) return;
+      if (gh === `${id}@${range.head}` && ghOverlay && ghOverlay.range.base === range.base) {
+        phase = null;
+        await showGh('commit', hash);
+        return;
+      }
+      const inputs = await fetchOverlay(forge, repo, range, cache, isInput, (p) => {
+        if (my === openSeq) phase = p;
+      });
+      if (my !== openSeq) return;
+      const names = overlayNames(range);
+      console.info(`fetched ${id} ${names.base}..${names.head}: ${inputs.base.paths.length} + ${inputs.head.paths.length} inputs, ${inputs.changed.length} changed files ${Math.round(performance.now() - t0)} ms`);
+      phase = `indexing ${names.base} → ${names.head} of ${id}`;
+      const r = await diffInWorker({ rootName: inputs.root, base: inputs.base, head: inputs.head, baseName: names.base, headName: names.head, changed: inputs.changed });
+      if (my !== openSeq) return;
+      const overlay = JSON.parse(r.graphText) as Graph;
+      const head = headOf(overlay);
+      console.info(`overlay ${id} ${names.base}..${names.head}: ${overlay.nodes.length} nodes ${overlay.edges.length} edges ${Math.round(performance.now() - t0)} ms`);
+      phase = null;
+      const origin = `Fetched from GitHub; cached by blob sha in this browser. The overlay of ${range.base ?? 'nothing'} to ${range.head} is built here; a reload shows the same overlay.`;
+      const headSummary = summarize(`${id}@${names.head}`, inputs.head.paths, head, r.report, origin);
+      if (note) headSummary.text += ` (${note})`;
+      const overlaySummary = summarize(`${id} ${names.base} → ${names.head}`, inputs.head.paths, overlay, r.report, origin);
+      overlaySummary.text += `, ${inputs.changed.length} changed files${note ? ` (${note})` : ''}`;
+      if (!keepList) {
+        commitList = null;
+        listOpen = false;
+      }
+      ghRepo = { owner: repo.owner, name: repo.name };
+      ghHead = { text: JSON.stringify(head), summary: headSummary };
+      ghOverlay = { text: r.graphText, summary: overlaySummary, range };
+      ghMode = 'commit';
+      await loadOpened(r.graphText, overlaySummary, hash, `${id}@${range.head}`);
+    } catch (e) {
+      if (my !== openSeq) return;
+      phase = null;
+      error = `cannot build the overlay of ${id}: ${e instanceof Error ? e.message : String(e)}`;
+      if (!tree) missing = true;
+    }
+  }
+
+  /** Switches between the plain graph of the head and the overlay, both in memory: no fetch (C5). */
+  async function showGh(mode: Source, hash = location.hash) {
+    if (!gh) return;
+    if (mode === 'graph') {
+      if (!ghHead || ghMode === 'graph') return;
+      ghMode = 'graph';
+      await loadOpened(ghHead.text, ghHead.summary, hash, gh);
+      return;
+    }
+    if (ghMode === 'commit') return;
+    ghMode = 'commit';
+    if (ghOverlay) await loadOpened(ghOverlay.text, ghOverlay.summary, hash, gh);
+  }
+
+  /** The commit list of C3: one call, none when cached; anchored at the sha shown when first asked. */
+  async function loadCommits() {
+    if (!ghRepo || !gh || commitList) return;
+    const repo = ghRepo;
+    const anchor = gh.slice(gh.lastIndexOf('@') + 1);
+    listStatus = `listing the last ${COMMITS} commits`;
+    try {
+      ghCache ??= openCache();
+      const list = await cachedCommits(ghForge(), repo, anchor, COMMITS, await ghCache);
+      if (ghRepo !== repo) return;
+      commitList = { anchor, list };
+      listStatus = null;
+    } catch (e) {
+      listStatus = `cannot list the commits: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  function pickCommit(sha: string) {
+    const c = commitList?.list.find((x) => x.sha === sha);
+    if (!c || !ghRepo) return;
+    openOverlay({ ...ghRepo, ref: c.sha }, { base: c.parents[0] ?? null, head: c.sha }, undefined, undefined, true);
+  }
+
+  /** A reload or a shared link: the same commit, with the view that the hash holds (G5); with `base`, the same overlay (C5). */
+  function openFromHash(spec: string, hash: string, base: string | null | undefined) {
     const p = parseRepo(spec);
-    if (p.ok) openGithub(p.repo, undefined, hash);
-    else {
+    if (!p.ok) {
       error = p.error;
       if (!tree) missing = true;
+    } else if (base === undefined) {
+      if (gh === spec && ghHead) showGh('graph', hash);
+      else openGithub(p.repo, undefined, hash);
+    } else {
+      // The app writes full shas, which cost no call; a hand-written ref is resolved.
+      const full = (x: string | null | undefined) => typeof x === 'string' && /^[0-9a-f]{40}$/i.test(x);
+      const head = p.repo.ref;
+      if (full(head) && (base === null || full(base)))
+        openOverlay(p.repo, { base: base?.toLowerCase() ?? null, head: head!.toLowerCase() }, hash);
+      else if (base === null) openOverlay(p.repo, { kind: 'commit' }, hash);
+      else openOverlay(p.repo, { kind: 'range', base, mergeBase: false }, hash);
     }
   }
 
@@ -403,6 +549,7 @@
     const h = encodeHash({
       src: src ?? undefined,
       gh: gh ?? undefined,
+      base: shownBase,
       level: hashState.level,
       tests,
       open: hashState.open,
@@ -419,7 +566,7 @@
       if (location.hash === lastHash) return;
       const d = decodeHash(location.hash);
       if (d.gh) {
-        if (d.gh !== gh) openFromHash(d.gh, location.hash);
+        if (d.gh !== gh || d.base !== shownBase) openFromHash(d.gh, location.hash, d.base);
         else applyHash(location.hash);
         return;
       }
@@ -433,7 +580,7 @@
       .then((r) => (hasCommit = r.ok && !!r.headers.get('content-type')?.includes('json')))
       .catch(() => (hasCommit = false));
     const start = decodeHash(location.hash);
-    if (start.gh) openFromHash(start.gh, location.hash);
+    if (start.gh) openFromHash(start.gh, location.hash, start.base);
     else fetchSource(start.src ?? 'graph');
     return () => window.removeEventListener('hashchange', onHash);
   });
@@ -476,10 +623,17 @@
     {tests}
     {busy}
     moved={offsets.size > 0}
-    {src}
-    {hasCommit}
+    src={gh ? ghMode : src}
+    hasCommit={gh ? true : hasCommit}
     onsrc={(s) => {
-      if (s !== src) fetchSource(s);
+      if (gh) {
+        showGh(s);
+        // Without an overlay the commit view is the list to pick one from.
+        if (s === 'commit' && !ghOverlay) {
+          listOpen = true;
+          loadCommits();
+        }
+      } else if (s !== src) fetchSource(s);
     }}
     onlevel={setLevel}
     ontests={(v) => (tests = v)}
@@ -510,7 +664,17 @@
         unfolded = new Set();
         setFocus({ nodes: [], changes: true, neighbors: focus.neighbors });
       }}
+      {listOpen}
+      onlist={gh
+        ? () => {
+            listOpen = !listOpen;
+            if (listOpen) loadCommits();
+          }
+        : undefined}
     />
+  {/if}
+  {#if gh && ghMode === 'commit' && listOpen}
+    <CommitList rows={commitList ? commitRows(commitList.list, ghOverlay?.range ?? null) : null} status={listStatus} onpick={pickCommit} />
   {/if}
   {#if tree && focusActive(focus)}
     <FocusBar

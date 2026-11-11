@@ -9,6 +9,8 @@
     changesOnly,
     onchanges,
     onopen,
+    listOpen = false,
+    onlist,
   }: {
     diff: { base: string; head: string };
     totals: CommitTotals;
@@ -16,6 +18,9 @@
     changesOnly: boolean;
     onchanges: (v: boolean) => void;
     onopen: () => void;
+    listOpen?: boolean;
+    /** Absent: no commit list (a commit.json from the CLI). */
+    onlist?: () => void;
   } = $props();
 
   const btn = 'px-2 py-0.5 border border-[var(--line)] hover:border-[var(--muted)]';
@@ -56,4 +61,7 @@
     <input type="checkbox" checked={changesOnly} onchange={(e) => onchanges(e.currentTarget.checked)} />changes only
   </label>
   <button class={btn} onclick={onopen}>open changed</button>
+  {#if onlist}
+    <button class="{btn} {listOpen ? 'bg-[var(--line)]' : ''}" onclick={onlist} data-list-toggle>commits</button>
+  {/if}
 </div>

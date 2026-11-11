@@ -10,6 +10,18 @@ export interface Repo {
   ref?: string;
 }
 
+/** One commit of a history list. */
+export interface Commit {
+  sha: string;
+  /** In order; the first is the one an overlay compares with. Empty for a root commit. */
+  parents: string[];
+  /** The first line of the message. */
+  title: string;
+  author: string;
+  /** ISO 8601, as the forge gives it. */
+  date: string;
+}
+
 export interface Entry {
   path: string;
   blobSha: string;
@@ -31,6 +43,12 @@ export interface Forge {
   tree(repo: Repo, sha: string): Promise<Entry[]>;
   /** The text of one file at the commit. */
   text(repo: Repo, sha: string, path: string): Promise<string>;
+  /** The last `n` commits reachable from the commit `sha` (it first), newest first. A ref works too. */
+  commits(repo: Repo, sha: string, n: number): Promise<Commit[]>;
+  /** The commit sha of the merge base of two refs (`git merge-base a b`). */
+  mergeBase(repo: Repo, a: string, b: string): Promise<string>;
+  /** The head commit of a pull request and its merge base with the base branch. */
+  pull(repo: Repo, n: number): Promise<{ base: string; head: string }>;
 }
 
 /** `work` on each item with at most `limit` running at a time; the results in the order of the items. Rejects on the first failure. */

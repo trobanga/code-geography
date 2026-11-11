@@ -5,6 +5,8 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { Explorer, diffSources, indexSources, initSync, isInput } from './wasm/cg_wasm.js';
 import type { Graph, View } from './types';
+import { runJob } from './workerJob';
+import { headOf } from './commit';
 
 initSync({ module: readFileSync(new URL('./wasm/cg_wasm_bg.wasm', import.meta.url)) });
 
@@ -136,5 +138,56 @@ describe('the indexer in WASM', () => {
   it('throws on parallel arrays of different length and on an unknown kind', () => {
     expect(() => diffSources(['A.java'], [], [], [], 'repo', 'a', 'b', [], [])).toThrow(/1 base paths but 0 base texts/);
     expect(() => diffSources([], [], [], [], 'repo', 'a', 'b', ['README.md'], ['renamed'])).toThrow(/renamed/);
+  });
+});
+
+const wasm = { indexSources, diffSources };
+
+describe('runJob', () => {
+  it('builds the overlay of two source sets with the changed files', () => {
+    const reply = runJob(
+      {
+        kind: 'diff',
+        rootName: 'repo',
+        base: { paths: ['pom.xml', 'src/main/java/a/A.java'], texts: ['', 'package a;\nclass A {}\n'] },
+        head: { paths: ['pom.xml', 'src/main/java/a/B.java'], texts: ['', 'package a;\nclass B {}\n'] },
+        baseName: 'aaaaaaa',
+        headName: 'bbbbbbb',
+        changed: [
+          { path: 'README.md', change: 'modified' },
+          { path: 'src/main/java/a/A.java', change: 'removed' },
+          { path: 'src/main/java/a/B.java', change: 'added' },
+        ],
+      },
+      wasm,
+    );
+    if (!reply.ok) throw new Error(reply.error);
+    const g = JSON.parse(reply.graphText) as Graph;
+    expect(g.nodes.find((n) => n.id === 'type:a.A')?.change).toBe('removed');
+    expect(g.nodes.find((n) => n.id === 'type:a.B')?.change).toBe('added');
+    expect(g.diff).toMatchObject({ base: 'aaaaaaa', head: 'bbbbbbb' });
+    expect(g.diff?.files?.map((f) => f.path)).toEqual(['README.md', 'src/main/java/a/A.java', 'src/main/java/a/B.java']);
+    expect(reply.report.calls).toBeDefined();
+  });
+});
+
+describe('headOf', () => {
+  it('gives back the plain graph of the head from the overlay: the same nodes and edges as indexing the head alone', () => {
+    const base = {
+      paths: ['pom.xml', 'src/main/java/a/A.java', 'src/main/java/a/Gone.java'],
+      texts: ['', 'package a;\nclass A { void f() {} }\n', 'package a;\nclass Gone extends A {}\n'],
+    };
+    const head = {
+      paths: ['pom.xml', 'src/main/java/a/A.java', 'src/main/java/a/New.java'],
+      texts: ['', 'package a;\nclass A { void f() { g(); } void g() {} }\n', 'package a;\nclass New extends A {}\n'],
+    };
+    const reply = runJob({ kind: 'diff', rootName: 'r', base, head, baseName: 'b', headName: 'h', changed: [] }, wasm);
+    if (!reply.ok) throw new Error(reply.error);
+    const plain = JSON.parse(indexSources(head.paths, head.texts, 'r')).graph as Graph;
+    const got = headOf(JSON.parse(reply.graphText) as Graph);
+    const sorted = (xs: unknown[]) => xs.map((x) => JSON.stringify(x)).sort();
+    expect(got.diff).toBeUndefined();
+    expect(sorted(got.nodes)).toEqual(sorted(plain.nodes));
+    expect(sorted(got.edges)).toEqual(sorted(plain.edges));
   });
 });

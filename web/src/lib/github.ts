@@ -1,15 +1,17 @@
 // GitHub as a `Forge` (ADR 0020): the only place that knows GitHub URLs and answers.
 // The tree comes from the API (one call), the texts from the raw host (no API limit).
-import type { Entry, Fetch, Forge, Repo } from './forge';
+import type { Commit, Entry, Fetch, Forge, Repo } from './forge';
+import type { OverlaySpec } from './forgeDiff';
 
-export type Parsed = { ok: true; repo: Repo; note?: string } | { ok: false; error: string };
+export type Parsed = { ok: true; repo: Repo; note?: string; overlay?: OverlaySpec } | { ok: false; error: string };
 
 const OWNER = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/;
 const NAME = /^[A-Za-z0-9._-]+$/;
 // What git allows in a ref name, roughly: no space, no control character, none of ~^:?*[\ .
 const REF = /^[^\s~^:?*[\\]+$/;
 
-const FORMS = 'give owner/repo, owner/repo@ref, or a URL https://github.com/owner/repo[/tree/<ref> | /commit/<sha>]';
+const FORMS =
+  'give owner/repo, owner/repo@ref, owner/repo@A..B, owner/repo@A...B, or a URL https://github.com/owner/repo[/tree/<ref> | /commit/<sha> | /compare/A...B | /pull/<n>]';
 
 function make(owner: string, name: string, ref: string | undefined): Repo | null {
   if (!OWNER.test(owner) || !NAME.test(name) || name === '.' || name === '..') return null;
@@ -24,19 +26,41 @@ export function parseRepo(input: string): Parsed {
   const url = /^(?:https?:\/\/)?(?:www\.)?github\.com\/(.*)$/i.exec(s);
   if (url) {
     const [owner = '', rawName = '', kind, ...rest] = url[1].replace(/\/$/, '').split('/');
+    if (kind === 'pull') {
+      const n = /^[1-9][0-9]*$/.test(rest[0] ?? '') ? Number(rest[0]) : NaN;
+      const repo = make(owner, rawName.replace(/\.git$/, ''), undefined);
+      return repo && Number.isSafeInteger(n) ? { ok: true, repo, overlay: { kind: 'pull', n } } : bad;
+    }
+    if (kind === 'compare') {
+      const range = rest.join('/');
+      return (range.includes('..') && withRange(owner, rawName.replace(/\.git$/, ''), range)) || bad;
+    }
     if (kind !== undefined && kind !== 'tree' && kind !== 'commit') return bad;
     const repo = make(owner, rawName.replace(/\.git$/, ''), kind === undefined ? undefined : rest.join('/'));
     if (!repo) return bad;
     // A URL cannot tell a branch `feature/x` from a directory `x` of branch `feature`.
     if (kind === 'tree' && rest.length > 1)
       return { ok: true, repo, note: `took "${repo.ref}" as the whole branch name; a path inside a branch is not supported` };
-    return { ok: true, repo };
+    return kind === 'commit' ? { ok: true, repo, overlay: { kind: 'commit' } } : { ok: true, repo };
   }
   const at = s.indexOf('@');
   const parts = (at < 0 ? s : s.slice(0, at)).split('/');
   if (parts.length !== 2) return bad;
-  const repo = make(parts[0], parts[1], at < 0 ? undefined : s.slice(at + 1));
-  return repo ? { ok: true, repo } : bad;
+  return withRange(parts[0], parts[1], at < 0 ? undefined : s.slice(at + 1)) ?? bad;
+}
+
+/** The repository at `ref`; a ref `A..B` or `A...B` is the overlay of a range (git forbids `..` in a ref name). */
+function withRange(owner: string, name: string, ref: string | undefined): Parsed | null {
+  const dots = ref === undefined ? -1 : ref.indexOf('..');
+  if (ref === undefined || dots < 0) {
+    const repo = make(owner, name, ref);
+    return repo && { ok: true, repo };
+  }
+  const mergeBase = ref.startsWith('...', dots);
+  const base = ref.slice(0, dots);
+  const repo = make(owner, name, ref.slice(dots + (mergeBase ? 3 : 2)));
+  if (!repo || !REF.test(base) || base.includes('..') || repo.ref!.includes('..')) return null;
+  return { ok: true, repo, overlay: { kind: 'range', base, mergeBase } };
 }
 
 export interface Net {
@@ -76,8 +100,63 @@ export function github(net: Net): Forge {
       const p = path.split('/').map(encodeURIComponent).join('/');
       return (await get(net, `${RAW}/${repo.owner}/${repo.name}/${sha}/${p}`, repo)).text();
     },
+
+    /** One API call. */
+    async commits(repo, sha, n) {
+      const url = `${API}/repos/${repo.owner}/${repo.name}/commits?sha=${encodeURIComponent(sha)}&per_page=${n}`;
+      const body = (await (await get(net, url, { ...repo, ref: sha })).json()) as {
+        sha: string;
+        parents: { sha: string }[];
+        commit: { message: string; author: { name: string; date: string } | null };
+      }[];
+      return body.map(
+        (c): Commit => ({
+          sha: c.sha,
+          parents: c.parents.map((p) => p.sha),
+          title: c.commit.message.split('\n', 1)[0],
+          author: c.commit.author?.name ?? '',
+          date: c.commit.author?.date ?? '',
+        }),
+      );
+    },
+
+    /** One API call. */
+    async mergeBase(repo, a, b) {
+      return mergeBase(net, repo, a, b);
+    },
+
+    /** Two API calls: the pull request gives the tip of its base branch, not the merge base. */
+    async pull(repo, n) {
+      const url = `${API}/repos/${repo.owner}/${repo.name}/pulls/${n}`;
+      let r: Response;
+      try {
+        r = await get(net, url, repo);
+      } catch (e) {
+        if (e instanceof NotFound) throw new Error(`${repo.owner}/${repo.name}: no pull request #${n} (or the repository is private)`);
+        throw e;
+      }
+      const body = (await r.json()) as { head: { sha: string }; base: { sha: string } };
+      return { base: await mergeBase(net, repo, body.base.sha, body.head.sha), head: body.head.sha };
+    },
   };
 }
+
+async function mergeBase(net: Net, repo: Repo, a: string, b: string): Promise<string> {
+  const range = `${encodeURIComponent(a)}...${encodeURIComponent(b)}`;
+  const url = `${API}/repos/${repo.owner}/${repo.name}/compare/${range}?per_page=1`;
+  let r: Response;
+  try {
+    r = await get(net, url, repo);
+  } catch (e) {
+    if (e instanceof NotFound)
+      throw new Error(`${repo.owner}/${repo.name}: cannot compare ${a}...${b}: an unknown branch, tag or commit, or no common history`);
+    throw e;
+  }
+  return ((await r.json()) as { merge_base_commit: { sha: string } }).merge_base_commit.sha;
+}
+
+/** A 404 answer, which some callers explain better than `httpError` can. */
+class NotFound extends Error {}
 
 /** One request; a failed one rejects with the message of `httpError` or of the network. */
 async function get(net: Net, url: string, repo: Repo, headers: Record<string, string> = {}): Promise<Response> {
@@ -87,6 +166,7 @@ async function get(net: Net, url: string, repo: Repo, headers: Record<string, st
   } catch (e) {
     throw new Error(`cannot reach ${new URL(url).host} (network failure): ${e instanceof Error ? e.message : String(e)}`);
   }
+  if (r.status === 404) throw new NotFound(httpError(r, repo));
   if (!r.ok) throw new Error(httpError(r, repo));
   return r;
 }

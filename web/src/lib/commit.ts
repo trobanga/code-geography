@@ -100,3 +100,12 @@ export function badgeLabel(c: ChangeCount, own?: NodeChange): string {
   if (n('modified') > 0) parts.push(`~${n('modified')}`);
   return parts.join(' ');
 }
+
+/** The plain graph of the head of an overlay: without what the head removed and without marks. */
+export function headOf(overlay: Graph): Graph {
+  const plain = <T extends { change?: unknown }>({ change: _, ...rest }: T) => rest;
+  return {
+    nodes: overlay.nodes.filter((n) => n.change !== 'removed').map(plain),
+    edges: overlay.edges.filter((e) => e.change !== 'removed').map(plain),
+  };
+}

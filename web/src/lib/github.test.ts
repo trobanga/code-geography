@@ -32,7 +32,32 @@ describe('parseRepo', () => {
     expect(parseRepo('https://github.com/a/b.git')).toEqual({ ok: true, repo: { owner: 'a', name: 'b' } });
     expect(parseRepo('github.com/a/b/')).toEqual({ ok: true, repo: { owner: 'a', name: 'b' } });
     expect(parseRepo('https://github.com/a/b/tree/main')).toEqual({ ok: true, repo: { owner: 'a', name: 'b', ref: 'main' } });
-    expect(parseRepo('https://github.com/a/b/commit/88a95fa')).toEqual({ ok: true, repo: { owner: 'a', name: 'b', ref: '88a95fa' } });
+  });
+
+  it('reads a commit URL as the repository at that commit with the overlay of that commit', () => {
+    expect(parseRepo('https://github.com/a/b/commit/88a95fa')).toEqual({ ok: true, repo: { owner: 'a', name: 'b', ref: '88a95fa' }, overlay: { kind: 'commit' } });
+  });
+
+  it('reads owner/repo@A..B as the overlay of A to B, and A...B as from their merge base', () => {
+    expect(parseRepo('a/b@v1..main')).toEqual({ ok: true, repo: { owner: 'a', name: 'b', ref: 'main' }, overlay: { kind: 'range', base: 'v1', mergeBase: false } });
+    expect(parseRepo('a/b@v1...feature/x')).toEqual({
+      ok: true,
+      repo: { owner: 'a', name: 'b', ref: 'feature/x' },
+      overlay: { kind: 'range', base: 'v1', mergeBase: true },
+    });
+  });
+
+  it('reads a compare URL with two or three dots, and a pull request URL', () => {
+    expect(parseRepo('https://github.com/a/b/compare/v1...feature/x')).toEqual({
+      ok: true,
+      repo: { owner: 'a', name: 'b', ref: 'feature/x' },
+      overlay: { kind: 'range', base: 'v1', mergeBase: true },
+    });
+    expect(parseRepo('github.com/a/b/compare/v1..v2')).toMatchObject({ overlay: { kind: 'range', base: 'v1', mergeBase: false } });
+    expect(parseRepo('https://github.com/a/b/pull/42')).toEqual({ ok: true, repo: { owner: 'a', name: 'b' }, overlay: { kind: 'pull', n: 42 } });
+    expect(parseRepo('https://github.com/a/b/pull/42/files')).toMatchObject({ overlay: { kind: 'pull', n: 42 } });
+    for (const bad of ['https://github.com/a/b/compare/main', 'https://github.com/a/b/pull/x', 'https://github.com/a/b/pull/'])
+      expect(parseRepo(bad), bad).toMatchObject({ ok: false });
   });
 
   it('takes the whole rest of a /tree/ URL as the ref and says so', () => {
@@ -155,4 +180,55 @@ describe('fetchRepo from GitHub', () => {
     expect(again.calls).toHaveLength(0);
   });
 
+});
+
+const P1 = '1111111111111111111111111111111111111111';
+
+describe('commits', () => {
+  it('lists the last n commits reachable from a sha in one call: sha, parents, first line, author, date', async () => {
+    const net = fakeFetch({
+      [`https://api.github.com/repos/a/b/commits?sha=${SHA}&per_page=2`]: json([
+        { sha: SHA, parents: [{ sha: P1 }, { sha: 'x' }], commit: { message: 'Merge it\n\nbody', author: { name: 'Ann', date: '2026-11-01T10:00:00Z' } } },
+        { sha: P1, parents: [], commit: { message: 'First', author: { name: 'Bo', date: '2026-10-01T10:00:00Z' } } },
+      ]),
+    });
+    expect(await github({ fetch: net.fetch }).commits({ owner: 'a', name: 'b' }, SHA, 2)).toEqual([
+      { sha: SHA, parents: [P1, 'x'], title: 'Merge it', author: 'Ann', date: '2026-11-01T10:00:00Z' },
+      { sha: P1, parents: [], title: 'First', author: 'Bo', date: '2026-10-01T10:00:00Z' },
+    ]);
+    expect(net.calls).toHaveLength(1);
+  });
+});
+
+const P2 = '2222222222222222222222222222222222222222';
+
+describe('mergeBase and pull', () => {
+  it('finds the merge base of two refs in one call', async () => {
+    const net = fakeFetch({
+      'https://api.github.com/repos/a/b/compare/main...feature%2Fx?per_page=1': json({ merge_base_commit: { sha: P1 } }),
+    });
+    expect(await github({ fetch: net.fetch }).mergeBase({ owner: 'a', name: 'b' }, 'main', 'feature/x')).toBe(P1);
+    expect(net.calls).toHaveLength(1);
+  });
+
+  it('gives the head of a pull request and its merge base with its base branch, in two calls', async () => {
+    const net = fakeFetch({
+      'https://api.github.com/repos/a/b/pulls/7': json({ head: { sha: SHA }, base: { sha: P2 } }),
+      [`https://api.github.com/repos/a/b/compare/${P2}...${SHA}?per_page=1`]: json({ merge_base_commit: { sha: P1 } }),
+    });
+    expect(await github({ fetch: net.fetch }).pull({ owner: 'a', name: 'b' }, 7)).toEqual({ base: P1, head: SHA });
+    expect(net.calls).toHaveLength(2);
+  });
+
+  it('says that a pull request does not exist on 404', async () => {
+    const net = fakeFetch({});
+    await expect(github({ fetch: net.fetch }).pull({ owner: 'a', name: 'b' }, 7)).rejects.toThrow('a/b: no pull request #7');
+  });
+
+  it('says that a compare failed on 404: an unknown ref or no common history', async () => {
+    const net = fakeFetch({});
+    await expect(github({ fetch: net.fetch }).mergeBase({ owner: 'a', name: 'b' }, 'main', 'nope')).rejects.toThrow(
+      'a/b: cannot compare main...nope: an unknown branch, tag or commit, or no common history',
+    );
+  });
 });
