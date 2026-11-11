@@ -1,0 +1,52 @@
+--- a/crates/index-java/src/lib.rs
++++ b/crates/index-java/src/lib.rs
+@@ -23,6 +23,7 @@
+ ];
+ 
+ struct Unit {
++    path: String,
+     source: String,
+     tree: Tree,
+     package: String,
+@@ -236,6 +237,7 @@
+             });
+         }
+         units.push(Unit {
++            path: file.clone(),
+             source,
+             tree,
+             package,
+--- a/crates/index-java/src/calls.rs
++++ b/crates/index-java/src/calls.rs
+@@ -285,6 +285,7 @@
+     from: &'a str,
+     /// The own type of a function: a call that reaches it gives no edge.
+     from_parent: Option<&'a str>,
++    path: &'a str,
+     report: &'a mut CallReport,
+     found: &'a mut Vec<(String, String)>,
+     seen: HashMap<usize, Outcome<'a>>,
+@@ -319,6 +320,7 @@
+                 .parent
+                 .as_deref()
+                 .filter(|_| decl.kind == NodeKind::Function),
++            path: &unit.path,
+             report,
+             found,
+             seen: HashMap::new(),
+@@ -589,6 +591,15 @@
+             return known.clone();
+         }
+         let outcome = self.compute(node);
++        {
++            let (o, t) = match &outcome {
++                Outcome::Function(m) => ("function", m.id.clone()),
++                Outcome::Type(id) => ("type", id.clone()),
++                Outcome::External => ("external", String::new()),
++                Outcome::Unresolved(r) => ("unresolved", r.to_string()),
++            };
++            eprintln!("SITE\t{}\t{}\t{}\t{}\t{}\t{}\t{}", self.path, node.start_byte(), node.end_byte(), node.kind(), o, t, self.from);
++        }
+         match &outcome {
+             Outcome::Function(method) => {
+                 self.report.to_function += 1;
