@@ -1,0 +1,159 @@
+diff -ru a/crates/index-rust/src/calls.rs b/crates/index-rust/src/calls.rs
+--- a/crates/index-rust/src/calls.rs	2026-11-11 09:36:05.865794284 +0100
++++ b/crates/index-rust/src/calls.rs	2026-11-11 09:36:05.865794284 +0100
+@@ -39,6 +39,21 @@
+     };
+     let mut report = CallReport::default();
+     let mut stats = Stats::default();
++    for decl in decls {
++        let name = decl.item.child_by_field_name("name");
++        eprintln!(
++            "DECL\t{:?}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
++            decl.kind,
++            decl.id,
++            mods[decl.module].file,
++            name.map_or(0, |n| n.start_byte()),
++            name.map_or(0, |n| n.end_byte()),
++            decl.item.start_byte(),
++            decl.item.end_byte(),
++            decl.parent,
++            decl.test
++        );
++    }
+     for (f, decl) in decls.iter().enumerate() {
+         if decl.kind != NodeKind::Function {
+             continue;
+@@ -50,6 +65,8 @@
+         let mut walker = Walker {
+             types: &types,
+             source: mods[decl.module].source,
++            file: mods[decl.module].file,
++            site: (0, 0, "none"),
+             cx,
+             from: &decl.id,
+             edges: &mut *edges,
+@@ -100,6 +117,8 @@
+             let mut walker = Walker {
+                 types: &types,
+                 source: m.source,
++                file: m.file,
++                site: (0, 0, "none"),
+                 cx: types.item_cx(index, holder),
+                 from: &from,
+                 edges: &mut *edges,
+@@ -125,6 +144,9 @@
+     types: &'c Types<'c, 'w, 't>,
+     cx: Cx,
+     source: &'t str,
++    file: &'t str,
++    /// The name token of the call site that is resolved now, and its form.
++    site: (usize, usize, &'static str),
+     from: &'c str,
+     edges: &'c mut BTreeSet<Edge>,
+     report: &'c mut CallReport,
+@@ -298,11 +320,18 @@
+                 let name = text(node, self.source);
+                 match self.local(name) {
+                     Some(ty) => ty.clone(),
+-                    None => self.path_value(&[name]),
++                    None => {
++                        self.site = (node.start_byte(), node.end_byte(), "value");
++                        self.path_value(&[name])
++                    }
+                 }
+             }
+             "scoped_identifier" => match path_of(node, self.source) {
+-                Some(path) => self.path_value(&path),
++                Some(path) => {
++                    let t = name_token(node);
++                    self.site = (t.start_byte(), t.end_byte(), "value");
++                    self.path_value(&path)
++                }
+                 None => Ty::Unknown,
+             },
+             "parenthesized_expression" | "reference_expression" => {
+@@ -382,6 +411,7 @@
+     /// The arguments of a macro are tokens, and the macro decides what they mean: no edge.
+     /// A name that a `(` follows is counted as a call site, to know the size of the gap.
+     fn count_macro_calls(&mut self, call: Ts<'t>) {
++        eprintln!("MACRO\t{}\t{}\t{}\t{}", self.file, call.start_byte(), call.end_byte(), self.from);
+         let mut tokens = Vec::new();
+         for child in named_children(call) {
+             if child.kind() == "token_tree" {
+@@ -461,9 +491,14 @@
+             return self.method_call(function);
+         }
+         match path_of(function, self.source) {
+-            Some(path) => self.path_call(&path, first_argument.unwrap_or(Ty::Unknown)),
++            Some(path) => {
++                let t = name_token(function);
++                self.site = (t.start_byte(), t.end_byte(), "call");
++                self.path_call(&path, first_argument.unwrap_or(Ty::Unknown))
++            }
+             None => {
+                 self.visit(function);
++                self.site = (function.start_byte(), function.end_byte(), "call-expr");
+                 self.tally(Kind::Unresolved);
+                 Ty::Unknown
+             }
+@@ -554,6 +589,7 @@
+     fn call_function(&mut self, target: usize, receiver: Option<usize>) -> Ty {
+         self.tally(Kind::Function);
+         let to = self.types.decls[target].id.clone();
++        self.print_site("function", &to);
+         self.add(&to);
+         self.types.ret_ty(target, receiver)
+     }
+@@ -561,6 +597,7 @@
+     fn call_type(&mut self, owner: usize) -> Ty {
+         self.tally(Kind::Type);
+         let to = self.types.decls[owner].id.clone();
++        self.print_site("type", &to);
+         self.add(&to);
+         Ty::Unknown
+     }
+@@ -597,6 +634,9 @@
+         let name = function
+             .child_by_field_name("field")
+             .map_or("", |f| text(f, self.source));
++        if let Some(f) = function.child_by_field_name("field") {
++            self.site = (f.start_byte(), f.end_byte(), "method");
++        }
+         self.method(receiver, name)
+     }
+ 
+@@ -670,8 +710,18 @@
+         }
+     }
+ 
++    fn print_site(&self, outcome: &str, target: &str) {
++        let (start, end, form) = self.site;
++        eprintln!("SITE\t{}\t{start}\t{end}\t{form}\t{outcome}\t{target}\t{}", self.file, self.from);
++    }
++
+     fn tally(&mut self, kind: Kind) {
+         match kind {
++            Kind::External => self.print_site("external", ""),
++            Kind::Unresolved => self.print_site("unresolved", ""),
++            _ => {}
++        }
++        match kind {
+             Kind::Function => self.report.to_function += 1,
+             Kind::Type => self.report.to_type += 1,
+             Kind::External => self.report.external += 1,
+@@ -710,6 +760,15 @@
+     }
+ }
+ 
++/// The last name of a path: `f` in `a::b::f` and in `a::f::<T>`.
++fn name_token(node: Ts) -> Ts {
++    match node.kind() {
++        "scoped_identifier" => node.child_by_field_name("name").unwrap_or(node),
++        "generic_function" => node.child_by_field_name("function").map_or(node, name_token),
++        _ => node,
++    }
++}
++
+ fn starts_uppercase(name: &str) -> bool {
+     name.chars().next().is_some_and(char::is_uppercase)
+ }
