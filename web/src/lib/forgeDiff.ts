@@ -122,6 +122,9 @@ export async function cachedCommits(forge: Forge, repo: Repo, sha: string, n: nu
  */
 const UPDATE_BOT = /^(mend )?(renovate|dependabot)([ -](bot|preview))?(\[bot\])?$/i;
 
+/** The title of a merge of a branch `renovate/…` or `dependabot/…`, as GitHub and Forgejo write it. */
+const BOT_BRANCH = /^Merge .*\b(renovate|dependabot)\//i;
+
 /** The author of the commit is a bot that updates dependencies; the commit list leaves such commits out. */
 export function byUpdateBot(c: Commit): boolean {
   return UPDATE_BOT.test(c.author.trim());
@@ -139,11 +142,18 @@ export interface CommitRow {
 }
 
 /**
- * The rows of the commit list, without the commits of update bots (`byUpdateBot`); `shown` is the
- * range of the overlay shown, if any.
+ * The rows of the commit list, without the commits of update bots (`byUpdateBot`) and the merge
+ * commits that merge them; `shown` is the range of the overlay shown, if any.
  */
 export function commitRows(list: Commit[], shown: Range | null): CommitRow[] {
-  return list.filter((c) => !byUpdateBot(c)).map((c) => ({
+  const bots = new Set(list.filter(byUpdateBot).map((c) => c.sha));
+  /**
+   * A merge commit whose merged parent (not the first) is a commit of an update bot, or, for a
+   * merged commit that the list does not hold, whose title names a branch of such a bot.
+   */
+  const mergesBot = (c: Commit) =>
+    c.parents.length > 1 && (c.parents.slice(1).some((p) => bots.has(p)) || BOT_BRANCH.test(c.title));
+  return list.filter((c) => !bots.has(c.sha) && !mergesBot(c)).map((c) => ({
     sha: c.sha,
     short: c.sha.slice(0, 7),
     title: c.title,

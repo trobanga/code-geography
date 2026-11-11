@@ -162,6 +162,30 @@ describe('commitRows', () => {
     ];
     expect(commitRows(list, null).map((r) => r.sha)).toEqual([HEAD]);
   });
+
+  it('leaves out a merge commit that merges a commit of such a bot', () => {
+    const list = [
+      { sha: 'm2', parents: ['m1', 'w1'], title: 'Merge the work', author: 'Ann', date: '' },
+      { sha: 'w1', parents: [BASE], title: 'Work', author: 'Bo', date: '' },
+      { sha: 'm1', parents: [BASE, 'r1'], title: 'Merge the update', author: 'Ann', date: '' },
+      { sha: 'r1', parents: [BASE], title: 'Update dependency x', author: 'renovate[bot]', date: '' },
+      { sha: BASE, parents: [], title: 'First', author: 'Ann', date: '' },
+    ];
+    expect(commitRows(list, null).map((r) => r.sha)).toEqual(['m2', 'w1', BASE]);
+  });
+
+  it('leaves out a merge commit whose title names a branch of such a bot, if the list does not hold the merged commit', () => {
+    const merge = (sha: string, title: string) => ({ sha, parents: [BASE, 'not-listed'], title, author: 'Ann', date: '' });
+    const list = [
+      merge('g', 'Merge pull request #12 from o/renovate/serde-1.x'),
+      merge('f', "Merge pull request 'Update x' (#12) from renovate/x into main"),
+      merge('d', 'Merge pull request #7 from o/dependabot/npm_and_yarn/vite-7.1.0'),
+      merge('w', 'Merge pull request #8 from o/renovate-config-docs'),
+      // No merge commit: the title alone does not hide it.
+      { sha: 's', parents: [BASE], title: 'Merge the notes on renovate/x', author: 'Ann', date: '' },
+    ];
+    expect(commitRows(list, null).map((r) => r.sha)).toEqual(['w', 's']);
+  });
 });
 
 describe('byUpdateBot', () => {
