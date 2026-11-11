@@ -12,7 +12,7 @@ model. Record each new decision of that weight as a new ADR.
 | Term | Meaning |
 |---|---|
 | graph | Nodes in a tree (`parent`) plus edges between any two nodes. |
-| fact level | A node kind that comes from the language or build system: `module` (unit of build: Maven module, Cargo package), `package` (namespace: Java package, Rust `mod`; nests in both languages, ADR 0018), `type`, `function`. |
+| fact level | A node kind that comes from the language or build system: `module` (unit of build: Maven module, Cargo package, `deps.edn` directory), `package` (namespace: Java package, Rust `mod`, Clojure namespace; nests in all three, ADR 0018), `type`, `function`. |
 | group | A container that does not come from the language (directory or AI). Not built yet. |
 | edge | A dependency that the indexer can prove from the source: `extends`, `implements`, `imports`, `type_ref`, `calls` (ADR 0014). |
 | cut | The set of visible nodes for a given set of expanded containers, with each edge moved to the nearest visible ancestors of its ends. |
@@ -20,8 +20,8 @@ model. Record each new decision of that weight as a new ADR.
 | focus cut | A cut that folds the children that are not of interest into one placeholder `rest:<container id>` (ADR 0011). |
 | kind fold | A focus cut option (`fold_mixed`): a container with packages and other children, none of interest, shows the packages and folds the rest into `rest:<container id>` (ADR 0019). The viewer always sets it; a click on the placeholder or "+" puts the container into `unfolded`. |
 | overlay | The diff graph of a commit: the union of two graphs with `change` marks, plus the list of changed files (ADR 0009, 0012). |
-| front end | The part that turns the sources of one language into a graph (Java, Rust). `cg-index` runs all of them. |
-| test code | Code in a source set other than `src/main`. Hidden by default. |
+| front end | The part that turns the sources of one language into a graph (Java, Rust, Clojure). `cg-index` runs all of them. |
+| test code | Code in a source set other than `src/main`; for Clojure, code in a directory that only an alias of `deps.edn` names (ADR 0023). Hidden by default. |
 
 ## Layout
 
@@ -31,6 +31,9 @@ crates/index-java  Java front end on tree-sitter: index_sources(root_name, files
                    (pure, builds for wasm32); index(root) walks a directory and calls it
 crates/index-rust  Rust front end on tree-sitter: index_sources(root_name, files) -> Graph + Report
                    (Cargo packages, mod tree, ADR 0016, call edges, ADR 0017); no walk
+crates/index-clojure  Clojure front end on tree-sitter: index_sources(root_name, files) -> Graph + Report
+                   (deps.edn modules, namespaces as packages, imports edges, ADR 0023; no call
+                   edges yet); Layout::test_code(path) for the changed files of an overlay
 crates/walk        cg-walk: the one directory walk, read_sources(root, is_input) -> Vec<SourceFile>
                    (the only place with std::fs besides the CLI; used by index-java and index)
 crates/index       cg-index: is_input, index_sources, index(root) over all front ends; joins
@@ -49,7 +52,7 @@ web/src/lib/forges.ts  kind of forge (github, forgejo, later gitlab): kindOf(hos
                    parseSource; hash gh=owner/repo@sha, forge=kind:host/owner/repo@sha (ADR 0022)
 web/src/lib/tokenStore.ts  tokens by origin (session/local storage) and authorized(): the only
                    place that adds a token, refuses any other origin (ADR 0022)
-docs/adr/          architecture decision records (0016: how Rust maps onto the graph)
+docs/adr/          architecture decision records (0016: how Rust maps onto the graph, 0023: Clojure)
 ```
 
 ## Commands
@@ -88,6 +91,9 @@ pnpm dev                                     # http://localhost:5173/
   Small and tidy: good for the indexer and the viewer, too tidy to judge AI grouping.
 - `/home/trobanga/code/dd-empire/momenthafen/api` — Rust, one crate, 178 files, DDD layout
   with many `mod`s. Read only. Use it for the Rust front end.
+- `/home/trobanga/development/samply/blaze` — Clojure, 73 `deps.edn` modules, 1047 `.clj`
+  files, 114 Java files, 199 000 lines. Read only. Use it for the Clojure front end and
+  for the viewer at scale.
 
 ## Known gaps
 
@@ -114,5 +120,10 @@ pnpm dev                                     # http://localhost:5173/
   `ALLOW_DOMAIN` on that host. The token path ran only against a mock. One API call per
   file (Codeberg: seconds per file). "forget token" clears the text cache of all hosts.
   No Forgejo under a sub-path; no OAuth; no CSP (the host is free input).
+- Clojure (ADR 0023): stage 1 only, no call edges, no `implements`, no `type_ref`. No
+  node for `def`, `defmethod`, `extend-protocol` and for what a macro of the repository
+  declares. Java files in a `deps.edn` module get no module (their packages stand at the
+  top level). No `.cljs`, no Leiningen. Duplicate namespace names: the first file wins.
+  The grammar crate is pinned to 0.2.5 (0.2.9 does not build for wasm32).
 - Local classes and members of anonymous classes get no node.
 - A rename of a type or method looks like one removal and one addition.

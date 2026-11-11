@@ -12,7 +12,15 @@ fn source(path: &str, text: &str) -> SourceFile {
 
 #[test]
 fn is_input_is_true_when_any_front_end_wants_the_file() {
-    for path in ["pom.xml", "a/B.java", "Cargo.toml", "src/lib.rs"] {
+    for path in [
+        "pom.xml",
+        "a/B.java",
+        "Cargo.toml",
+        "src/lib.rs",
+        "deps.edn",
+        "src/a.clj",
+        "src/a.cljc",
+    ] {
         assert!(is_input(path), "{path}");
     }
     for path in [
@@ -20,6 +28,8 @@ fn is_input_is_true_when_any_front_end_wants_the_file() {
         "web/package.json",
         "target/x.rs",
         "a/node_modules/B.java",
+        "src/a.cljs",
+        "project.clj",
     ] {
         assert!(!is_input(path), "{path}");
     }
@@ -59,6 +69,63 @@ fn java_and_rust_sources_of_one_repository_give_one_graph_with_both_reports() {
     assert_eq!(report.rust.unreached_files, ["src/orphan.rs"]);
     assert_eq!(report.calls.to_function, 0);
     assert_eq!((graph, report), index_sources("repo", &reversed));
+}
+
+#[test]
+fn clojure_sources_give_a_graph_and_the_clojure_report() {
+    let files = [
+        source("deps.edn", "{}"),
+        source(
+            "src/a.clj",
+            "(ns a (:require [b]))\n(defn f [])\n(def x 1)\n",
+        ),
+        source("src/b.clj", "(ns b)\n"),
+        source("build.clj", "(ns build)\n"),
+    ];
+    let mut reversed = files.clone();
+    reversed.reverse();
+
+    let (graph, report) = index_sources("repo", &files);
+
+    assert!(graph.node("mod:").is_some());
+    assert!(graph.node("fn:a/f").is_some());
+    assert!(
+        graph
+            .edges
+            .iter()
+            .any(|e| e.from == "pkg::a" && e.to == "pkg::b")
+    );
+    assert_eq!(report.clojure.files_outside_source_dirs, 1);
+    assert_eq!(report.clojure.forms_without_node["def"], 1);
+    assert_eq!((graph, report), index_sources("repo", &reversed));
+}
+
+#[test]
+fn java_and_clojure_in_one_repository_share_the_module_of_a_directory() {
+    let files = [
+        source("pom.xml", ""),
+        source("src/main/java/a/Foo.java", "package a;\nclass Foo {}\n"),
+        source("deps.edn", "{}"),
+        source("src/c.clj", "(ns c)\n(defn f [])\n"),
+    ];
+
+    let (graph, _) = index_sources("repo", &files);
+
+    let modules: Vec<_> = graph
+        .nodes
+        .iter()
+        .filter(|n| n.kind == NodeKind::Module)
+        .collect();
+    assert_eq!(modules.len(), 1);
+    assert_eq!(
+        graph.node("pkg::c").unwrap().parent.as_deref(),
+        Some("mod:")
+    );
+    assert_eq!(
+        graph.node("pkg::a").unwrap().parent.as_deref(),
+        Some("mod:")
+    );
+    assert!(graph.node("fn:c/f").is_some());
 }
 
 #[test]

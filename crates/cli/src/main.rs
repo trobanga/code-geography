@@ -52,7 +52,12 @@ fn run(args: Vec<String>) -> Result<(), String> {
         graph.edges.len(),
         output.display()
     );
-    if let Some(cg_index::Report { calls, rust }) = report {
+    if let Some(cg_index::Report {
+        calls,
+        rust,
+        clojure,
+    }) = report
+    {
         eprintln!(
             "calls: {} to function, {} to type, {} external, {} unresolved",
             calls.to_function, calls.to_type, calls.external, calls.unresolved
@@ -76,6 +81,27 @@ fn run(args: Vec<String>) -> Result<(), String> {
             rust.unreached_files.len(),
             rust.path_attributes.len()
         );
+        let without_node: usize = clojure.forms_without_node.values().sum();
+        eprintln!(
+            "clojure: {} files outside the source directories, {} below no deps.edn, {} without ns form, {} duplicate namespaces; {} top-level forms without a node",
+            clojure.files_outside_source_dirs,
+            clojure.files_without_deps_edn,
+            clojure.files_without_ns,
+            clojure.duplicate_namespaces.len(),
+            without_node
+        );
+        // The most frequent heads first: the size of the gap that macros of the
+        // repository make.
+        let mut heads: Vec<_> = clojure.forms_without_node.iter().collect();
+        heads.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+        if !heads.is_empty() {
+            let top: Vec<String> = heads
+                .iter()
+                .take(10)
+                .map(|(head, count)| format!("{head} {count}"))
+                .collect();
+            eprintln!("clojure forms without a node: {}", top.join(", "));
+        }
     }
     Ok(())
 }

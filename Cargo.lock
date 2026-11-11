@@ -63,12 +63,23 @@ name = "cg-index"
 version = "0.1.0"
 dependencies = [
  "cg-core",
+ "cg-index-clojure",
  "cg-index-java",
  "cg-index-rust",
  "cg-walk",
  "serde",
  "serde_json",
  "tempfile",
+]
+
+[[package]]
+name = "cg-index-clojure"
+version = "0.1.0"
+dependencies = [
+ "cg-core",
+ "serde",
+ "tree-sitter",
+ "tree-sitter-clojure-orchard",
 ]
 
 [[package]]
@@ -376,6 +387,16 @@ dependencies = [
  "regex",
  "serde_json",
  "streaming-iterator",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-clojure-orchard"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3e2db28a1ab22649790656936325bdc69e992c38006258694ea39a7620e784d"
+dependencies = [
+ "cc",
  "tree-sitter-language",
 ]
 

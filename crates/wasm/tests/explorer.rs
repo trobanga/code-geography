@@ -257,6 +257,9 @@ fn is_input_is_the_rule_of_the_indexer() {
     assert!(!cg_wasm::is_input("a/target/Foo.java"));
     assert!(cg_wasm::is_input("src/lib.rs"));
     assert!(cg_wasm::is_input("Cargo.toml"));
+    assert!(cg_wasm::is_input("deps.edn"));
+    assert!(cg_wasm::is_input("src/a/b.clj"));
+    assert!(!cg_wasm::is_input("src/a/b.cljs"));
     assert!(!cg_wasm::is_input("a/target/lib.rs"));
 }
 

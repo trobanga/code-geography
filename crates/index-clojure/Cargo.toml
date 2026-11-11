@@ -1,0 +1,10 @@
+[package]
+name = "cg-index-clojure"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+cg-core = { version = "0.1.0", path = "../core" }
+serde = { version = "1.0.229", features = ["derive"] }
+tree-sitter = "0.27.2"
+tree-sitter-clojure-orchard = "=0.2.5"

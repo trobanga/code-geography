@@ -127,3 +127,40 @@ fn index_prints_how_the_rust_calls_were_resolved() {
         "{stderr}"
     );
 }
+
+#[test]
+fn index_prints_what_the_clojure_front_end_did_not_read() {
+    let dir = TempDir::new().unwrap();
+    let source = dir.path().join("repo");
+    fs::create_dir_all(source.join("src")).unwrap();
+    fs::write(source.join("deps.edn"), "{}").unwrap();
+    fs::write(
+        source.join("src/a.clj"),
+        "(ns a)\n(def x 1)\n(def y 2)\n(declare z)\n(defn f [])\n",
+    )
+    .unwrap();
+    fs::write(source.join("src/b.clj"), "(ns a)\n").unwrap();
+    fs::write(source.join("src/c.clj"), "(defn g [])\n").unwrap();
+    fs::write(source.join("build.clj"), "(ns build)\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_cg"))
+        .arg("index")
+        .arg(&source)
+        .arg("-o")
+        .arg(dir.path().join("graph.json"))
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(
+            "clojure: 1 files outside the source directories, 0 below no deps.edn, 1 without ns form, 1 duplicate namespaces; 3 top-level forms without a node\n"
+        ),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("clojure forms without a node: def 2, declare 1\n"),
+        "{stderr}"
+    );
+}

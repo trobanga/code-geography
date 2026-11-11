@@ -1,4 +1,4 @@
-// Proof that the C parsers (tree-sitter-java and tree-sitter-rust) link and run inside the WASM module.
+// Proof that the C parsers (tree-sitter-java, tree-sitter-rust and tree-sitter-clojure-orchard) link and run inside the WASM module.
 // Loads the generated .wasm from disk, as the browser would load it over HTTP.
 // @ts-ignore The project has no @types/node; this test is the only file that reads from disk.
 import { readFileSync } from 'node:fs';
@@ -64,6 +64,9 @@ describe('the indexer in WASM', () => {
     expect(isInput('pom.xml')).toBe(true);
     expect(isInput('src/lib.rs')).toBe(true);
     expect(isInput('Cargo.toml')).toBe(true);
+    expect(isInput('deps.edn')).toBe(true);
+    expect(isInput('src/a/b.clj')).toBe(true);
+    expect(isInput('src/a/b.cljs')).toBe(false);
     expect(isInput('a/target/Foo.java')).toBe(false);
     expect(isInput('a/target/lib.rs')).toBe(false);
     expect(isInput('README.md')).toBe(false);
@@ -96,6 +99,33 @@ describe('the indexer in WASM', () => {
     expect(report.rust.paths.resolved).toBeGreaterThan(0);
     expect(graph.edges).toContainEqual({ from: 'fn:my_app::Top#run', to: 'fn:my_app::a::A#new', kind: 'calls' });
     expect(report.calls.to_function).toBe(1);
+  });
+
+  it('indexes Clojure sources: the grammar runs inside the module', () => {
+    const files: [string, string][] = [
+      ['deps.edn', '{:aliases {:test {:extra-paths ["test"]}}}'],
+      ['src/a.clj', '(ns a (:require [b :as x]))\n(defn f [] (x/g))\n(def y 1)\n'],
+      ['src/b.clj', '(ns b)\n(defn g [])\n'],
+      ['test/a_test.clj', '(ns a-test)\n(deftest t)\n'],
+      ['build.clj', '(ns build)\n'],
+    ];
+    const json = indexSources(
+      files.map(([path]) => path),
+      files.map(([, text]) => text),
+      'repo',
+    );
+    const { graph, report } = JSON.parse(json) as {
+      graph: Graph;
+      report: { clojure: { files_outside_source_dirs: number; forms_without_node: Record<string, number> } };
+    };
+
+    const ids = graph.nodes.map((n) => n.id);
+    expect(ids).toContain('mod:');
+    expect(ids).toContain('fn:a/f');
+    expect(graph.edges).toContainEqual({ from: 'pkg::a', to: 'pkg::b', kind: 'imports' });
+    expect(graph.nodes.find((n) => n.id === 'pkg::a-test')?.test).toBe(true);
+    expect(report.clojure.files_outside_source_dirs).toBe(1);
+    expect(report.clojure.forms_without_node.def).toBe(1);
   });
 
   it('builds the commit overlay from two source sets', () => {

@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 cg-core = { version = "0.1.0", path = "../core" }
+cg-index-clojure = { version = "0.1.0", path = "../index-clojure" }
 cg-index-java = { version = "0.1.0", path = "../index-java" }
 cg-index-rust = { version = "0.1.0", path = "../index-rust" }
 cg-walk = { version = "0.1.0", path = "../walk" }

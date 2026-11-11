@@ -131,3 +131,75 @@ fn a_changed_file_that_is_in_neither_source_set_is_still_listed() {
         ]
     );
 }
+
+#[test]
+fn a_changed_clojure_file_is_test_code_by_the_source_directories_of_its_deps_edn() {
+    let deps =
+        "{:paths [\"src\"] :aliases {:test {:extra-paths [\"test\" \"src/blaze/testing\"]}}}";
+    let before = [
+        source("deps.edn", deps),
+        source("modules/db/deps.edn", deps),
+        source("modules/gone/deps.edn", deps),
+    ];
+    let after = [
+        source("deps.edn", deps),
+        source("modules/db/deps.edn", deps),
+    ];
+    let spec = DiffSpec {
+        base: "a".into(),
+        head: "b".into(),
+        changed: changed(&[
+            ("modules/db/src/blaze/db/api.clj", Change::Modified),
+            ("modules/db/test/blaze/db/api_test.clj", Change::Modified),
+            ("modules/db/src/blaze/testing/util.cljc", Change::Added),
+            ("modules/db/build.clj", Change::Modified),
+            ("modules/gone/test/x_test.clj", Change::Removed),
+            ("modules/gone/src/x.clj", Change::Removed),
+            ("src/blaze/other.clj", Change::Modified),
+            // Not Clojure: the rule of ADR 8 stays.
+            ("src/test/java/a/FooTest.java", Change::Modified),
+            ("src/main/java/a/Foo.java", Change::Modified),
+            ("README.md", Change::Modified),
+        ]),
+    };
+
+    let (graph, _) = diff_sources("repo", &before, &after, spec);
+
+    let info = graph.diff.expect("diff info");
+    let files: Vec<_> = info
+        .files
+        .iter()
+        .map(|f| (f.path.as_str(), f.module.as_deref(), f.test))
+        .collect();
+    assert_eq!(
+        files,
+        [
+            (
+                "modules/db/src/blaze/db/api.clj",
+                Some("mod:modules/db"),
+                false
+            ),
+            (
+                "modules/db/test/blaze/db/api_test.clj",
+                Some("mod:modules/db"),
+                true
+            ),
+            (
+                "modules/db/src/blaze/testing/util.cljc",
+                Some("mod:modules/db"),
+                true
+            ),
+            ("modules/db/build.clj", Some("mod:modules/db"), false),
+            (
+                "modules/gone/test/x_test.clj",
+                Some("mod:modules/gone"),
+                true
+            ),
+            ("modules/gone/src/x.clj", Some("mod:modules/gone"), false),
+            ("src/blaze/other.clj", Some("mod:"), false),
+            ("src/test/java/a/FooTest.java", Some("mod:"), true),
+            ("src/main/java/a/Foo.java", Some("mod:"), false),
+            ("README.md", Some("mod:"), false),
+        ]
+    );
+}

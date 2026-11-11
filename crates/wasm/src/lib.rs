@@ -78,7 +78,7 @@ pub fn is_input(path: &str) -> bool {
 
 /// Indexes sources that are given as data: `paths[i]` (relative to the root, with `/`)
 /// holds `texts[i]`. Returns the JSON `{"graph": ..., "report": {"calls": ..., "rust":
-/// ...}}`.
+/// ..., "clojure": ...}}`.
 pub fn index_sources(
     paths: &[String],
     texts: &[String],
