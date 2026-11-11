@@ -106,11 +106,12 @@ fn run(args: Vec<String>) -> Result<(), String> {
         }
         let unqualified = &clojure.unqualified;
         eprintln!(
-            "clojure unqualified heads: {} of the same namespace ({} a local could hide), {} referred ({} a local could hide)",
-            unqualified.same_namespace,
-            unqualified.same_namespace_maybe_local,
-            unqualified.referred,
-            unqualified.referred_maybe_local
+            "clojure unqualified: {} to function ({} as a value), {} to type, {} a local could hide, {} ambiguous",
+            unqualified.to_function,
+            unqualified.function_values,
+            unqualified.to_type,
+            unqualified.maybe_local,
+            unqualified.ambiguous
         );
         // The most frequent names first: which macros of the repository make them.
         let mut names: Vec<_> = clojure.unresolved_names.iter().collect();

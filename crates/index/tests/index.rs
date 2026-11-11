@@ -190,20 +190,22 @@ fn the_clojure_calls_are_added_to_the_calls_of_the_report_and_stay_visible() {
         source("src/x.clj", "(ns x)\n(defn f [])\n(def v 1)\n"),
         source(
             "src/user.clj",
-            "(ns user (:require [x :as a]))\n(defn g [] (a/f) (a/v) (Math/abs 1) (a/none))\n",
+            "(ns user (:require [x :as a]))\n(defn g [] (a/f) (a/v) (Math/abs 1) (a/none))\n(defn h [] (g))\n",
         ),
     ];
 
     let (_, report) = index_sources("repo", &files);
 
-    assert_eq!(report.clojure.calls.to_function, 1);
+    assert_eq!(report.clojure.calls.to_function, 2);
+    assert_eq!(report.clojure.unqualified.to_function, 1);
     assert_eq!(report.clojure.calls.external, 1);
     assert_eq!(report.clojure.calls.unresolved, 2);
     assert_eq!(report.clojure.var_without_node, 1);
-    assert_eq!(report.calls.to_function, 2);
+    assert_eq!(report.calls.to_function, 3);
     assert_eq!(report.calls.external, 1);
     assert_eq!(report.calls.unresolved, 2);
     let json = serde_json::to_value(&report).unwrap();
-    assert_eq!(json["clojure"]["calls"]["to_function"], 1);
+    assert_eq!(json["clojure"]["calls"]["to_function"], 2);
+    assert_eq!(json["clojure"]["unqualified"]["to_function"], 1);
     assert_eq!(json["clojure"]["function_values"], 0);
 }

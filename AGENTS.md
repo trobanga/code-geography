@@ -33,7 +33,7 @@ crates/index-rust  Rust front end on tree-sitter: index_sources(root_name, files
                    (Cargo packages, mod tree, ADR 0016, call edges, ADR 0017); no walk
 crates/index-clojure  Clojure front end on tree-sitter: index_sources(root_name, files) -> Graph + Report
                    (deps.edn modules, namespaces as packages, imports edges, ADR 0023; call
-                   edges from qualified symbols, ADR 0024); Layout::test_code(path) for the
+                   edges, ADR 0024); Layout::test_code(path) for the
                    changed files of an overlay
 crates/walk        cg-walk: the one directory walk, read_sources(root, is_input) -> Vec<SourceFile>
                    (the only place with std::fs besides the CLI; used by index-java and index)
@@ -121,9 +121,9 @@ pnpm dev                                     # http://localhost:5173/
   `ALLOW_DOMAIN` on that host. The token path ran only against a mock. One API call per
   file (Codeberg: seconds per file). "forget token" clears the text cache of all hosts.
   No Forgejo under a sub-path; no OAuth; no CSP (the host is free input).
-- Clojure (ADR 0023, 0024): call edges come from qualified symbols only (`alias/name`);
-  an unqualified call, also inside one namespace, gives no edge yet. Dispatch of
-  protocols and multimethods is not followed. No node for `def`, `defmethod`,
+- Clojure (ADR 0023, 0024): an unqualified name gives no edge if its top-level form
+  could bind it anywhere (7 % of such call heads on blaze). `:import` is not read.
+  Dispatch of protocols and multimethods is not followed. No node for `def`, `defmethod`,
   `extend-protocol` and for what a macro of the repository declares, so their bodies
   give no edges and a reference to a `def` has no target. Java files in a `deps.edn` module get no module (their packages stand at the
   top level). No `.cljs`, no Leiningen. Duplicate namespace names: the first file wins.

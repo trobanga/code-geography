@@ -3,14 +3,13 @@
 mod calls;
 mod declare;
 mod deps;
-mod measure;
+mod locals;
 mod ns;
 mod syntax;
 
 pub use cg_core::SourceFile;
 use cg_core::{Edge, EdgeKind, Graph, Node, NodeKind, PackageNode, Span};
 use deps::SourceDirs;
-pub use measure::UnqualifiedHeads;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use tree_sitter::Parser;
@@ -30,7 +29,7 @@ pub struct Report {
     pub duplicate_namespaces: Vec<String>,
     /// The top-level forms that give no node, counted by their head symbol.
     pub forms_without_node: BTreeMap<String, usize>,
-    /// How the qualified symbols in the code of functions were resolved, counted per site
+    /// How the symbols in the code of functions were resolved, counted per site
     /// (before the removal of duplicate edges). The same four classes as for Java and Rust.
     pub calls: cg_core::CallReport,
     /// Of the calls to a function: those where the function is named, not called
@@ -43,13 +42,35 @@ pub struct Report {
     /// Calls to a function and references to a type in code that has no function node
     /// (the value of a `def`, a `defmethod`, an `extend-protocol`, any other top-level
     /// form): no edge, not in `calls`. By the head of the top-level form: `def`,
-    /// `defmethod`, `extend-protocol`, `other`. The size of the gap that stage 2b closes.
+    /// `defmethod`, `extend-protocol`, `defrecord`, `deftype`, `other`. The size of the gap that stage 2b closes.
     pub no_source_node: BTreeMap<String, usize>,
     /// The other unresolved calls: a repository namespace that does not declare the name
     /// (a macro of the repository can have made it). `namespace/name` to count.
     pub unresolved_names: BTreeMap<String, usize>,
-    /// A measurement for the next stage: unqualified symbols at the head of a list.
-    pub unqualified: UnqualifiedHeads,
+    /// The sites of unqualified symbols that name a var of the repository (stage 2b).
+    pub unqualified: Unqualified,
+}
+
+/// The unqualified symbols in the code of functions that the namespace of the file or
+/// a `:refer`, `:refer :all` or `:use` names, counted per site. Symbols that no table
+/// declares (core functions, locals, interop, special forms) are not sites. The sites
+/// that give an edge are part of `Report::calls` and of `Report::function_values`, too.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct Unqualified {
+    /// Sites that name a function (an edge, unless it would join a node with itself or
+    /// its ancestor).
+    pub to_function: usize,
+    /// Of `to_function`: the function is named, not called.
+    pub function_values: usize,
+    /// Sites that name a protocol, an interface or a constructor of a type.
+    pub to_type: usize,
+    /// No edge: a call (the head of a list) whose name also occurs in the same top-level
+    /// form at a place where a local could be bound (`locals`). The binder and other
+    /// uses of the name are no sites.
+    pub maybe_local: usize,
+    /// No edge: the namespace of the file and a `:refer` (or two of these) both declare
+    /// the name.
+    pub ambiguous: usize,
 }
 
 /// Whether the indexer wants the file at `path` (relative to the root, `/` as separator):
@@ -211,9 +232,19 @@ pub fn index_sources(root_name: &str, files: &[SourceFile]) -> (Graph, Report) {
             .iter()
             .filter_map(|s| Some((s.alias.clone()?, s.name.clone())))
             .collect();
-        let refers: HashMap<String, String> = specs
+        let mut refers: HashMap<String, Vec<String>> = HashMap::new();
+        for spec in &specs {
+            for name in &spec.refer {
+                refers
+                    .entry(name.clone())
+                    .or_default()
+                    .push(spec.name.clone());
+            }
+        }
+        let refer_all: Vec<(String, Vec<String>)> = specs
             .iter()
-            .flat_map(|s| s.refer.iter().map(|name| (name.clone(), s.name.clone())))
+            .filter(|s| s.refer_all)
+            .map(|s| (s.name.clone(), s.except.clone()))
             .collect();
         let ns_form = ns_form.id();
         let rest: Vec<_> = forms
@@ -236,8 +267,12 @@ pub fn index_sources(root_name: &str, files: &[SourceFile]) -> (Graph, Report) {
                 continue;
             }
             owned.insert(decl.node.id(), decl.id.clone());
+            for form in &decl.more_forms {
+                owned.insert(form.id(), decl.id.clone());
+            }
+            let (hash, span) = (own_hash(&decl, source), span_of(&decl));
             declared.push(Node {
-                hash: Some(own_hash(&decl, source)),
+                hash: Some(hash),
                 id: decl.id,
                 parent: Some(
                     decl.parent
@@ -246,7 +281,7 @@ pub fn index_sources(root_name: &str, files: &[SourceFile]) -> (Graph, Report) {
                 kind: decl.kind,
                 name: decl.name,
                 file: Some(file.path.clone()),
-                span: Some(span_of(decl.node)),
+                span: Some(span),
                 test: is_test,
                 change: None,
             });
@@ -258,6 +293,7 @@ pub fn index_sources(root_name: &str, files: &[SourceFile]) -> (Graph, Report) {
             namespace: namespace.clone(),
             aliases,
             refers,
+            refer_all,
             owned,
         });
     }
@@ -326,7 +362,7 @@ fn module_of<'a>(module_dirs: &[&'a str], path: &str) -> Option<&'a str> {
 }
 
 /// The hash of the own source text of a declaration: the text without the members that
-/// are nodes themselves.
+/// are nodes themselves; for a method of several forms the text of all of them.
 fn own_hash(decl: &declare::Decl, source: &str) -> String {
     let mut own = String::new();
     let mut position = decl.node.start_byte();
@@ -335,14 +371,23 @@ fn own_hash(decl: &declare::Decl, source: &str) -> String {
         position = member.end_byte();
     }
     own.push_str(&source[position..decl.node.end_byte()]);
+    for form in &decl.more_forms {
+        own.push('\n');
+        own.push_str(&source[form.byte_range()]);
+    }
     cg_core::text_hash(&own)
 }
 
-/// The lines of a form: 1-based, inclusive.
-fn span_of(node: tree_sitter::Node) -> Span {
+/// The lines of a declaration: 1-based, inclusive. For a method of several forms that
+/// follow one another from the first to the last.
+fn span_of(decl: &declare::Decl) -> Span {
+    let last = match decl.more_forms.last() {
+        Some(last) if decl.adjacent => *last,
+        _ => decl.node,
+    };
     Span {
-        start_line: node.start_position().row as u32 + 1,
-        end_line: node.end_position().row as u32 + 1,
+        start_line: decl.node.start_position().row as u32 + 1,
+        end_line: last.end_position().row as u32 + 1,
     }
 }
 

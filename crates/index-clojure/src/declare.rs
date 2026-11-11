@@ -15,6 +15,12 @@ pub struct Decl<'t> {
     pub node: Ts<'t>,
     /// The nodes below this one, whose text is not part of the own text.
     pub members: Vec<Ts<'t>>,
+    /// The other forms of a method that a type writes as several forms, one per arity
+    /// (`(m [this] ..) (m [this x] ..)`), in source order. `node` is the first.
+    pub more_forms: Vec<Ts<'t>>,
+    /// Whether the forms of all arities follow one another: then the span of the node
+    /// runs from the first to the last, else it is the span of the first.
+    pub adjacent: bool,
 }
 
 /// The head of a list form: its first symbol, with the namespace as written.
@@ -76,6 +82,8 @@ fn function<'t>(items: &[Ts<'t>], form: Ts<'t>, source: &str, namespace: &str) -
         parent: None,
         node: form,
         members: Vec::new(),
+        more_forms: Vec::new(),
+        adjacent: true,
     })
 }
 
@@ -91,11 +99,13 @@ fn declared_type<'t>(
 ) -> Option<Vec<Decl<'t>>> {
     let name = plain_symbol(*items.get(1)?, source)?;
     let id = format!("type:{namespace}/{name}");
-    let methods: Vec<Ts<'t>> = items
+    // The methods with their position among the items; the forms of one name are one node.
+    let methods: Vec<(usize, Ts<'t>)> = items
         .iter()
-        .skip(first_member)
         .copied()
-        .filter(|m| m.kind() == "list_lit")
+        .enumerate()
+        .skip(first_member)
+        .filter(|(_, m)| m.kind() == "list_lit")
         .collect();
     let mut decls = vec![Decl {
         id: id.clone(),
@@ -103,22 +113,33 @@ fn declared_type<'t>(
         kind: NodeKind::Type,
         parent: None,
         node: form,
-        members: methods.clone(),
+        members: methods.iter().map(|(_, m)| *m).collect(),
+        more_forms: Vec::new(),
+        adjacent: true,
     }];
-    for method in methods {
-        let Some(first) = flat_items(method).first().copied() else {
+    let mut by_name: Vec<(&str, Vec<(usize, Ts<'t>)>)> = Vec::new();
+    for (position, method) in &methods {
+        let Some(first) = flat_items(*method).first().copied() else {
             continue;
         };
         let Some(method_name) = plain_symbol(first, source) else {
             continue;
         };
+        match by_name.iter_mut().find(|(n, _)| *n == method_name) {
+            Some((_, forms)) => forms.push((*position, *method)),
+            None => by_name.push((method_name, vec![(*position, *method)])),
+        }
+    }
+    for (method_name, forms) in by_name {
         decls.push(Decl {
             id: format!("fn:{namespace}/{name}#{method_name}"),
             name: method_name.to_string(),
             kind: NodeKind::Function,
             parent: Some(id.clone()),
-            node: method,
+            node: forms[0].1,
             members: Vec::new(),
+            more_forms: forms[1..].iter().map(|(_, f)| *f).collect(),
+            adjacent: forms.windows(2).all(|w| w[1].0 == w[0].0 + 1),
         });
     }
     Some(decls)

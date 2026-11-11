@@ -1,12 +1,14 @@
 //! The edges from the code of a function to what it names: `calls` to functions.
-//! Only qualified symbols are resolved (`alias/name`, `namespace/name`): a local name never
-//! has a namespace part, so no scope analysis is needed.
+//! A qualified symbol (`alias/name`, `namespace/name`) is resolved through the `ns` form: a
+//! local name never has a namespace part. An unqualified symbol is resolved through the
+//! namespace of the file and its `:refer`s, but only if no local could hide it (`locals`)
+//! and no two sources declare it.
 
 use crate::declare::head;
-use crate::syntax::{flat_items, items, keyword, plain_symbol, symbol};
-use crate::{Report, measure};
+use crate::syntax::{flat_items, items, keyword, plain_symbol, private, symbol};
+use crate::{Report, locals};
 use cg_core::{Edge, EdgeKind};
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use tree_sitter::{Node as Ts, Tree};
 
 /// What a name in a namespace stands for.
@@ -15,14 +17,23 @@ pub enum Target {
     Function(String),
     /// The type node with this id, named as a protocol or interface (`interface`) or
     /// through a constructor function of a record or type.
-    Type { id: String, interface: bool },
+    Type {
+        id: String,
+        interface: bool,
+        /// A class without a var (`definterface`): valid unqualified, never as `a/Name`.
+        class_only: bool,
+    },
     /// A var that no node stands for (`def`, `defonce`).
     Var,
 }
 
 /// The vars of one namespace of the repository, by name.
 #[derive(Default)]
-pub struct Vars(HashMap<String, Target>);
+pub struct Vars {
+    names: HashMap<String, Target>,
+    /// The names of `defn-` and of vars with `^:private`: `:refer :all` does not bring them.
+    private: HashSet<String>,
+}
 
 /// The vars that the top-level `forms` of a file declare in `namespace`.
 pub fn vars(forms: &[Ts], source: &str, namespace: &str) -> Vars {
@@ -34,7 +45,10 @@ pub fn vars(forms: &[Ts], source: &str, namespace: &str) -> Vars {
         };
         match head(*form, source).as_deref() {
             Some("defn" | "defn-" | "defmacro" | "defmulti") => {
-                vars.0.insert(
+                if head(*form, source).as_deref() == Some("defn-") || private(items[1], source) {
+                    vars.private.insert(name.to_string());
+                }
+                vars.names.insert(
                     name.to_string(),
                     Target::Function(format!("fn:{namespace}/{name}")),
                 );
@@ -42,11 +56,12 @@ pub fn vars(forms: &[Ts], source: &str, namespace: &str) -> Vars {
             // The methods of a protocol are vars of the namespace, those of an interface
             // are not. The name of both is a type.
             Some(kind @ ("defprotocol" | "definterface")) => {
-                vars.0.insert(
+                vars.names.insert(
                     name.to_string(),
                     Target::Type {
                         id: format!("type:{namespace}/{name}"),
                         interface: true,
+                        class_only: kind == "definterface",
                     },
                 );
                 if kind == "defprotocol" {
@@ -56,7 +71,7 @@ pub fn vars(forms: &[Ts], source: &str, namespace: &str) -> Vars {
                             .first()
                             .and_then(|m| plain_symbol(*m, source))
                         {
-                            vars.0.insert(
+                            vars.names.insert(
                                 method_name.to_string(),
                                 Target::Function(format!("fn:{namespace}/{name}#{method_name}")),
                             );
@@ -64,8 +79,21 @@ pub fn vars(forms: &[Ts], source: &str, namespace: &str) -> Vars {
                     }
                 }
             }
+            // A declared name is a var; a `defn` of it makes it a function.
+            Some("declare") => {
+                for declared in items.iter().skip(1) {
+                    if let Some(declared) = plain_symbol(*declared, source) {
+                        vars.names
+                            .entry(declared.to_string())
+                            .or_insert(Target::Var);
+                    }
+                }
+            }
             Some("def" | "defonce") => {
-                vars.0.entry(name.to_string()).or_insert(Target::Var);
+                if private(items[1], source) {
+                    vars.private.insert(name.to_string());
+                }
+                vars.names.entry(name.to_string()).or_insert(Target::Var);
             }
             // The constructor functions that the declaration generates.
             Some(kind @ ("defrecord" | "deftype")) => {
@@ -75,11 +103,12 @@ pub fn vars(forms: &[Ts], source: &str, namespace: &str) -> Vars {
                     vec![format!("->{name}")]
                 };
                 for constructor in constructors {
-                    vars.0.insert(
+                    vars.names.insert(
                         constructor,
                         Target::Type {
                             id: format!("type:{namespace}/{name}"),
                             interface: false,
+                            class_only: false,
                         },
                     );
                 }
@@ -99,8 +128,11 @@ pub struct File<'s> {
     pub namespace: String,
     /// The aliases of the `ns` form: alias to namespace.
     pub aliases: HashMap<String, String>,
-    /// The names that `:refer` brings: name to namespace.
-    pub refers: HashMap<String, String>,
+    /// The names that `:refer` (or `:only` of a `:use`) brings: name to namespaces.
+    pub refers: HashMap<String, Vec<String>>,
+    /// The namespaces whose public vars are all brought (`:refer :all`, `:use` without
+    /// `:only`), each with the names that it leaves out.
+    pub refer_all: Vec<(String, Vec<String>)>,
     /// The declarations that became nodes: `Node::id` of the form to the id of the node.
     pub owned: HashMap<usize, String>,
 }
@@ -131,33 +163,52 @@ impl<'a> Scope<'a> {
             .map_or(namespace, String::as_str);
         match self.vars.get(namespace) {
             None => Resolved::External,
-            Some(vars) => vars
-                .0
-                .get(name)
-                .map_or(Resolved::Missing(namespace), Resolved::Found),
+            Some(vars) => match vars.names.get(name) {
+                Some(Target::Type {
+                    class_only: true, ..
+                })
+                | None => Resolved::Missing(namespace),
+                Some(target) => Resolved::Found(target),
+            },
         }
     }
 
-    fn own_function(&self, name: &str) -> bool {
-        let own = self.vars.get(&self.file.namespace);
-        matches!(own.and_then(|v| v.0.get(name)), Some(Target::Function(_)))
+    /// What an unqualified name can mean in the file: the declarations of its own
+    /// namespace and of the namespaces that bring it, by namespace.
+    fn candidates(&self, name: &str) -> BTreeMap<&'a str, &'a Target> {
+        let file = self.file;
+        let mut found = BTreeMap::new();
+        let mut look = |namespace: &'a str, only_public: bool| {
+            let Some(vars) = self.vars.get(namespace) else {
+                return;
+            };
+            if only_public && vars.private.contains(name) {
+                return;
+            }
+            if let Some(target) = vars.names.get(name) {
+                found.insert(namespace, target);
+            }
+        };
+        look(&file.namespace, false);
+        for namespace in file.refers.get(name).into_iter().flatten() {
+            look(namespace, false);
+        }
+        for (namespace, except) in &file.refer_all {
+            if !except.iter().any(|e| e == name) {
+                look(namespace, true);
+            }
+        }
+        found
     }
 
-    fn referred_function(&self, name: &str) -> bool {
-        let referred = self.file.refers.get(name).and_then(|ns| self.vars.get(ns));
-        matches!(
-            referred.and_then(|v| v.0.get(name)),
-            Some(Target::Function(_))
-        )
-    }
-
-    /// A symbol without namespace part, as a declaration of the namespace of the file or a
-    /// name that `:refer` brings. Only for places where no local can stand.
+    /// A symbol without namespace part that a declaration names, if one does and none
+    /// other does. Only for places where no local can stand.
     fn unqualified(&self, name: &str) -> Option<&'a Target> {
-        let own = self.vars.get(&self.file.namespace);
-        let referred = self.file.refers.get(name).and_then(|ns| self.vars.get(ns));
-        own.and_then(|v| v.0.get(name))
-            .or_else(|| referred.and_then(|v| v.0.get(name)))
+        let found = self.candidates(name);
+        match found.len() {
+            1 => found.into_values().next(),
+            _ => None,
+        }
     }
 }
 
@@ -199,13 +250,11 @@ pub fn read(files: &[File], vars: &HashMap<String, Vars>, report: &mut Report) -
                 Some("def") => "def",
                 Some("defmethod") => "defmethod",
                 Some("extend-protocol") => "extend-protocol",
+                Some("defrecord") => "defrecord",
+                Some("deftype") => "deftype",
                 _ => "other",
             };
-            let locals = if units.iter().any(|(from, _)| from.is_some()) {
-                measure::locals(form, file.source)
-            } else {
-                HashSet::new()
-            };
+            let locals = locals::locals(form, file.source);
             for (from, code) in units {
                 let mut reader = Reader {
                     source: file.source,
@@ -234,7 +283,7 @@ struct Reader<'a> {
     /// top-level form for the report.
     from: Option<&'a str>,
     key: &'static str,
-    /// The names in the top-level form that a local could bind (see `measure`).
+    /// The names in the top-level form that a local could bind (see `locals`).
     locals: &'a HashSet<String>,
     in_macro: bool,
     edges: &'a mut BTreeSet<Edge>,
@@ -255,9 +304,34 @@ impl Reader<'_> {
                 if matches!(first, Some("quote" | "comment")) {
                     return;
                 }
+                // The lists in these forms define methods: the first symbol names the
+                // method, it does not call anything.
+                let defines_methods = matches!(
+                    first,
+                    Some(
+                        "reify"
+                            | "proxy"
+                            | "specify"
+                            | "specify!"
+                            | "extend-type"
+                            | "extend-protocol"
+                    )
+                );
                 for (i, item) in items.into_iter().enumerate() {
                     if i == 0 {
                         self.head(item);
+                    } else if first == Some("letfn") && i == 1 && item.kind() == "vec_lit" {
+                        // The head of a binding is the name that it binds, not a call.
+                        for binding in flat_items(item) {
+                            let skip = usize::from(binding.kind() == "list_lit");
+                            for part in flat_items(binding).into_iter().skip(skip) {
+                                self.read(part);
+                            }
+                        }
+                    } else if defines_methods && item.kind() == "list_lit" {
+                        for method_item in flat_items(item).into_iter().skip(1) {
+                            self.read(method_item);
+                        }
                     } else {
                         self.read(item);
                     }
@@ -286,31 +360,17 @@ impl Reader<'_> {
     fn head(&mut self, form: Ts) {
         if form.kind() == "sym_lit" {
             self.symbol(form, true);
-            if self.from.is_some()
-                && let Some(name) = plain_symbol(form, self.scope.file.source)
-            {
-                self.count_unqualified(name);
-            }
         } else {
             self.read(form);
         }
     }
 
-    /// The measurement of `measure`: no edge.
-    fn count_unqualified(&mut self, name: &str) {
-        let hidden = self.locals.contains(name);
-        let unqualified = &mut self.report.unqualified;
-        if self.scope.own_function(name) {
-            unqualified.same_namespace += 1;
-            unqualified.same_namespace_maybe_local += usize::from(hidden);
-        } else if self.scope.referred_function(name) {
-            unqualified.referred += 1;
-            unqualified.referred_maybe_local += usize::from(hidden);
-        }
-    }
-
     fn symbol(&mut self, form: Ts, at_head: bool) {
-        let Some((Some(namespace), name)) = symbol(form, self.source) else {
+        let Some((namespace, name)) = symbol(form, self.source) else {
+            return;
+        };
+        let Some(namespace) = namespace else {
+            self.unqualified(name, at_head);
             return;
         };
         let (to, kind) = match self.scope.qualified(namespace, name) {
@@ -362,6 +422,76 @@ impl Reader<'_> {
     }
 }
 
+impl Reader<'_> {
+    /// A symbol without namespace part: a function that the namespace of the file or a
+    /// `:refer` names.
+    fn unqualified(&mut self, name: &str, at_head: bool) {
+        let candidates = self.scope.candidates(name);
+        // A var that has no node is not a site (the `def` of a constant is named everywhere).
+        if candidates.is_empty()
+            || (candidates.len() == 1 && candidates.values().all(|t| matches!(t, Target::Var)))
+        {
+            return;
+        }
+        // The function itself (recursion): no edge, and no site.
+        if candidates.len() == 1
+            && candidates
+                .values()
+                .all(|t| matches!(t, Target::Function(id) if Some(id.as_str()) == self.from))
+        {
+            return;
+        }
+        if self.locals.contains(name) {
+            // Only a call is a lost call; a local that is named elsewhere is no site.
+            if at_head {
+                self.report.unqualified.maybe_local += 1;
+                self.report.calls.unresolved += 1;
+            }
+            return;
+        }
+        if candidates.len() > 1 {
+            self.report.unqualified.ambiguous += 1;
+            self.report.calls.unresolved += 1;
+            return;
+        }
+        let target = candidates.into_values().next();
+        let Some(from) = self.from else {
+            // Code that no function node holds: counted by the head of its form.
+            if matches!(target, Some(Target::Function(_) | Target::Type { .. })) {
+                *self
+                    .report
+                    .no_source_node
+                    .entry(self.key.to_string())
+                    .or_default() += 1;
+            }
+            return;
+        };
+        let (to, kind) = match target {
+            Some(Target::Function(id)) => {
+                self.report.unqualified.to_function += 1;
+                self.report.calls.to_function += 1;
+                if !at_head {
+                    self.report.unqualified.function_values += 1;
+                    self.report.function_values += 1;
+                }
+                (id, EdgeKind::Calls)
+            }
+            Some(Target::Type { id, .. }) => {
+                self.report.unqualified.to_type += 1;
+                self.report.calls.to_type += 1;
+                (id, EdgeKind::TypeRef)
+            }
+            _ => return,
+        };
+        self.edges.insert(Edge {
+            from: from.to_string(),
+            to: to.clone(),
+            kind,
+            change: None,
+        });
+    }
+}
+
 /// The `implements` edges of a `defrecord` or `deftype` form: each symbol at the top level
 /// of its body that names a protocol or interface of the repository. No local can stand
 /// there, so also a symbol without namespace part is resolved.
@@ -380,6 +510,7 @@ fn implemented(form: Ts, from: &str, scope: Scope, edges: &mut BTreeSet<Edge>) {
         if let Some(Target::Type {
             id,
             interface: true,
+            ..
         }) = target
         {
             edges.insert(Edge {

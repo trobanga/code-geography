@@ -189,9 +189,9 @@ fn index_prints_how_the_clojure_calls_were_resolved() {
     assert!(output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     for line in [
-        "clojure calls: 2 to function (1 as a value), 0 to type, 1 external, 2 unresolved (1 var without node); 1 more in code without a function node, not read\n",
+        "clojure calls: 3 to function (1 as a value), 0 to type, 1 external, 2 unresolved (1 var without node); 1 more in code without a function node, not read\n",
         "clojure code without a function node, by head: def 1\n",
-        "clojure unqualified heads: 1 of the same namespace (0 a local could hide), 0 referred (0 a local could hide)\n",
+        "clojure unqualified: 1 to function (0 as a value), 0 to type, 0 a local could hide, 0 ambiguous\n",
         "clojure unresolved: x/none 1\n",
     ] {
         assert!(stderr.contains(line), "{line}\n{stderr}");

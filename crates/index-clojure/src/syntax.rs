@@ -87,3 +87,12 @@ pub fn string<'a>(form: Ts, source: &'a str) -> Option<&'a str> {
 pub fn text<'a>(node: Ts, source: &'a str) -> &'a str {
     &source[node.byte_range()]
 }
+
+/// Whether the metadata of a symbol marks it private (`^:private`, `^{:private true}`).
+pub fn private(form: Ts, source: &str) -> bool {
+    (0..form.named_child_count())
+        .filter_map(|i| form.named_child(i as u32))
+        .any(|c| {
+            matches!(c.kind(), "meta_lit" | "old_meta_lit") && text(c, source).contains(":private")
+        })
+}

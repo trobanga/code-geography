@@ -22,8 +22,13 @@ pub struct Spec {
     pub name: String,
     /// The name after `:as`.
     pub alias: Option<String>,
-    /// The names after `:refer`.
+    /// The names that the spec brings under their own name: after `:refer`, for a `:use`
+    /// after `:only`; not those that `:rename` gives another name.
     pub refer: Vec<String>,
+    /// Every public var is brought (`:refer :all`, a `:use` without `:only`), except the
+    /// names of `except` (`:exclude`, `:rename`).
+    pub refer_all: bool,
+    pub except: Vec<String>,
     /// `:as-alias`: the namespace is not loaded.
     pub as_alias: bool,
 }
@@ -39,9 +44,10 @@ pub fn specs(ns_form: Ts, source: &str) -> Vec<Spec> {
         let Some((head, rest)) = parts.split_first() else {
             continue;
         };
-        if matches!(keyword(*head, source), Some("require" | "use")) {
+        let kind = keyword(*head, source);
+        if matches!(kind, Some("require" | "use")) {
             for spec in rest {
-                collect(*spec, "", source, &mut found);
+                collect(*spec, "", kind == Some("use"), source, &mut found);
             }
         }
     }
@@ -61,7 +67,7 @@ pub fn requires(ns_form: Ts, source: &str) -> Vec<String> {
 
 /// The specs of one element of a `:require`: a symbol, a vector `[ns :as a]`, or a prefix
 /// list `(a.b [c :as x] d)`, whose elements are below the prefix.
-fn collect(spec: Ts, prefix: &str, source: &str, out: &mut Vec<Spec>) {
+fn collect(spec: Ts, prefix: &str, is_use: bool, source: &str, out: &mut Vec<Spec>) {
     let join = |name: &str| {
         if prefix.is_empty() {
             name.to_string()
@@ -74,6 +80,8 @@ fn collect(spec: Ts, prefix: &str, source: &str, out: &mut Vec<Spec>) {
             name: join(name),
             alias: None,
             refer: Vec::new(),
+            refer_all: is_use,
+            except: Vec::new(),
             as_alias: false,
         })),
         "vec_lit" => {
@@ -88,22 +96,50 @@ fn collect(spec: Ts, prefix: &str, source: &str, out: &mut Vec<Spec>) {
                     .position(|p| keyword(*p, source) == Some(key))?;
                 plain_symbol(*parts.get(at + 1)?, source).map(str::to_string)
             };
+            // The symbols of the vector after an option such as `:refer`.
+            let names_after = |key: &str| -> Option<Vec<String>> {
+                let at = parts
+                    .iter()
+                    .position(|p| keyword(*p, source) == Some(key))?;
+                let names = parts.get(at + 1).filter(|n| n.kind() == "vec_lit")?;
+                Some(
+                    flat_items(*names)
+                        .into_iter()
+                        .filter_map(|n| plain_symbol(n, source))
+                        .map(str::to_string)
+                        .collect(),
+                )
+            };
+            let renamed: Vec<String> = parts
+                .iter()
+                .position(|p| keyword(*p, source) == Some("rename"))
+                .and_then(|at| parts.get(at + 1))
+                .filter(|m| m.kind() == "map_lit")
+                .map(|m| {
+                    flat_items(*m)
+                        .into_iter()
+                        .step_by(2)
+                        .filter_map(|k| plain_symbol(k, source))
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default();
+            let refer_all = parts
+                .iter()
+                .position(|p| keyword(*p, source) == Some("refer"))
+                .and_then(|at| parts.get(at + 1))
+                .is_some_and(|v| keyword(*v, source) == Some("all"))
+                || (is_use && names_after("only").is_none());
+            let mut refer = names_after(if is_use { "only" } else { "refer" }).unwrap_or_default();
+            refer.retain(|n| !renamed.contains(n));
+            let mut except = names_after("exclude").unwrap_or_default();
+            except.extend(renamed);
             out.push(Spec {
                 name: join(name),
                 alias: after("as"),
-                refer: parts
-                    .iter()
-                    .position(|p| keyword(*p, source) == Some("refer"))
-                    .and_then(|at| parts.get(at + 1))
-                    .filter(|names| names.kind() == "vec_lit")
-                    .map(|names| {
-                        flat_items(*names)
-                            .into_iter()
-                            .filter_map(|n| plain_symbol(n, source))
-                            .map(str::to_string)
-                            .collect()
-                    })
-                    .unwrap_or_default(),
+                refer,
+                refer_all,
+                except,
                 as_alias: parts
                     .iter()
                     .any(|p| keyword(*p, source) == Some("as-alias")),
@@ -116,7 +152,7 @@ fn collect(spec: Ts, prefix: &str, source: &str, out: &mut Vec<Spec>) {
             {
                 let prefix = join(name);
                 for part in rest {
-                    collect(*part, &prefix, source, out);
+                    collect(*part, &prefix, is_use, source, out);
                 }
             }
         }

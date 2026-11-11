@@ -657,14 +657,15 @@ fn a_protocol_an_interface_and_the_constructors_of_a_record_or_type_give_type_re
     assert_eq!(
         found,
         vec![
-            ("fn:user/g", "type:x/Iface"),
             ("fn:user/g", "type:x/Proto"),
             ("fn:user/g", "type:x/Rec"),
             ("fn:user/g", "type:x/Ty"),
         ]
     );
     assert_eq!(calls(&g), vec![]);
-    assert_eq!(report.calls.to_type, 5);
+    assert_eq!(report.calls.to_type, 4);
+    // Clojure makes no var for `definterface`: `a/Iface` is no valid name.
+    assert!(report.unresolved_names.contains_key("x/Iface"));
 }
 
 #[test]
@@ -832,45 +833,528 @@ fn a_type_implements_the_protocols_and_interfaces_of_the_repository_that_its_bod
     );
 }
 
+fn sorted<'a>(mut edges: Vec<(&'a str, &'a str)>) -> Vec<(&'a str, &'a str)> {
+    edges.sort();
+    edges
+}
+
 #[test]
-fn unqualified_heads_that_name_a_function_are_counted_with_those_that_a_local_could_hide() {
+fn an_unqualified_symbol_at_the_head_of_a_list_that_names_a_function_of_the_namespace_gives_a_calls_edge()
+ {
+    let g = index(&[
+        DEPS,
+        (
+            "src/x.clj",
+            "(ns x)\n\
+             (defn early [] (late))\n\
+             (defn late [] 1)\n\
+             (defn- p [] (early) (inc 1) (unknown))\n\
+             (defmacro m [] (p))\n\
+             (defmulti mm :k)\n\
+             (defn use-mm [] (mm 1))\n\
+             (defrecord R [k] Object (toString [_] (late)))\n\
+             (deftype T [k] Object (toString [_] (p)))\n",
+        ),
+    ]);
+
+    assert_eq!(
+        sorted(calls(&g)),
+        vec![
+            ("fn:x/R#toString", "fn:x/late"),
+            ("fn:x/T#toString", "fn:x/p"),
+            ("fn:x/early", "fn:x/late"),
+            ("fn:x/m", "fn:x/p"),
+            ("fn:x/p", "fn:x/early"),
+            ("fn:x/use-mm", "fn:x/mm"),
+        ]
+    );
+}
+
+#[test]
+fn a_name_that_the_ns_form_brings_with_refer_all_or_use_gives_a_calls_edge() {
+    let g = index(&[
+        DEPS,
+        (
+            "src/x.clj",
+            "(ns x)\n(defn f [])\n(defprotocol P (pm [s]))\n(defn- hidden [])\n(defn ^:private meta-hidden [])\n(defn other [])\n",
+        ),
+        ("src/y.clj", "(ns y)\n(defn g [])\n"),
+        (
+            "src/user.clj",
+            "(ns user (:require [x :refer [f pm]] [y :refer :all] [clojure.string :refer [join]]))\n\
+             (defn a [] (f) (pm 1) (g) (join 1) (other) (hidden) (meta-hidden))\n",
+        ),
+        (
+            "src/legacy.clj",
+            "(ns legacy (:use [x :only [f]] y))\n(defn a [] (f) (g) (other))\n",
+        ),
+        // `:refer :all` brings the public vars only.
+        (
+            "src/everything.clj",
+            "(ns everything (:require [x :refer :all]))\n(defn a [] (f) (other) (hidden) (meta-hidden))\n",
+        ),
+        // `:exclude` and `:rename` leave a name out.
+        (
+            "src/some.clj",
+            "(ns some (:use [x :exclude [f]]) (:require [y :refer [g] :rename {g gg}]))\n(defn a [] (f) (other) (g) (gg))\n",
+        ),
+    ]);
+
+    assert_eq!(
+        sorted(calls(&g)),
+        vec![
+            ("fn:everything/a", "fn:x/f"),
+            ("fn:everything/a", "fn:x/other"),
+            ("fn:legacy/a", "fn:x/f"),
+            ("fn:legacy/a", "fn:y/g"),
+            ("fn:some/a", "fn:x/other"),
+            ("fn:user/a", "fn:x/P#pm"),
+            ("fn:user/a", "fn:x/f"),
+            ("fn:user/a", "fn:y/g"),
+        ]
+    );
+}
+
+#[test]
+fn a_name_that_two_sources_declare_gives_no_edge_and_is_counted_as_ambiguous() {
+    let (g, report) = run(&[
+        DEPS,
+        ("src/x.clj", "(ns x)\n(defn f [])\n(defn other [])\n"),
+        ("src/z.clj", "(ns z)\n(defn f [])\n"),
+        (
+            "src/two_refers.clj",
+            "(ns two-refers (:require [x :refer [f]] [z :refer [f]]))\n(defn a [] (f))\n",
+        ),
+        (
+            "src/own.clj",
+            "(ns own (:require [x :refer [other]]))\n(defn other [])\n(defn b [] (other))\n",
+        ),
+        (
+            "src/both_all.clj",
+            "(ns both-all (:require [x :refer :all] [z :refer :all]))\n(defn c [] (f) (other))\n",
+        ),
+    ]);
+
+    // `other` is declared by one namespace only in `both_all`.
+    assert_eq!(calls(&g), vec![("fn:both-all/c", "fn:x/other")]);
+    assert_eq!(report.unqualified.ambiguous, 3);
+    assert_eq!(report.calls.unresolved, 3);
+}
+
+#[test]
+fn a_protocol_method_gives_calls_and_a_protocol_interface_or_constructor_gives_type_ref() {
     let (g, report) = run(&[
         DEPS,
         (
             "src/x.clj",
-            "(ns x)\n(defn r-plain [])\n(defn r-other [])\n(defn rv [])\n",
+            "(ns x)\n(defprotocol Proto (-get [s k]))\n(definterface Iface)\n(defrecord Rec [a])\n(deftype Ty [a])\n",
         ),
         (
             "src/user.clj",
-            "(ns user (:require [x :refer [r-plain r-other rv]]))\n\
+            "(ns user (:require [x :refer [Proto Rec ->Rec map->Rec -get]]))\n\
+             (definterface Own)\n\
+             (defprotocol OwnProto (-put [s k]))\n\
+             (defrecord Mine [a])\n\
+             (defn a [s] (-get s 1) (-put s 1) (->Rec 1) (map->Rec {}) (->Mine 1) (map->Mine {}) (satisfies? Proto s) (instance? Own s) (satisfies? OwnProto s) (.-x s) (Rec. 1))\n",
+        ),
+    ]);
+
+    assert_eq!(
+        sorted(calls(&g)),
+        vec![
+            ("fn:user/a", "fn:user/OwnProto#-put"),
+            ("fn:user/a", "fn:x/Proto#-get"),
+        ]
+    );
+    assert_eq!(
+        sorted(edges_of(&g, EdgeKind::TypeRef)),
+        vec![
+            ("fn:user/a", "type:user/Mine"),
+            ("fn:user/a", "type:user/Own"),
+            ("fn:user/a", "type:user/OwnProto"),
+            ("fn:user/a", "type:x/Proto"),
+            ("fn:user/a", "type:x/Rec"),
+        ]
+    );
+    assert_eq!(report.unqualified.to_type, 7);
+    assert_eq!(report.calls.to_type, 7);
+}
+
+#[test]
+fn an_unqualified_function_named_as_a_value_gives_the_edge_and_is_counted_as_a_value() {
+    let (g, report) = run(&[
+        DEPS,
+        ("src/x.clj", "(ns x)\n(defn f [])\n"),
+        (
+            "src/user.clj",
+            "(ns user (:require [x :refer [f]]))\n\
+             (defn helper [])\n\
+             (defn g [xs] (helper) (map helper xs) (partial helper 1) #'helper (map f xs))\n",
+        ),
+    ]);
+
+    assert_eq!(
+        sorted(calls(&g)),
+        vec![("fn:user/g", "fn:user/helper"), ("fn:user/g", "fn:x/f")]
+    );
+    assert_eq!(report.unqualified.to_function, 5);
+    assert_eq!(report.unqualified.function_values, 4);
+    assert_eq!(report.calls.to_function, 5);
+    assert_eq!(report.function_values, 4);
+}
+
+#[test]
+fn a_name_that_a_local_could_bind_in_the_same_top_level_form_gives_no_edge_and_is_counted() {
+    let (g, report) = run(&[
+        DEPS,
+        ("src/x.clj", "(ns x)\n(defn r-plain [])\n(defn rv [])\n"),
+        (
+            "src/user.clj",
+            "(ns user (:require [x :refer [r-plain rv]]))\n\
              (defn plain [] 1)\n\
              (defn v1 [] 1)\n\
+             (defn v1n [] 1)\n\
              (defn v2 [] 1)\n\
              (defn v3 [] 1)\n\
              (defn v4 [] 1)\n\
              (defn v5 [] 1)\n\
              (defn v6 [] 1)\n\
              (defn v7 [] 1)\n\
-             (defn plain-user [] (plain) (r-plain) (inc 1) (x/rv) (unknown))\n\
+             (defn plain-user [] (plain) (r-plain) (inc 1) (unknown))\n\
              (defn t1 [v1] (v1))\n\
+             (defn t1n [[a [v1n]]] (v1n))\n\
              (defn t2 [{v2 :k}] (v2))\n\
              (defn t3 [{:k v3}] (v3))\n\
              (defn t4 [] (as-> 1 v4 (v4)))\n\
              (defn t5 [] (try 1 (catch Exception v5 (v5))))\n\
              (defn t6 [] (fn v6 [] (v6)))\n\
              (defn t7 [] (letfn [(v7 [] 1)] (v7)))\n\
-             (defn t8 [rv] (rv) (r-other))\n\
-             (def d (plain))\n\
-             (defn quoted [] '(plain))\n",
+             (defn t8 [rv] (rv))\n",
         ),
     ]);
 
-    // No edge comes from an unqualified symbol, except the one qualified call.
-    assert_eq!(calls(&g), vec![("fn:user/plain-user", "fn:x/rv")]);
-    let u = &report.unqualified;
-    // The head of the binding `(v7 [] 1)` of a letfn is counted, too.
-    assert_eq!(u.same_namespace, 9);
-    assert_eq!(u.same_namespace_maybe_local, 8);
-    assert_eq!(u.referred, 3);
-    assert_eq!(u.referred_maybe_local, 1);
+    assert_eq!(
+        sorted(calls(&g)),
+        vec![
+            ("fn:user/plain-user", "fn:user/plain"),
+            ("fn:user/plain-user", "fn:x/r-plain"),
+        ]
+    );
+    // Only a call (the head of a list) is a site, not the binder and not a value: one per
+    // form. The head of a `letfn` binding is the binder, not a call.
+    assert_eq!(report.unqualified.maybe_local, 9);
+    assert_eq!(report.unqualified.to_function, 2);
+    assert_eq!(report.calls.unresolved, 9);
+}
+
+#[test]
+fn the_names_after_or_as_keys_syms_and_strs_in_any_map_literal_could_be_bound() {
+    let (g, report) = run(&[
+        DEPS,
+        (
+            "src/user.clj",
+            "(ns user)\n\
+             (defn k1 [] 1)\n\
+             (defn k2 [] 1)\n\
+             (defn k3 [] 1)\n\
+             (defn k4 [] 1)\n\
+             (defn defaults [] 1)\n\
+             (defn t1 [{:keys [a] :or {k1 (defaults)}}] (k1))\n\
+             (defn t2 [] (with-options {:as k2} (k2)))\n\
+             (defn t3 [] (with-options {:keys [k3]} (k3)))\n\
+             (defn t4 [] (with-options {:strs [k4]} (k4)))\n",
+        ),
+    ]);
+
+    // The default `(defaults)` is code, not a binder.
+    assert_eq!(calls(&g), vec![("fn:user/t1", "fn:user/defaults")]);
+    // One site per form: the call.
+    assert_eq!(report.unqualified.maybe_local, 4);
+}
+
+#[test]
+fn the_name_of_the_enclosing_function_is_no_site() {
+    let (g, report) = run(&[
+        DEPS,
+        (
+            "src/user.clj",
+            "(ns user)\n\
+             (defn fact [n] (if (zero? n) 1 (* n (fact (dec n)))))\n\
+             (defn each [xs] (map each xs))\n\
+             (defn a [] (fact 1))\n",
+        ),
+    ]);
+
+    assert_eq!(calls(&g), vec![("fn:user/a", "fn:user/fact")]);
+    assert_eq!(report.unqualified.to_function, 1);
+    assert_eq!(report.calls.to_function, 1);
+    assert_eq!(report.calls.unresolved, 0);
+}
+
+#[test]
+fn a_function_of_the_namespace_wins_over_a_core_function_of_the_same_name_with_or_without_exclude()
+{
+    let g = index(&[
+        DEPS,
+        (
+            "src/excluded.clj",
+            "(ns excluded (:refer-clojure :exclude [get]))\n(defn get [])\n(defn a [] (get))\n",
+        ),
+        (
+            "src/shadowing.clj",
+            "(ns shadowing)\n(defn get [])\n(defn a [] (get))\n",
+        ),
+    ]);
+
+    assert_eq!(
+        sorted(calls(&g)),
+        vec![
+            ("fn:excluded/a", "fn:excluded/get"),
+            ("fn:shadowing/a", "fn:shadowing/get"),
+        ]
+    );
+}
+
+#[test]
+fn special_forms_core_functions_interop_and_plain_vars_are_no_sites() {
+    let (g, report) = run(&[
+        DEPS,
+        (
+            "src/user.clj",
+            "(ns user)\n\
+             (def c 1)\n\
+             (defn f [x]\n\
+               (if x (do (inc 1) (.method x) (.-field x) (Foo. 1) (new Foo 1) (set! y 1)) c)\n\
+               (c)\n\
+               (recur (unknown x)))\n",
+        ),
+    ]);
+
+    assert_eq!(g.edges.len(), 0);
+    assert_eq!(report.unqualified, cg_index_clojure::Unqualified::default());
+    assert_eq!(report.calls.unresolved, 0);
+    assert_eq!(report.calls.external, 0);
+}
+
+#[test]
+fn a_syntax_quoted_form_in_a_macro_is_read_and_a_name_after_unquote_quote_is_not() {
+    let (g, report) = run(&[
+        DEPS,
+        (
+            "src/user.clj",
+            "(ns user)\n\
+             (defn helper [] 1)\n\
+             (defn other [] 1)\n\
+             (defmacro m1 [] `(helper))\n\
+             (defmacro m2 [] `(do ~'other ~'(other) (helper)))\n\
+             (defmacro m3 [x] `(do ~(other) ~x))\n\
+             (defn g [] `(helper) '(other))\n",
+        ),
+    ]);
+
+    assert_eq!(
+        sorted(calls(&g)),
+        vec![
+            ("fn:user/m1", "fn:user/helper"),
+            ("fn:user/m2", "fn:user/helper"),
+            ("fn:user/m3", "fn:user/other"),
+        ]
+    );
+    assert_eq!(report.unqualified.to_function, 3);
+}
+
+#[test]
+fn an_unqualified_reference_in_code_without_a_function_node_is_counted_by_the_head_of_its_form() {
+    let (g, report) = run(&[
+        DEPS,
+        (
+            "src/user.clj",
+            "(ns user)\n(defn helper [])\n(defrecord R [])\n\
+             (def v (helper))\n\
+             (defmethod mm :k [x] (helper) ->R)\n\
+             (helper)\n",
+        ),
+    ]);
+
+    assert_eq!(g.edges.len(), 0);
+    let by_head: Vec<(&str, usize)> = report
+        .no_source_node
+        .iter()
+        .map(|(k, v)| (k.as_str(), *v))
+        .collect();
+    assert_eq!(by_head, vec![("def", 1), ("defmethod", 2), ("other", 1)]);
+    assert_eq!(report.unqualified, cg_index_clojure::Unqualified::default());
+    assert_eq!(report.calls.to_function + report.calls.to_type, 0);
+}
+
+#[test]
+fn the_name_of_a_method_in_reify_proxy_specify_or_extend_type_is_not_a_call() {
+    let (g, report) = run(&[
+        DEPS,
+        (
+            "src/user.clj",
+            "(ns user)\n\
+             (defprotocol P (-create [x]) (-form [x]))\n\
+             (defn helper [] 1)\n\
+             (defn get [] 1)\n\
+             (defn mk [] (reify P (-create [_] (helper)) (-form ([_] 1) ([_ x] 2))))\n\
+             (defn mk2 [] (proxy [Object] [] (get [] (helper))))\n\
+             (defn mk3 [] (extend-type Foo P (-form [_] (helper))))\n\
+             (defn mk4 [x] (specify! x P (-create [_] (helper))))\n\
+             (defn use-it [] (-create 1))\n",
+        ),
+    ]);
+
+    assert_eq!(
+        sorted(calls(&g)),
+        vec![
+            ("fn:user/mk", "fn:user/helper"),
+            ("fn:user/mk2", "fn:user/helper"),
+            ("fn:user/mk3", "fn:user/helper"),
+            ("fn:user/mk4", "fn:user/helper"),
+            ("fn:user/use-it", "fn:user/P#-create"),
+        ]
+    );
+    assert_eq!(report.unqualified.to_function, 5);
+}
+
+#[test]
+fn code_in_a_defrecord_or_deftype_without_a_node_is_counted_under_its_own_head() {
+    let (_, report) = run(&[
+        DEPS,
+        (
+            "src/user.clj",
+            "(ns user)\n(defn helper [])\n\
+             (defrecord R [] Object (toString [_] (helper)))\n\
+             (defrecord R [] Object (toString [_] (helper)))\n\
+             (deftype T [] Object (toString [_] (helper)))\n\
+             (deftype T [] Object (toString [_] (helper)))\n",
+        ),
+    ]);
+
+    let by_head: Vec<(&str, usize)> = report
+        .no_source_node
+        .iter()
+        .map(|(k, v)| (k.as_str(), *v))
+        .collect();
+    assert_eq!(by_head, vec![("defrecord", 1), ("deftype", 1)]);
+}
+
+#[test]
+fn the_arities_of_a_method_written_as_separate_forms_are_one_function_node_read_as_a_whole() {
+    let (g, report) = run(&[
+        DEPS,
+        (
+            "src/x.clj",
+            "(ns x)\n\
+             (defn helper [] 1)\n\
+             (defn other [] 1)\n\
+             (defprotocol P (m [this] [this x]) (k [this]))\n\
+             (defrecord R [a]\n\
+               P\n\
+               (m [this] (helper))\n\
+               (m [this x] (other))\n\
+               (k [this] 1))\n\
+             (deftype T []\n\
+               P\n\
+               (m [this] (helper))\n\
+               (k [this] 1)\n\
+               (m [this x] (other)))\n",
+        ),
+    ]);
+
+    let methods: Vec<&str> = g
+        .nodes
+        .iter()
+        .map(|n| n.id.as_str())
+        .filter(|id| id.starts_with("fn:x/R#") || id.starts_with("fn:x/T#"))
+        .collect();
+    assert_eq!(
+        methods,
+        vec!["fn:x/R#m", "fn:x/R#k", "fn:x/T#m", "fn:x/T#k"]
+    );
+    assert_eq!(
+        sorted(calls(&g)),
+        vec![
+            ("fn:x/R#m", "fn:x/helper"),
+            ("fn:x/R#m", "fn:x/other"),
+            ("fn:x/T#m", "fn:x/helper"),
+            ("fn:x/T#m", "fn:x/other"),
+        ]
+    );
+    // The arities are adjacent in R: the span runs over both. In T another method lies
+    // between them: the span of the first.
+    let span = |id: &str| node(&g, id).span.unwrap();
+    assert_eq!(
+        (span("fn:x/R#m").start_line, span("fn:x/R#m").end_line),
+        (7, 8)
+    );
+    assert_eq!(
+        (span("fn:x/T#m").start_line, span("fn:x/T#m").end_line),
+        (12, 12)
+    );
+    assert!(report.no_source_node.is_empty());
+}
+
+#[test]
+fn the_own_hash_of_a_method_covers_all_its_arities() {
+    let hashes = |first: &str, second: &str| {
+        let g = index(&[
+            DEPS,
+            (
+                "src/a.clj",
+                &format!(
+                    "(ns a)\n(defrecord R [a]\n  P\n  (m [this] {first})\n  (m [this x] {second}))\n"
+                ),
+            ),
+        ]);
+        (
+            node(&g, "type:a/R").hash.clone(),
+            node(&g, "fn:a/R#m").hash.clone(),
+        )
+    };
+
+    let (type_a, method_a) = hashes("1", "2");
+    let (type_b, method_b) = hashes("1", "3");
+    let (_, method_c) = hashes("0", "2");
+    assert_eq!(type_a, type_b);
+    assert_ne!(method_a, method_b);
+    assert_ne!(method_a, method_c);
+}
+
+#[test]
+fn a_declared_name_is_a_var_without_node_and_not_an_unresolved_name() {
+    let (g, report) = run(&[
+        DEPS,
+        (
+            "src/x.clj",
+            "(ns x)\n(declare later declared-only)\n(defn later [])\n",
+        ),
+        (
+            "src/user.clj",
+            "(ns user (:require [x :as a]))\n(defn g [] (a/later) (a/declared-only) (a/nothing))\n",
+        ),
+    ]);
+
+    assert_eq!(calls(&g), vec![("fn:user/g", "fn:x/later")]);
+    assert_eq!(report.var_without_node, 1);
+    let names: Vec<&str> = report.unresolved_names.keys().map(String::as_str).collect();
+    assert_eq!(names, vec!["x/nothing"]);
+}
+
+#[test]
+fn a_hidden_name_that_is_not_called_is_no_site() {
+    let (g, report) = run(&[
+        DEPS,
+        (
+            "src/user.clj",
+            "(ns user)\n\
+             (defn v1 [] 1)\n\
+             (defn t1 [v1 xs] (map v1 xs) [v1] v1)\n",
+        ),
+    ]);
+
+    assert_eq!(g.edges.len(), 0);
+    assert_eq!(report.unqualified, cg_index_clojure::Unqualified::default());
+    assert_eq!(report.calls.unresolved, 0);
 }
