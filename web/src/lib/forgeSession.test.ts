@@ -1,0 +1,337 @@
+import { describe, expect, it } from 'vitest';
+import { memoryCache, type Entry, type Forge, type Repo } from './forge';
+import { forgeSession, NO_FORGE, type ForgeState, type SessionDeps } from './forgeSession';
+import { parseRepo } from './github';
+
+const HEAD = 'a'.repeat(40);
+const BASE = 'b'.repeat(40);
+const isInput = (p: string) => p.endsWith('.java') || p === 'pom.xml';
+const report = { calls: { to_function: 0, to_type: 0, external: 0, unresolved: 0 } };
+
+/** Two commits; `main` is HEAD with parent BASE, BASE is a root commit. The blob sha is the text. */
+const FILES: Record<string, Record<string, string>> = {
+  [HEAD]: { 'pom.xml': '<p/>', 'A.java': 'class A { int x; }', 'New.java': 'class New {}' },
+  [BASE]: { 'pom.xml': '<p/>', 'A.java': 'class A {}' },
+};
+const commit = (sha: string, parents: string[]) => ({ sha, parents, title: `t ${sha[0]}`, author: 'A', date: '2026-11-01T00:00:00Z' });
+
+/** A fake forge, a memory cache and fake index and diff jobs; records what the session asks of the app. */
+function setup() {
+  const calls: string[] = [];
+  const phases: (string | null)[] = [];
+  const errors: string[] = [];
+  const shown: { text: string; name: string; hash: string | undefined; at: string | null }[] = [];
+  /** Answers of `resolve` held back until released: for stale replies. */
+  const held = new Map<string, () => void>();
+  const sha = (ref: string | undefined) => (ref === 'old' ? BASE : ref && /^[0-9a-f]{40}$/.test(ref) ? ref : HEAD);
+  const forge: Forge = {
+    host: 'example.org',
+    async resolve(repo: Repo) {
+      calls.push(`resolve ${repo.ref}`);
+      if (repo.ref?.startsWith('slow')) await new Promise<void>((ok) => held.set(repo.ref!, ok));
+      return { sha: sha(repo.ref?.replace(/^slow-?/, '') || undefined) };
+    },
+    async tree(_repo, s) {
+      calls.push(`tree ${s[0]}`);
+      if (!FILES[s]) throw new Error(`o/r: HTTP 500`);
+      return Object.entries(FILES[s]).map(([path, text]): Entry => ({ path, blobSha: `blob:${text}` }));
+    },
+    async text(_repo, s, path) {
+      calls.push(`text ${s[0]} ${path}`);
+      return FILES[s][path];
+    },
+    async commits(repo, s, n) {
+      calls.push(`commits ${s[0]} ${n}`);
+      if (repo.name === 'broken') throw new Error('o/broken: HTTP 500');
+      return [commit(HEAD, [BASE]), commit(BASE, [])].filter((c) => c.sha === sha(s) || c.sha === BASE).slice(0, n);
+    },
+    async mergeBase() {
+      throw new Error('unused');
+    },
+    async pull() {
+      throw new Error('unused');
+    },
+  };
+  let seq = 0;
+  let state: ForgeState = NO_FORGE;
+  const cache = memoryCache();
+  const deps: SessionDeps = {
+    forge,
+    name: 'Example',
+    parse: parseRepo,
+    cache: async () => cache,
+    isInput,
+    ready: async () => {},
+    index: async (req) => {
+      calls.push('index');
+      return { graphText: JSON.stringify({ nodes: req.paths.map((p) => ({ id: p, parent: null, kind: 'type', name: p })), edges: [] }), report };
+    },
+    diff: async (req) => {
+      calls.push(`diff ${req.baseName}..${req.headName}`);
+      const nodes = [
+        { id: 'A', parent: null, kind: 'type', name: 'A', change: 'modified' },
+        { id: 'Gone', parent: null, kind: 'type', name: 'Gone', change: 'removed' },
+      ];
+      return { graphText: JSON.stringify({ nodes, edges: [], diff: { base: req.baseName, head: req.headName } }), report };
+    },
+    begin: () => {
+      const my = ++seq;
+      return () => my === seq;
+    },
+    phase: (p) => phases.push(p),
+    fail: (m) => errors.push(m),
+    show: async (text, summary, hash) => void shown.push({ text, name: summary.name, hash, at: state.at }),
+    hash: () => '#now',
+    onState: (s) => (state = s),
+  };
+  return { session: forgeSession(deps), calls, phases, errors, shown, held, state: () => state, cancelOther: () => ++seq };
+}
+
+const REPO = { owner: 'o', name: 'r' };
+
+/** Lets the pending promises run until `done`. */
+async function until(done: () => boolean) {
+  for (let i = 0; i < 200 && !done(); i++) await Promise.resolve();
+}
+
+/** Lets the pending promises run until `resolve` of `ref` waits, then releases it. */
+async function release(held: Map<string, () => void>, ref: string) {
+  await until(() => held.has(ref));
+  held.get(ref)!();
+}
+
+describe('forgeSession', () => {
+  it('opens a repository: shows the head graph, at `owner/repo@sha`', async () => {
+    const t = setup();
+    await t.session.open({ ...REPO, ref: 'main' }, undefined, '#view');
+    expect(t.shown).toHaveLength(1);
+    expect(JSON.parse(t.shown[0].text).nodes.map((n: { id: string }) => n.id)).toEqual(['A.java', 'New.java', 'pom.xml']);
+    expect(t.shown[0]).toMatchObject({ name: `o/r@main (${HEAD.slice(0, 7)})`, hash: '#view', at: `o/r@${HEAD}` });
+    expect(t.state()).toMatchObject({ at: `o/r@${HEAD}`, mode: 'graph', overlay: null, repo: REPO });
+  });
+
+  it('reports the progress: resolve, list, n / m files, index, done', async () => {
+    const t = setup();
+    await t.session.open({ ...REPO, ref: 'main' });
+    expect(t.phases).toEqual([
+      'opening o/r',
+      'resolving o/r@main',
+      `listing the files of o/r@${HEAD.slice(0, 7)}`,
+      'fetched 1 / 3 files of o/r',
+      'fetched 2 / 3 files of o/r',
+      'fetched 3 / 3 files of o/r',
+      'indexing 3 files of o/r',
+      null,
+    ]);
+  });
+
+  it('a failed open reports the message of the forge and leaves the repository shown before', async () => {
+    const t = setup();
+    await t.session.open({ ...REPO, ref: 'main' });
+    const before = t.state();
+    await t.session.open({ ...REPO, ref: 'c'.repeat(40) });
+    expect(t.errors).toEqual(['cannot open o/r: o/r: HTTP 500']);
+    expect(t.phases.at(-1)).toBeNull();
+    expect(t.shown).toHaveLength(1);
+    expect(t.state()).toBe(before);
+  });
+
+  it('a stale reply changes nothing: the later open wins', async () => {
+    const t = setup();
+    const first = t.session.open({ ...REPO, ref: 'slow-old' });
+    await until(() => t.held.has('slow-old'));
+    await t.session.open({ ...REPO, ref: 'main' });
+    const phases = t.phases.length;
+    await release(t.held, 'slow-old');
+    await first;
+    expect(t.phases).toHaveLength(phases);
+    expect(t.shown.map((s) => s.at)).toEqual([`o/r@${HEAD}`]);
+    expect(t.state().at).toBe(`o/r@${HEAD}`);
+  });
+
+  it('builds the overlay of a range: shows it, keeps the head without the removed nodes', async () => {
+    const t = setup();
+    await t.session.overlay({ ...REPO, ref: HEAD }, { base: BASE, head: HEAD }, '#view', 'a note');
+    expect(t.calls).toContain('diff bbbbbbb..aaaaaaa');
+    expect(t.calls.filter((c) => c.startsWith('resolve'))).toEqual([]);
+    expect(t.shown).toHaveLength(1);
+    expect(t.shown[0]).toMatchObject({ name: 'o/r bbbbbbb → aaaaaaa', hash: '#view', at: `o/r@${HEAD}` });
+    const s = t.state();
+    expect(s).toMatchObject({ at: `o/r@${HEAD}`, mode: 'commit', repo: REPO });
+    expect(s.overlay!.range).toEqual({ base: BASE, head: HEAD });
+    expect(s.overlay!.summary.text).toMatch(/, 2 changed files \(a note\)$/);
+    expect(JSON.parse(s.head!.text)).toEqual({ nodes: [{ id: 'A', parent: null, kind: 'type', name: 'A' }], edges: [] });
+    expect(s.head!.summary.name).toBe('o/r@aaaaaaa');
+  });
+
+  it('switches to the head and back to the overlay without a fetch; the view stays', async () => {
+    const t = setup();
+    await t.session.overlay({ ...REPO, ref: HEAD }, { base: BASE, head: HEAD });
+    const fetched = t.calls.length;
+    await t.session.show('graph');
+    expect(t.state().mode).toBe('graph');
+    await t.session.show('graph');
+    await t.session.show('commit');
+    expect(t.state().mode).toBe('commit');
+    expect(t.calls).toHaveLength(fetched);
+    expect(t.shown.map((s) => [s.name, s.hash])).toEqual([
+      ['o/r bbbbbbb → aaaaaaa', undefined],
+      ['o/r@aaaaaaa', '#now'],
+      ['o/r bbbbbbb → aaaaaaa', '#now'],
+    ]);
+  });
+
+  it('the overlay that is kept, asked for again, shows it from memory with the view shown now', async () => {
+    const t = setup();
+    await t.session.overlay({ ...REPO, ref: HEAD }, { base: BASE, head: HEAD });
+    await t.session.show('graph');
+    const fetched = t.calls.length;
+    await t.session.overlay({ ...REPO, ref: HEAD }, { base: BASE, head: HEAD });
+    expect(t.calls).toHaveLength(fetched);
+    expect(t.shown.at(-1)).toMatchObject({ name: 'o/r bbbbbbb → aaaaaaa', hash: '#now' });
+    expect(t.state().mode).toBe('commit');
+  });
+
+  it('restores `gh=owner/repo@sha` from the hash with its view', async () => {
+    const t = setup();
+    t.session.followHash(`o/r@${HEAD}`, '#gh=x&open=A', undefined);
+    await until(() => t.shown.length > 0);
+    expect(t.shown[0]).toMatchObject({ at: `o/r@${HEAD}`, hash: '#gh=x&open=A', name: 'o/r@aaaaaaa' });
+    expect(t.state().mode).toBe('graph');
+  });
+
+  it('restores `gh=…&base=…` of two full shas as the same overlay, without a resolve', async () => {
+    const t = setup();
+    t.session.followHash(`o/r@${HEAD.toUpperCase()}`, '#v', BASE.toUpperCase());
+    await until(() => t.shown.length > 0);
+    expect(t.calls.filter((c) => c.startsWith('resolve') || c.startsWith('commits'))).toEqual([]);
+    expect(t.state().overlay!.range).toEqual({ base: BASE, head: HEAD });
+    expect(t.shown[0]).toMatchObject({ hash: '#v', at: `o/r@${HEAD}` });
+  });
+
+  it('resolves a hand-written ref of the hash: `base=<ref>` as a range, `base=none` as the commit against its first parent', async () => {
+    const t = setup();
+    t.session.followHash('o/r@main', '#v', 'old');
+    await until(() => t.shown.length > 0);
+    expect(t.calls.filter((c) => c.startsWith('resolve'))).toEqual(['resolve main', 'resolve old']);
+    expect(t.state().overlay!.range).toEqual({ base: BASE, head: HEAD });
+    t.session.followHash('o/r@main', '#v', null);
+    await until(() => t.calls.some((c) => c.startsWith('commits')));
+    expect(t.calls.filter((c) => c.startsWith('commits'))).toEqual(['commits m 1']);
+  });
+
+  it('restores `base=none` of a full sha as the overlay of a root commit', async () => {
+    const t = setup();
+    t.session.followHash(`o/r@${BASE}`, '#v', null);
+    await until(() => t.shown.length > 0);
+    expect(t.state().overlay!.range).toEqual({ base: null, head: BASE });
+    expect(t.calls).toContain('diff none..bbbbbbb');
+  });
+
+  it('a hash that names what is shown opens nothing; the same commit without `base` is the head from memory', async () => {
+    const t = setup();
+    await t.session.overlay({ ...REPO, ref: HEAD }, { base: BASE, head: HEAD });
+    const fetched = t.calls.length;
+    expect(t.session.followHash(`o/r@${HEAD}`, '#v', BASE)).toBe(false);
+    expect(t.session.followHash(`o/r@${HEAD}`, '#w', undefined)).toBe(true);
+    await until(() => t.shown.length > 1);
+    expect(t.calls).toHaveLength(fetched);
+    expect(t.shown[1]).toMatchObject({ name: 'o/r@aaaaaaa', hash: '#w' });
+    expect(t.session.followHash(`o/r@${HEAD}`, '#v', undefined)).toBe(false);
+  });
+
+  it('the commit list: one call on the first open of the list, anchored at the sha shown; kept while it closes and opens', async () => {
+    const t = setup();
+    await t.session.open({ ...REPO, ref: 'main' });
+    t.session.toggleList();
+    expect(t.state()).toMatchObject({ listOpen: true, listStatus: 'listing the last 30 commits' });
+    await until(() => t.state().commits !== null);
+    expect(t.state()).toMatchObject({ listStatus: null, commits: { anchor: HEAD, list: [{ sha: HEAD }, { sha: BASE }] } });
+    t.session.toggleList();
+    t.session.toggleList();
+    await until(() => false);
+    expect(t.calls.filter((c) => c.startsWith('commits'))).toEqual(['commits a 30']);
+    expect(t.state().listOpen).toBe(true);
+  });
+
+  it('the switch to the commit view without an overlay opens the commit list', async () => {
+    const t = setup();
+    await t.session.open({ ...REPO, ref: 'main' });
+    t.session.switchTo('commit');
+    expect(t.state()).toMatchObject({ mode: 'commit', listOpen: true });
+    await until(() => t.state().commits !== null);
+    expect(t.shown).toHaveLength(1);
+  });
+
+  it('a commit picked from the list: its overlay against the first parent; the list stays; an unknown sha does nothing', async () => {
+    const t = setup();
+    await t.session.open({ ...REPO, ref: 'main' });
+    t.session.switchTo('commit');
+    await until(() => t.state().commits !== null);
+    t.session.pick('nope');
+    await t.session.pick(HEAD);
+    expect(t.state().overlay!.range).toEqual({ base: BASE, head: HEAD });
+    expect(t.state()).toMatchObject({ listOpen: true, commits: { anchor: HEAD } });
+    expect(t.shown).toHaveLength(2);
+  });
+
+  it('the input field: an error for what is not a repository; an overlay for a range; a note in the summary', async () => {
+    const t = setup();
+    expect(t.session.openInput('nonsense')).toMatch(/^not a GitHub repository: "nonsense"/);
+    expect(t.calls).toEqual([]);
+    expect(t.session.openInput(`o/r@${BASE}..${HEAD}`)).toBeNull();
+    await until(() => t.shown.length > 0);
+    expect(t.state().overlay!.range).toEqual({ base: BASE, head: HEAD });
+    t.session.openInput('https://github.com/o/r/tree/feature/x');
+    await until(() => t.shown.length > 1);
+    expect(t.calls).toContain('resolve feature/x');
+    expect(t.state().head!.summary.text).toMatch(/\(took "feature\/x" as the whole branch name; a path inside a branch is not supported\)$/);
+  });
+
+  it('forget: another source is shown; nothing of the repository stays', async () => {
+    const t = setup();
+    await t.session.open({ ...REPO, ref: 'main' });
+    t.session.forget();
+    expect(t.state()).toEqual(NO_FORGE);
+    await t.session.show('commit');
+    expect(t.state()).toEqual(NO_FORGE);
+  });
+
+  it('a new open keeps the commit list only for the same sha, and closes it', async () => {
+    const t = setup();
+    await t.session.open({ ...REPO, ref: 'main' });
+    t.session.toggleList();
+    await until(() => t.state().commits !== null);
+    await t.session.open({ ...REPO, ref: HEAD });
+    expect(t.state()).toMatchObject({ listOpen: false, commits: { anchor: HEAD } });
+    await t.session.open({ ...REPO, ref: 'old' });
+    expect(t.state().commits).toBeNull();
+  });
+
+  it('a failed commit list gives its message in the list', async () => {
+    const t = setup();
+    await t.session.open({ owner: 'o', name: 'broken', ref: 'main' });
+    t.session.toggleList();
+    await until(() => t.state().listStatus !== 'listing the last 30 commits');
+    expect(t.state()).toMatchObject({ commits: null, listStatus: 'cannot list the commits: o/broken: HTTP 500' });
+  });
+
+  it('a commit list for a repository no longer shown is dropped', async () => {
+    const t = setup();
+    await t.session.open({ ...REPO, ref: 'main' });
+    t.session.toggleList();
+    t.session.forget();
+    await until(() => false);
+    expect(t.state()).toEqual(NO_FORGE);
+  });
+
+  it('another open of the app (a directory) makes a pending open stale, also its failure', async () => {
+    const t = setup();
+    const first = t.session.open({ ...REPO, ref: 'slow-' + 'c'.repeat(40) });
+    t.cancelOther();
+    await release(t.held, 'slow-' + 'c'.repeat(40));
+    await first;
+    expect(t.errors).toEqual([]);
+    expect(t.shown).toEqual([]);
+  });
+});

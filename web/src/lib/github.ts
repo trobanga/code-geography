@@ -1,9 +1,7 @@
 // GitHub as a `Forge` (ADR 0020): the only place that knows GitHub URLs and answers.
 // The tree comes from the API (one call), the texts from the raw host (no API limit).
 import type { Commit, Entry, Fetch, Forge, Repo } from './forge';
-import type { OverlaySpec } from './forgeDiff';
-
-export type Parsed = { ok: true; repo: Repo; note?: string; overlay?: OverlaySpec } | { ok: false; error: string };
+import type { Parsed } from './forgeDiff';
 
 const OWNER = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/;
 const NAME = /^[A-Za-z0-9._-]+$/;

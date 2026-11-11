@@ -11,6 +11,9 @@ import type { NodeChange } from './types';
  */
 export type OverlaySpec = { kind: 'commit' } | { kind: 'range'; base: string; mergeBase: boolean } | { kind: 'pull'; n: number };
 
+/** The text of the input field or of the hash read by a forge: a repository, maybe an overlay, or why it is not one. */
+export type Parsed = { ok: true; repo: Repo; note?: string; overlay?: OverlaySpec } | { ok: false; error: string };
+
 export interface Changed {
   path: string;
   change: NodeChange;
