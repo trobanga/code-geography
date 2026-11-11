@@ -115,6 +115,18 @@ export async function cachedCommits(forge: Forge, repo: Repo, sha: string, n: nu
   return list;
 }
 
+/**
+ * The author names of Renovate and Dependabot: `renovate[bot]`, `dependabot[bot]`,
+ * `dependabot-preview[bot]` (the GitHub apps), `Renovate Bot`, `renovate-bot`, `Mend Renovate`
+ * (self-hosted defaults). The full name must match; a forge gives no better mark in its commit list.
+ */
+const UPDATE_BOT = /^(mend )?(renovate|dependabot)([ -](bot|preview))?(\[bot\])?$/i;
+
+/** The author of the commit is a bot that updates dependencies; the commit list leaves such commits out. */
+export function byUpdateBot(c: Commit): boolean {
+  return UPDATE_BOT.test(c.author.trim());
+}
+
 export interface CommitRow {
   sha: string;
   short: string;
@@ -126,9 +138,12 @@ export interface CommitRow {
   current: boolean;
 }
 
-/** The rows of the commit list; `shown` is the range of the overlay shown, if any. */
+/**
+ * The rows of the commit list, without the commits of update bots (`byUpdateBot`); `shown` is the
+ * range of the overlay shown, if any.
+ */
 export function commitRows(list: Commit[], shown: Range | null): CommitRow[] {
-  return list.map((c) => ({
+  return list.filter((c) => !byUpdateBot(c)).map((c) => ({
     sha: c.sha,
     short: c.sha.slice(0, 7),
     title: c.title,

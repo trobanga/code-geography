@@ -3,9 +3,12 @@
 
   let {
     rows,
+    hidden = 0,
     status,
     onpick,
   }: {
+    /** Commits of update bots (Renovate, Dependabot) that the list leaves out. */
+    hidden?: number;
     /** null: not loaded yet. */
     rows: CommitRow[] | null;
     /** A message instead of the list, e.g. while it loads or after it failed. */
@@ -18,7 +21,11 @@
   {#if status}
     <div class="text-[var(--muted)]">{status}</div>
   {:else if rows}
-    <div class="text-[var(--muted)]">pick a commit to see its overlay against its first parent</div>
+    <div class="text-[var(--muted)]">
+      pick a commit to see its overlay against its first parent{#if hidden > 0}<span data-hidden-commits>
+          · {hidden} dependency update{hidden === 1 ? '' : 's'} by a bot not shown</span
+        >{/if}
+    </div>
     <ul>
       {#each rows as r (r.sha)}
         <li>

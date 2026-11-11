@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { memoryCache, type Entry, type Forge } from './forge';
-import { cachedCommits, commitRows, overlayNames, fetchOverlay, resolveRange, treeChanges } from './forgeDiff';
+import { byUpdateBot, cachedCommits, commitRows, overlayNames, fetchOverlay, resolveRange, treeChanges } from './forgeDiff';
 
 const e = (path: string, blobSha: string) => ({ path, blobSha });
 
@@ -152,6 +152,31 @@ describe('commitRows', () => {
     // A range that is not the commit against its first parent marks nothing.
     expect(commitRows(list, { base: 'x', head: HEAD }).map((r) => r.current)).toEqual([false, false]);
     expect(commitRows(list, { base: null, head: BASE }).map((r) => r.current)).toEqual([false, true]);
+  });
+
+  it('leaves out the commits of a bot that updates dependencies', () => {
+    const list = [
+      { sha: 'r1', parents: [HEAD], title: 'Update dependency x', author: 'renovate[bot]', date: '' },
+      { sha: HEAD, parents: [BASE], title: 'Work', author: 'Ann', date: '' },
+      { sha: 'd1', parents: [], title: 'Bump y', author: 'dependabot[bot]', date: '' },
+    ];
+    expect(commitRows(list, null).map((r) => r.sha)).toEqual([HEAD]);
+  });
+});
+
+describe('byUpdateBot', () => {
+  const by = (author: string) => byUpdateBot({ sha: HEAD, parents: [], title: 't', author, date: '' });
+
+  it('is true for a commit of Renovate as GitHub names it', () => {
+    expect(by('renovate[bot]')).toBe(true);
+    expect(by('Ann')).toBe(false);
+  });
+
+  it('is true for Dependabot, and for the names that a self-hosted bot has by default', () => {
+    for (const a of ['dependabot[bot]', 'dependabot-preview[bot]', 'Renovate Bot', 'renovate-bot', 'Mend Renovate', 'dependabot'])
+      expect(by(a), a).toBe(true);
+    // A person whose name only contains the word stays in the list.
+    for (const a of ['Renovate Fan', 'Ann Renovate-Smith', '']) expect(by(a), a).toBe(false);
   });
 });
 

@@ -571,7 +571,8 @@
     />
   {/if}
   {#if fs.at && fs.mode === 'commit' && fs.listOpen}
-    <CommitList rows={fs.commits ? commitRows(fs.commits.list, fs.overlay?.range ?? null) : null} status={fs.listStatus} onpick={forge.pick} />
+    {@const rows = fs.commits ? commitRows(fs.commits.list, fs.overlay?.range ?? null) : null}
+    <CommitList {rows} hidden={fs.commits && rows ? fs.commits.list.length - rows.length : 0} status={fs.listStatus} onpick={forge.pick} />
   {/if}
   {#if tree && focusActive(focus)}
     <FocusBar
