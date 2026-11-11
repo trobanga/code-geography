@@ -88,6 +88,13 @@ describe('hash', () => {
     expect(decodeHash('#level=packages&min=3&reduce=1&merge=0&lift=1').edges).toEqual(DEFAULT_EDGE_OPTIONS);
   });
 
+  it('keeps a GitHub source readable as gh=owner/repo@sha, first', () => {
+    const state = { gh: 'a/b.c@0123456789abcdef0123456789abcdef01234567', level: 'modules' as const, tests: false, open: [], edges: DEFAULT_EDGE_OPTIONS };
+    const h = encodeHash(state);
+    expect(h).toBe('#gh=a/b.c@0123456789abcdef0123456789abcdef01234567&level=modules&tests=0');
+    expect(decodeHash(h)).toEqual(state);
+  });
+
   it('accepts a hash with leading # and missing fields', () => {
     expect(decodeHash('#level=packages')).toEqual({ level: 'packages', tests: false, open: [], edges: DEFAULT_EDGE_OPTIONS });
   });

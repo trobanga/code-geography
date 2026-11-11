@@ -29,6 +29,7 @@
   } from './lib/expansion';
   import { depthKey } from './lib/keys';
   import { decodeHash, encodeHash, freshHash, type Source } from './lib/hash';
+  import { fetchRepo, openCache, parseRepo, type Repo, type TextCache } from './lib/github';
   import { indexInWorker } from './lib/indexProject';
   import { inputError, summarize, type Summary } from './lib/project';
   import { collectDir, fromEntry, type Collect, type DirEntry } from './lib/walk';
@@ -43,8 +44,11 @@
 
   let error = $state<string | null>(null);
   let graph = $state.raw<Graph | null>(null);
-  /** null: a file or a directory opened from disk. */
+  /** null: a file, a directory or a GitHub repository. */
   let src = $state<Source | null>('graph');
+  /** The GitHub repository shown, `owner/repo@sha` (ADR 0020); null for any other source. */
+  let gh = $state<string | null>(null);
+  let ghCache: Promise<TextCache> | null = null;
   /** /graph.json is missing: show the start screen. */
   let missing = $state(false);
   /** What an opened directory gave; null for any other source. */
@@ -172,6 +176,7 @@
       if (!r.ok || !r.headers.get('content-type')?.includes('json')) throw new Error(`HTTP ${r.status}`);
       const text = await r.text();
       src = s;
+      gh = null;
       selected = null;
       project = null;
       await load(text);
@@ -180,11 +185,11 @@
     }
   }
 
-  /** Replaces the graph by one opened from disk: nothing open, no focus, no selection. */
-  async function loadOpened(text: string, summary: Summary | null) {
-    const hash = freshHash(location.hash);
+  /** Replaces the graph by one opened from disk or GitHub: by default nothing open, no focus, no selection. */
+  async function loadOpened(text: string, summary: Summary | null, hash = freshHash(location.hash), from: string | null = null) {
     selected = null;
     src = null;
+    gh = from;
     project = summary;
     await load(text, hash);
     if (graph) missing = false;
@@ -223,6 +228,60 @@
       if (my !== openSeq) return;
       phase = null;
       error = `cannot index the directory: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  /** The text of the GitHub field: a clear message for anything that is not a repository (G1). */
+  function openGithubInput(input: string) {
+    const p = parseRepo(input);
+    if (!p.ok) error = p.error;
+    else openGithub(p.repo, p.note);
+  }
+
+  /**
+   * Fetches the inputs of a public GitHub repository and indexes them as a directory (ADR 0020).
+   * `hash` is the view to show afterwards; a failed open leaves the present graph as it is (G6).
+   */
+  async function openGithub(repo: Repo, note?: string, hash?: string) {
+    const my = ++openSeq;
+    const id = `${repo.owner}/${repo.name}`;
+    try {
+      await init();
+      const t0 = performance.now();
+      phase = `opening ${id}`;
+      ghCache ??= openCache();
+      const f = await fetchRepo(repo, { fetch: (url, i) => fetch(url, i) }, await ghCache, isInput, (p) => {
+        if (my === openSeq) phase = p;
+      });
+      if (my !== openSeq) return;
+      console.info(`fetched ${id}@${f.sha}: ${f.paths.length} inputs ${Math.round(performance.now() - t0)} ms`);
+      phase = `indexing ${f.paths.length} files of ${id}`;
+      const r = await indexInWorker({ paths: f.paths, texts: f.texts, rootName: f.root });
+      if (my !== openSeq) return;
+      const g = JSON.parse(r.graphText) as Graph;
+      console.info(`indexed ${id}: ${g.nodes.length} nodes ${g.edges.length} edges ${Math.round(performance.now() - t0)} ms`);
+      phase = null;
+      const short = f.sha.slice(0, 7);
+      const label = repo.ref && repo.ref.toLowerCase() !== f.sha ? `${id}@${repo.ref} (${short})` : `${id}@${short}`;
+      const summary = summarize(label, f.paths, g, r.report, `Fetched from GitHub at ${f.sha}; cached by blob sha in this browser. A reload opens the same commit.`);
+      if (note) summary.text += ` (${note})`;
+      await loadOpened(r.graphText, summary, hash, `${id}@${f.sha}`);
+    } catch (e) {
+      if (my !== openSeq) return;
+      phase = null;
+      error = `cannot open ${id}: ${e instanceof Error ? e.message : String(e)}`;
+      // Opened from the hash with nothing to show: offer the open buttons.
+      if (!tree) missing = true;
+    }
+  }
+
+  /** A reload or a shared link: the same commit, with the view that the hash holds (G5). */
+  function openFromHash(spec: string, hash: string) {
+    const p = parseRepo(spec);
+    if (p.ok) openGithub(p.repo, undefined, hash);
+    else {
+      error = p.error;
+      if (!tree) missing = true;
     }
   }
 
@@ -342,6 +401,7 @@
     if (!hashState) return;
     const h = encodeHash({
       src: src ?? undefined,
+      gh: gh ?? undefined,
       level: hashState.level,
       tests,
       open: hashState.open,
@@ -356,7 +416,13 @@
   onMount(() => {
     const onHash = () => {
       if (location.hash === lastHash) return;
-      const s = decodeHash(location.hash).src ?? 'graph';
+      const d = decodeHash(location.hash);
+      if (d.gh) {
+        if (d.gh !== gh) openFromHash(d.gh, location.hash);
+        else applyHash(location.hash);
+        return;
+      }
+      const s = d.src ?? 'graph';
       if (s !== src) fetchSource(s);
       else applyHash(location.hash);
     };
@@ -365,7 +431,9 @@
     fetch('/commit.json', { method: 'HEAD' })
       .then((r) => (hasCommit = r.ok && !!r.headers.get('content-type')?.includes('json')))
       .catch(() => (hasCommit = false));
-    fetchSource(decodeHash(location.hash).src ?? 'graph');
+    const start = decodeHash(location.hash);
+    if (start.gh) openFromHash(start.gh, location.hash);
+    else fetchSource(start.src ?? 'graph');
     return () => window.removeEventListener('hashchange', onHash);
   });
 </script>
@@ -418,6 +486,7 @@
     onreset={() => (offsets = new Map())}
     onfile={(f) => f.text().then((t) => loadOpened(t, null))}
     ondir={openDirectory}
+    ongithub={openGithubInput}
   />
   {#if phase}
     <div class="border-b border-[var(--line)] px-3 py-1 text-[var(--muted)]" data-phase>{phase}…</div>
@@ -498,13 +567,14 @@
     {:else if missing}
       <div class="flex flex-1 items-center justify-center">
         <div class="flex max-w-md flex-col gap-3" data-start>
-          <p>No <code>graph.json</code> here. Open a project directory, or drop one anywhere on this page, to index it in this browser (Java and Rust). Or open a graph file made by <code>cg index</code>.</p>
-          <p class="text-[var(--muted)]">Nothing is stored: a reload returns to this screen.</p>
-          <div class="flex gap-2">
+          <p>No <code>graph.json</code> here. Open a project directory, or drop one anywhere on this page, to index it in this browser (Java and Rust). Or give a public GitHub repository. Or open a graph file made by <code>cg index</code>.</p>
+          <p class="text-[var(--muted)]">A local directory is not stored: a reload returns to this screen. A GitHub repository stays in the link.</p>
+          <div class="flex flex-wrap gap-2">
             <OpenButtons
               btn="px-2 py-0.5 border border-[var(--line)] hover:border-[var(--muted)]"
               onfile={(f) => f.text().then((t) => loadOpened(t, null))}
               ondir={openDirectory}
+              ongithub={openGithubInput}
             />
           </div>
         </div>

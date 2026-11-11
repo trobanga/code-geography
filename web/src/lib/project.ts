@@ -49,6 +49,7 @@ export function summarize(
   paths: string[],
   graph: { nodes: unknown[]; edges: unknown[] },
   report: { calls: CallReport },
+  origin = 'Indexed in this browser; not stored. A reload returns to graph.json.',
 ): Summary {
   const c = report.calls;
   const sources = paths.filter(isSourceFile).length;
@@ -61,7 +62,7 @@ export function summarize(
     `calls to a type: ${c.to_type}`,
     `external: ${c.external}`,
     `unresolved: ${c.unresolved}`,
-    'Indexed in this browser; not stored. A reload returns to graph.json.',
+    origin,
   ].join('\n');
   return { name, sources, nodes: graph.nodes.length, edges: graph.edges.length, resolved, unresolved: c.unresolved, text, tooltip };
 }

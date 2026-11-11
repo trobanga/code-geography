@@ -21,6 +21,7 @@
     onreset,
     onfile,
     ondir,
+    ongithub,
   }: {
     /** null: a file opened from disk. */
     src: Source | null;
@@ -46,6 +47,7 @@
     onreset: () => void;
     onfile: (f: File) => void;
     ondir: (collect: Collect) => void;
+    ongithub: (input: string) => void;
   } = $props();
 
   const kinds: NodeKind[] = ['module', 'package', 'type', 'function'];
@@ -95,7 +97,7 @@
   </label>
   <button class={btn} onclick={onfit}>fit</button>
   <button class="{btn} disabled:opacity-40" disabled={!moved} onclick={onreset}>reset positions</button>
-  <OpenButtons {btn} {onfile} {ondir} />
+  <OpenButtons {btn} {onfile} {ondir} {ongithub} />
   <span class="text-[var(--muted)]">{busy ? 'layout…' : ''}</span>
   <div class="ml-auto flex items-center gap-3 text-[var(--muted)]">
     {#each kinds as k (k)}

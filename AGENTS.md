@@ -43,6 +43,8 @@ crates/wasm        wasm-bindgen binding of core and the indexers: class Explorer
 scripts/build-wasm.sh   builds crates/wasm into web/src/lib/wasm (generated, committed);
                         sets the C include path for the tree-sitter grammars (needs cargo, jq)
 web/               viewer: Svelte 5, Tailwind 4, ELK layout in a web worker, plain SVG
+web/src/lib/github.ts  opens a public GitHub repository: tree API + raw host, texts cached by
+                   blob sha in IndexedDB, hash gh=owner/repo@sha (ADR 0020)
 docs/adr/          architecture decision records (0016: how Rust maps onto the graph)
 ```
 
@@ -100,6 +102,7 @@ pnpm dev                                     # http://localhost:5173/
 - Rust: items that macros generate get no node; files that no
   `mod` reaches and `#[path]` mods are missing (the report lists them); `[lib]` and
   `[[bin]]` paths other than the Cargo defaults are not read (ADR 0016).
-- No AI grouping (deferred, ADR 0010), no GitHub connection.
+- No AI grouping (deferred, ADR 0010). GitHub: public repositories only (no token yet,
+  60 API calls per hour), no commit overlay from GitHub yet.
 - Local classes and members of anonymous classes get no node.
 - A rename of a type or method looks like one removal and one addition.

@@ -47,6 +47,13 @@ describe('summarize', () => {
     expect(s.tooltip).toContain('external: 7');
     expect(s.tooltip).toContain('unresolved: 3');
   });
+
+  it('says where the sources came from in place of the note for a local directory', () => {
+    expect(summarize('repo', [], graph, report).tooltip).toContain('A reload returns to graph.json.');
+    const s = summarize('a/b@0123456', [], graph, report, 'Fetched from GitHub; a reload opens the same commit.');
+    expect(s.tooltip).toContain('Fetched from GitHub; a reload opens the same commit.');
+    expect(s.tooltip).not.toContain('graph.json');
+  });
 });
 
 describe('inputError', () => {

@@ -4,13 +4,17 @@
   let {
     onfile,
     ondir,
+    ongithub,
     btn,
   }: {
     onfile: (f: File) => void;
     /** A chosen directory, by the picker or by the input. */
     ondir: (collect: Collect) => void;
+    /** The text of the GitHub field, as typed (ADR 0020). */
+    ongithub: (input: string) => void;
     btn: string;
   } = $props();
+  let repoText = $state('');
 
   // Chromium browsers: the picker hands over a handle, and the walk lists only what can hold inputs.
   // Elsewhere the input lists every file below the directory before any code runs.
@@ -68,3 +72,22 @@
     }}
   />
 </label>
+<form
+  class="flex items-center gap-1"
+  data-open="github"
+  onsubmit={(e) => {
+    e.preventDefault();
+    if (repoText.trim()) ongithub(repoText);
+  }}
+>
+  <input
+    type="text"
+    bind:value={repoText}
+    placeholder="owner/repo[@ref]"
+    aria-label="GitHub repository"
+    title="A public GitHub repository: owner/repo, owner/repo@ref, or a github.com URL. The files are fetched by this browser and indexed here."
+    class="w-44 border border-[var(--line)] bg-transparent px-1 py-0.5"
+    spellcheck="false"
+  />
+  <button type="submit" class="{btn} cursor-pointer">open GitHub</button>
+</form>

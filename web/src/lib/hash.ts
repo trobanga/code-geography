@@ -8,6 +8,8 @@ export type Source = (typeof SOURCES)[number];
 
 export interface HashState {
   src?: Source;
+  /** A GitHub repository at a commit, `owner/repo@sha` (ADR 0020); instead of `src`. */
+  gh?: string;
   level: Level;
   tests: boolean;
   open: string[];
@@ -27,6 +29,7 @@ const FLAGS = [
 export function encodeHash(s: HashState): string {
   const parts = [`level=${s.level}`, `tests=${s.tests ? 1 : 0}`];
   if (s.src) parts.unshift(`src=${s.src}`);
+  if (s.gh) parts.unshift(`gh=${encodeURIComponent(s.gh).replace(/%2F/g, '/').replace(/%40/g, '@')}`);
   if (s.open.length > 0) parts.push(`open=${s.open.map(encodeURIComponent).join(',')}`);
   const on = EDGE_KINDS.filter((k) => s.edges.kinds[k]);
   if (on.length < EDGE_KINDS.length) parts.push(`kinds=${on.length > 0 ? on.join(',') : 'none'}`);
@@ -59,6 +62,7 @@ export function decodeHash(hash: string): HashState {
     const key = part.slice(0, eq);
     const value = part.slice(eq + 1);
     if (key === 'src' && (SOURCES as readonly string[]).includes(value)) state.src = value as Source;
+    else if (key === 'gh' && value !== '') state.gh = decodeURIComponent(value);
     else if (key === 'level' && (LEVELS as readonly string[]).includes(value)) state.level = value as Level;
     else if (key === 'tests') state.tests = value === '1';
     else if (key === 'open' && value !== '') state.open = value.split(',').map(decodeURIComponent);
