@@ -1,6 +1,14 @@
 # 10. AI groups where a container has too many children
 
-Status: proposed (2026-11-10) — not built, not tested
+Status: deferred (2026-11-11) — not built, not tested
+
+Reason for the deferral: on the two test repositories the fact levels were sufficient.
+Nested packages (ADR 0018) and the kind fold (ADR 0019) gave readable layers without an
+opinion in the picture. Both repositories are tidy, so this evidence is weak. Take the
+decision up again when a real repository has a view that the facts cannot make readable:
+a flat container with very many children, or code packaged by layer where the developers
+think in features. Try deterministic clustering on the edge graph before an LLM; an LLM
+is then necessary only for names.
 
 ## Context
 The AI needs a rule that says where to add a level. A fixed number of levels does not

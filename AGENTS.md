@@ -98,6 +98,6 @@ pnpm dev                                     # http://localhost:5173/
 - Rust: items that macros generate get no node; files that no
   `mod` reaches and `#[path]` mods are missing (the report lists them); `[lib]` and
   `[[bin]]` paths other than the Cargo defaults are not read (ADR 0016).
-- No AI grouping, no GitHub connection.
+- No AI grouping (deferred, ADR 0010), no GitHub connection.
 - Local classes and members of anonymous classes get no node.
 - A rename of a type or method looks like one removal and one addition.
