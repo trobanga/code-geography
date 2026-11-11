@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { memoryCache, type Entry, type Forge } from './forge';
-import { byUpdateBot, cachedCommits, commitRows, overlayNames, fetchOverlay, resolveRange, treeChanges } from './forgeDiff';
+import { byUpdateBot, cachedCommits, commitRows, listedCommits, overlayNames, fetchOverlay, resolveRange, treeChanges } from './forgeDiff';
 
 const e = (path: string, blobSha: string) => ({ path, blobSha });
 
@@ -136,6 +136,40 @@ describe('cachedCommits', () => {
     expect(first.map((c) => c.sha)).toEqual([HEAD, BASE]);
     expect(await cachedCommits(forge, REPO, HEAD, 2, cache)).toEqual(first);
     expect(calls).toEqual([`commits ${HEAD} 2`]);
+  });
+});
+
+describe('listedCommits', () => {
+  /** A forge with a linear history of `authors.length` commits `c0`, `c1`, …, newest first. */
+  function linear(authors: string[], calls: string[]): Forge {
+    const all = authors.map((author, i) => ({ sha: `c${i}`, parents: i + 1 < authors.length ? [`c${i + 1}`] : [], title: 't', author, date: '' }));
+    return {
+      ...history([]),
+      host: 'h',
+      name: 'h',
+      tree: async () => [],
+      text: async () => '',
+      async commits(_repo, sha, n, page = 1) {
+        calls.push(`commits ${sha} ${n} ${page}`);
+        return all.slice((page - 1) * n, page * n);
+      },
+    };
+  }
+
+  it('asks for further pages until the wanted number of commits stays after the bot commits go', async () => {
+    const calls: string[] = [];
+    // Pages of 3: [Ann, bot, bot], [bot, Bo, bot], [Cy, Di, Ed], [Fy].
+    const forge = linear(['Ann', 'renovate[bot]', 'renovate[bot]', 'dependabot[bot]', 'Bo', 'renovate[bot]', 'Cy', 'Di', 'Ed', 'Fy'], calls);
+    const list = await listedCommits(forge, REPO, 'c0', 3, memoryCache());
+    expect(commitRows(list, null).map((r) => r.sha)).toEqual(['c0', 'c4', 'c6', 'c7', 'c8']);
+    expect(calls).toEqual(['commits c0 3 1', 'commits c0 3 2', 'commits c0 3 3']);
+  });
+
+  it('stops after 5 pages: a history of bot commits only must not use up the calls that the forge permits', async () => {
+    const calls: string[] = [];
+    const list = await listedCommits(linear(Array(40).fill('renovate[bot]'), calls), REPO, 'c0', 2, memoryCache());
+    expect(calls).toHaveLength(5);
+    expect(list).toHaveLength(10);
   });
 });
 

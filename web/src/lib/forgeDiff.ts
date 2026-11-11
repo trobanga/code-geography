@@ -106,14 +106,31 @@ export async function resolveRange(forge: Forge, repo: Repo, spec: OverlaySpec):
 }
 
 /** The last `n` commits reachable from the commit `sha`; cached, since the history of a commit never changes. */
-export async function cachedCommits(forge: Forge, repo: Repo, sha: string, n: number, cache: TextCache): Promise<Commit[]> {
-  const key = `commits:${forge.host}/${repo.owner}/${repo.name}@${sha}:${n}`;
+export async function cachedCommits(forge: Forge, repo: Repo, sha: string, n: number, cache: TextCache, page = 1): Promise<Commit[]> {
+  const key = `commits:${forge.host}/${repo.owner}/${repo.name}@${sha}:${n}${page > 1 ? `:${page}` : ''}`;
   const kept = await cache.get(key);
   if (kept !== undefined) return JSON.parse(kept) as Commit[];
-  const list = await forge.commits(repo, sha, n);
+  const list = await forge.commits(repo, sha, n, page);
   await cache.put(key, JSON.stringify(list));
   return list;
 }
+
+/**
+ * The history from `sha` for the commit list: pages of `want` commits (one call each, cached)
+ * until `want` commits stay after the commits of update bots go (`withoutUpdates`), or the history
+ * ends, or after `LIST_PAGES` pages (a forge permits a limited number of calls).
+ */
+export async function listedCommits(forge: Forge, repo: Repo, sha: string, want: number, cache: TextCache): Promise<Commit[]> {
+  const list: Commit[] = [];
+  for (let page = 1; page <= LIST_PAGES; page++) {
+    const more = await cachedCommits(forge, repo, sha, want, cache, page);
+    list.push(...more);
+    if (more.length < want || withoutUpdates(list).length >= want) break;
+  }
+  return list;
+}
+
+const LIST_PAGES = 5;
 
 /**
  * The author names of Renovate and Dependabot: `renovate[bot]`, `dependabot[bot]`,
@@ -146,14 +163,7 @@ export interface CommitRow {
  * commits that merge them; `shown` is the range of the overlay shown, if any.
  */
 export function commitRows(list: Commit[], shown: Range | null): CommitRow[] {
-  const bots = new Set(list.filter(byUpdateBot).map((c) => c.sha));
-  /**
-   * A merge commit whose merged parent (not the first) is a commit of an update bot, or, for a
-   * merged commit that the list does not hold, whose title names a branch of such a bot.
-   */
-  const mergesBot = (c: Commit) =>
-    c.parents.length > 1 && (c.parents.slice(1).some((p) => bots.has(p)) || BOT_BRANCH.test(c.title));
-  return list.filter((c) => !bots.has(c.sha) && !mergesBot(c)).map((c) => ({
+  return withoutUpdates(list).map((c) => ({
     sha: c.sha,
     short: c.sha.slice(0, 7),
     title: c.title,
@@ -161,6 +171,18 @@ export function commitRows(list: Commit[], shown: Range | null): CommitRow[] {
     day: c.date.slice(0, 10),
     current: shown !== null && shown.head === c.sha && shown.base === (c.parents[0] ?? null),
   }));
+}
+
+/** The list without the commits of update bots (`byUpdateBot`) and the merge commits that merge them. */
+export function withoutUpdates(list: Commit[]): Commit[] {
+  const bots = new Set(list.filter(byUpdateBot).map((c) => c.sha));
+  /**
+   * A merge commit whose merged parent (not the first) is a commit of an update bot, or, for a
+   * merged commit that the list does not hold, whose title names a branch of such a bot.
+   */
+  const mergesBot = (c: Commit) =>
+    c.parents.length > 1 && (c.parents.slice(1).some((p) => bots.has(p)) || BOT_BRANCH.test(c.title));
+  return list.filter((c) => !bots.has(c.sha) && !mergesBot(c));
 }
 
 /** `diff.base` and `diff.head` of an overlay: short shas; `none` for the base of a root commit. */

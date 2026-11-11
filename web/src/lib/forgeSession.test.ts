@@ -43,9 +43,12 @@ function setup() {
       calls.push(`text ${s[0]} ${path}`);
       return FILES[s][path];
     },
-    async commits(repo, s, n) {
-      calls.push(`commits ${s[0]} ${n}`);
+    async commits(repo, s, n, page = 1) {
+      calls.push(`commits ${s[0]} ${n}${page > 1 ? ` page ${page}` : ''}`);
       if (repo.name === 'broken') throw new Error('o/broken: HTTP 500');
+      // A repository whose newest `n` commits are all of an update bot.
+      if (repo.name === 'updates' && page === 1) return Array.from({ length: n }, (_, i) => ({ ...commit(`bot${i}`, []), author: 'renovate[bot]' }));
+      if (page > 1 && repo.name !== 'updates') return [];
       return [commit(HEAD, [BASE]), commit(BASE, [])].filter((c) => c.sha === sha(s) || c.sha === BASE).slice(0, n);
     },
     async mergeBase() {
@@ -269,6 +272,15 @@ describe('forgeSession', () => {
     await until(() => false);
     expect(t.calls.filter((c) => c.startsWith('commits'))).toEqual(['commits a 30']);
     expect(t.state().listOpen).toBe(true);
+  });
+
+  it('the commit list asks for a further page if update bots made the commits of the first one', async () => {
+    const t = setup();
+    await t.session.open({ owner: 'o', name: 'updates', ref: 'main' });
+    t.session.toggleList();
+    await until(() => t.state().commits !== null);
+    expect(t.calls.filter((c) => c.startsWith('commits'))).toEqual(['commits a 30', 'commits a 30 page 2']);
+    expect(t.state().commits?.list.slice(-2)).toMatchObject([{ sha: HEAD }, { sha: BASE }]);
   });
 
   it('the switch to the commit view without an overlay opens the commit list', async () => {

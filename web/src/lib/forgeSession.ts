@@ -2,7 +2,7 @@
 // switch between both, the commit list, restore from the hash. No Svelte and no DOM: the app
 // passes the forge, the cache, the index jobs and what to do with the results.
 import { fetchRepo, type Commit, type Forge, type Repo, type TextCache } from './forge';
-import { cachedCommits, fetchOverlay, overlayNames, resolveRange, type OverlaySpec, type Parsed, type Range } from './forgeDiff';
+import { fetchOverlay, listedCommits, overlayNames, resolveRange, type OverlaySpec, type Parsed, type Range } from './forgeDiff';
 import { headOf } from './commit';
 import type { DiffRequest, IndexRequest } from './indexProject';
 import { summarize, type CallReport, type Summary } from './project';
@@ -241,7 +241,7 @@ export function forgeSession(d: SessionDeps) {
     const anchor = s.at.slice(s.at.lastIndexOf('@') + 1);
     set({ listStatus: `listing the last ${COMMITS} commits` });
     try {
-      const list = await cachedCommits(d.forge(repo), repo, anchor, COMMITS, await d.cache());
+      const list = await listedCommits(d.forge(repo), repo, anchor, COMMITS, await d.cache());
       if (s.repo !== repo) return;
       set({ commits: { anchor, list }, listStatus: null });
     } catch (e) {

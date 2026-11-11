@@ -52,8 +52,11 @@ export interface Forge {
   tree(repo: Repo, sha: string): Promise<Entry[]>;
   /** The text of one file at the commit. */
   text(repo: Repo, sha: string, path: string): Promise<string>;
-  /** The last `n` commits reachable from the commit `sha` (it first), newest first. A ref works too. */
-  commits(repo: Repo, sha: string, n: number): Promise<Commit[]>;
+  /**
+   * The last `n` commits reachable from the commit `sha` (it first), newest first. A ref works too.
+   * `page` (from 1) gives the next `n` commits each; a page with less than `n` is the last one.
+   */
+  commits(repo: Repo, sha: string, n: number, page?: number): Promise<Commit[]>;
   /** The commit sha of the merge base of two refs (`git merge-base a b`). */
   mergeBase(repo: Repo, a: string, b: string): Promise<string>;
   /** The head commit of a pull request and its merge base with the base branch. */

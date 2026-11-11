@@ -198,6 +198,15 @@ describe('commits', () => {
     ]);
     expect(net.calls).toHaveLength(1);
   });
+
+  it('lists a later page of the history', async () => {
+    const net = fakeFetch({
+      [`https://api.github.com/repos/a/b/commits?sha=${SHA}&per_page=2&page=3`]: json([
+        { sha: P1, parents: [], commit: { message: 'First', author: { name: 'Bo', date: '2026-10-01T10:00:00Z' } } },
+      ]),
+    });
+    expect((await github({ fetch: net.fetch }).commits({ owner: 'a', name: 'b' }, SHA, 2, 3)).map((c) => c.sha)).toEqual([P1]);
+  });
 });
 
 const P2 = '2222222222222222222222222222222222222222';

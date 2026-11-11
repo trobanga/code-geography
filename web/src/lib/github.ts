@@ -104,8 +104,8 @@ export function github(net: Net): Forge {
     },
 
     /** One API call. */
-    async commits(repo, sha, n) {
-      const url = `${API}/repos/${repo.owner}/${repo.name}/commits?sha=${encodeURIComponent(sha)}&per_page=${n}`;
+    async commits(repo, sha, n, page = 1) {
+      const url = `${API}/repos/${repo.owner}/${repo.name}/commits?sha=${encodeURIComponent(sha)}&per_page=${n}${page > 1 ? `&page=${page}` : ''}`;
       const body = (await (await get(net, url, { ...repo, ref: sha })).json()) as {
         sha: string;
         parents: { sha: string }[];

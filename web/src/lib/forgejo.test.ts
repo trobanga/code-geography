@@ -114,6 +114,12 @@ describe('forgejo commits and pull', () => {
     ]);
   });
 
+  it('lists a later page of the history', async () => {
+    const one = { sha: PARENT, commit: { message: 'm', author: null }, parents: [] };
+    const net = fakeFetch({ [`${API}/commits?sha=${SHA}&limit=2&${LEAN}&page=3`]: () => json([one]) });
+    expect((await forgejo(net, ORIGIN).commits(repo, SHA, 2, 3)).map((c) => c.sha)).toEqual([PARENT]);
+  });
+
   it('gives the head of a pull request and the merge base that it carries, in one call', async () => {
     const net = fakeFetch({
       [`${API}/pulls/857`]: () =>

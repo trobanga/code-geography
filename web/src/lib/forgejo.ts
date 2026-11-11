@@ -84,8 +84,9 @@ export function forgejo(net: { fetch: Fetch }, origin: string, token?: string): 
       return (await get(api(repo, `/raw/${p}?ref=${sha}`), repo)).text();
     },
     /** One API call. */
-    async commits(repo, sha, n) {
-      const body = (await (await get(api(repo, `/commits?sha=${encodeURIComponent(sha)}&limit=${n}&${LEAN}`), repo, sha)).json()) as {
+    async commits(repo, sha, n, page = 1) {
+      const more = page > 1 ? `&page=${page}` : '';
+      const body = (await (await get(api(repo, `/commits?sha=${encodeURIComponent(sha)}&limit=${n}&${LEAN}${more}`), repo, sha)).json()) as {
         sha: string;
         parents: { sha: string }[] | null;
         commit: { message: string; author: { name: string; date: string } | null };
