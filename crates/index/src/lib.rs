@@ -13,7 +13,7 @@ use std::path::Path;
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct Report {
     /// How the call sites of all front ends were resolved: the sum of the Java part and
-    /// `rust.calls`. The viewer reads this.
+    /// `rust.calls` and `clojure.calls`. The viewer reads this.
     pub calls: CallReport,
     pub rust: cg_index_rust::Report,
     pub clojure: cg_index_clojure::Report,
@@ -54,7 +54,7 @@ pub fn index_sources(root_name: &str, files: &[SourceFile]) -> (Graph, Report) {
         diff: None,
     };
     let report = Report {
-        calls: calls.calls + rust_report.calls,
+        calls: calls.calls + rust_report.calls + clojure_report.calls,
         rust: rust_report,
         clojure: clojure_report,
     };

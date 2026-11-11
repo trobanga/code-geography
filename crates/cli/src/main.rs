@@ -81,6 +81,48 @@ fn run(args: Vec<String>) -> Result<(), String> {
             rust.unreached_files.len(),
             rust.path_attributes.len()
         );
+        let clojure_calls = clojure.calls;
+        let no_source: usize = clojure.no_source_node.values().sum();
+        eprintln!(
+            "clojure calls: {} to function ({} as a value), {} to type, {} external, {} unresolved ({} var without node); {} more in code without a function node, not read",
+            clojure_calls.to_function,
+            clojure.function_values,
+            clojure_calls.to_type,
+            clojure_calls.external,
+            clojure_calls.unresolved,
+            clojure.var_without_node,
+            no_source
+        );
+        if no_source > 0 {
+            let by_head: Vec<String> = clojure
+                .no_source_node
+                .iter()
+                .map(|(head, count)| format!("{head} {count}"))
+                .collect();
+            eprintln!(
+                "clojure code without a function node, by head: {}",
+                by_head.join(", ")
+            );
+        }
+        let unqualified = &clojure.unqualified;
+        eprintln!(
+            "clojure unqualified heads: {} of the same namespace ({} a local could hide), {} referred ({} a local could hide)",
+            unqualified.same_namespace,
+            unqualified.same_namespace_maybe_local,
+            unqualified.referred,
+            unqualified.referred_maybe_local
+        );
+        // The most frequent names first: which macros of the repository make them.
+        let mut names: Vec<_> = clojure.unresolved_names.iter().collect();
+        names.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+        if !names.is_empty() {
+            let top: Vec<String> = names
+                .iter()
+                .take(15)
+                .map(|(name, count)| format!("{name} {count}"))
+                .collect();
+            eprintln!("clojure unresolved: {}", top.join(", "));
+        }
         let without_node: usize = clojure.forms_without_node.values().sum();
         eprintln!(
             "clojure: {} files outside the source directories, {} below no deps.edn, {} without ns form, {} duplicate namespaces; {} top-level forms without a node",

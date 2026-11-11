@@ -164,3 +164,36 @@ fn index_prints_what_the_clojure_front_end_did_not_read() {
         "{stderr}"
     );
 }
+
+#[test]
+fn index_prints_how_the_clojure_calls_were_resolved() {
+    let dir = TempDir::new().unwrap();
+    let source = dir.path().join("repo");
+    fs::create_dir_all(source.join("src")).unwrap();
+    fs::write(source.join("deps.edn"), "{}").unwrap();
+    fs::write(source.join("src/x.clj"), "(ns x)\n(defn f [])\n(def v 1)\n").unwrap();
+    fs::write(
+        source.join("src/user.clj"),
+        "(ns user (:require [x :as a]))\n(defn g [] (a/f) (map a/f []) (a/v) (Math/abs 1) (a/none))\n(defn h [] (g))\n(def d (a/f))\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_cg"))
+        .arg("index")
+        .arg(&source)
+        .arg("-o")
+        .arg(dir.path().join("graph.json"))
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    for line in [
+        "clojure calls: 2 to function (1 as a value), 0 to type, 1 external, 2 unresolved (1 var without node); 1 more in code without a function node, not read\n",
+        "clojure code without a function node, by head: def 1\n",
+        "clojure unqualified heads: 1 of the same namespace (0 a local could hide), 0 referred (0 a local could hide)\n",
+        "clojure unresolved: x/none 1\n",
+    ] {
+        assert!(stderr.contains(line), "{line}\n{stderr}");
+    }
+}

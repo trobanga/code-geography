@@ -1,13 +1,16 @@
 //! Clojure front end: turns the sources of a `deps.edn` project into a graph.
 
+mod calls;
 mod declare;
 mod deps;
+mod measure;
 mod ns;
 mod syntax;
 
 pub use cg_core::SourceFile;
 use cg_core::{Edge, EdgeKind, Graph, Node, NodeKind, PackageNode, Span};
 use deps::SourceDirs;
+pub use measure::UnqualifiedHeads;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use tree_sitter::Parser;
@@ -27,6 +30,26 @@ pub struct Report {
     pub duplicate_namespaces: Vec<String>,
     /// The top-level forms that give no node, counted by their head symbol.
     pub forms_without_node: BTreeMap<String, usize>,
+    /// How the qualified symbols in the code of functions were resolved, counted per site
+    /// (before the removal of duplicate edges). The same four classes as for Java and Rust.
+    pub calls: cg_core::CallReport,
+    /// Of the calls to a function: those where the function is named, not called
+    /// (`(map a/f xs)`, `#'a/f`).
+    pub function_values: usize,
+    /// Of the unresolved calls: those whose namespace declares the name with `def` or
+    /// `defonce`, which give no node. The size of this class decides whether `def` gets a
+    /// node.
+    pub var_without_node: usize,
+    /// Calls to a function and references to a type in code that has no function node
+    /// (the value of a `def`, a `defmethod`, an `extend-protocol`, any other top-level
+    /// form): no edge, not in `calls`. By the head of the top-level form: `def`,
+    /// `defmethod`, `extend-protocol`, `other`. The size of the gap that stage 2b closes.
+    pub no_source_node: BTreeMap<String, usize>,
+    /// The other unresolved calls: a repository namespace that does not declare the name
+    /// (a macro of the repository can have made it). `namespace/name` to count.
+    pub unresolved_names: BTreeMap<String, usize>,
+    /// A measurement for the next stage: unqualified symbols at the head of a list.
+    pub unqualified: UnqualifiedHeads,
 }
 
 /// Whether the indexer wants the file at `path` (relative to the root, `/` as separator):
@@ -153,6 +176,8 @@ pub fn index_sources(root_name: &str, files: &[SourceFile]) -> (Graph, Report) {
     let mut namespaces: BTreeSet<String> = BTreeSet::new();
     let mut requires: Vec<(String, Vec<String>)> = Vec::new();
     let mut package_ids: BTreeMap<String, String> = BTreeMap::new();
+    let mut vars: HashMap<String, calls::Vars> = HashMap::new();
+    let mut read: Vec<calls::File> = Vec::new();
     for file in files.iter().filter(|f| !f.path.ends_with("deps.edn")) {
         let Some(module) = module_of(&module_dirs, &file.path) else {
             report.files_without_deps_edn += 1;
@@ -178,7 +203,26 @@ pub fn index_sources(root_name: &str, files: &[SourceFile]) -> (Graph, Report) {
         packages.insert((Some(module), namespace.clone()), is_test);
         package_ids.insert(namespace.clone(), package_id(module, &namespace));
         requires.push((namespace.clone(), ns::requires(ns_form, source)));
-        let rest: Vec<_> = forms.iter().copied().filter(|f| *f != ns_form).collect();
+        let specs: Vec<ns::Spec> = ns::specs(ns_form, source)
+            .into_iter()
+            .filter(|s| !s.as_alias)
+            .collect();
+        let aliases: HashMap<String, String> = specs
+            .iter()
+            .filter_map(|s| Some((s.alias.clone()?, s.name.clone())))
+            .collect();
+        let refers: HashMap<String, String> = specs
+            .iter()
+            .flat_map(|s| s.refer.iter().map(|name| (name.clone(), s.name.clone())))
+            .collect();
+        let ns_form = ns_form.id();
+        let rest: Vec<_> = forms
+            .iter()
+            .copied()
+            .filter(|f| f.id() != ns_form)
+            .collect();
+        vars.insert(namespace.clone(), calls::vars(&rest, source, &namespace));
+        let mut owned: HashMap<usize, String> = HashMap::new();
         let decls =
             declare::declarations(&rest, source, &namespace, &mut report.forms_without_node);
         // The methods of a type that was declared before are skipped with it.
@@ -191,6 +235,7 @@ pub fn index_sources(root_name: &str, files: &[SourceFile]) -> (Graph, Report) {
                 skipped.insert(decl.id);
                 continue;
             }
+            owned.insert(decl.node.id(), decl.id.clone());
             declared.push(Node {
                 hash: Some(own_hash(&decl, source)),
                 id: decl.id,
@@ -206,6 +251,15 @@ pub fn index_sources(root_name: &str, files: &[SourceFile]) -> (Graph, Report) {
                 change: None,
             });
         }
+        read.push(calls::File {
+            source,
+            tree,
+            ns_form,
+            namespace: namespace.clone(),
+            aliases,
+            refers,
+            owned,
+        });
     }
     for (module, nodes) in cg_core::package_nodes(&packages) {
         let module = module.expect("every namespace has a module");
@@ -242,6 +296,13 @@ pub fn index_sources(root_name: &str, files: &[SourceFile]) -> (Graph, Report) {
     }
     graph.nodes.append(&mut declared);
     graph.edges = imports(&graph, &package_ids, &requires);
+    let tree = NodeTree::new(&graph);
+    let reached: Vec<Edge> = calls::read(&read, &vars, &mut report)
+        .into_iter()
+        .filter(|e| !tree.related(&e.from, &e.to))
+        .collect();
+    graph.edges.extend(reached);
+    graph.edges.sort();
     (graph, report)
 }
 
@@ -285,6 +346,38 @@ fn span_of(node: tree_sitter::Node) -> Span {
     }
 }
 
+/// The parent links of a graph.
+struct NodeTree<'g>(HashMap<&'g str, Option<&'g str>>);
+
+impl<'g> NodeTree<'g> {
+    fn new(graph: &'g Graph) -> Self {
+        NodeTree(
+            graph
+                .nodes
+                .iter()
+                .map(|n| (n.id.as_str(), n.parent.as_deref()))
+                .collect(),
+        )
+    }
+
+    fn is_ancestor(&self, ancestor: &str, node: &str) -> bool {
+        let mut current = self.0.get(node).copied().flatten();
+        while let Some(id) = current {
+            if id == ancestor {
+                return true;
+            }
+            current = self.0.get(id).copied().flatten();
+        }
+        false
+    }
+
+    /// Whether the nodes are the same, or one is an ancestor of the other: no edge joins
+    /// them.
+    fn related(&self, a: &str, b: &str) -> bool {
+        a == b || self.is_ancestor(a, b) || self.is_ancestor(b, a)
+    }
+}
+
 /// The `imports` edges from each namespace to the namespaces of the repository that it
 /// requires, but none between a node and its ancestor or descendant in the node tree.
 fn imports(
@@ -292,26 +385,12 @@ fn imports(
     package_ids: &BTreeMap<String, String>,
     requires: &[(String, Vec<String>)],
 ) -> Vec<Edge> {
-    let parents: HashMap<&str, Option<&str>> = graph
-        .nodes
-        .iter()
-        .map(|n| (n.id.as_str(), n.parent.as_deref()))
-        .collect();
-    let is_ancestor = |ancestor: &str, node: &str| {
-        let mut current = parents.get(node).copied().flatten();
-        while let Some(id) = current {
-            if id == ancestor {
-                return true;
-            }
-            current = parents.get(id).copied().flatten();
-        }
-        false
-    };
+    let tree = NodeTree::new(graph);
     let mut edges = BTreeSet::new();
     for (from, required) in requires {
         let from = &package_ids[from];
         for to in required.iter().filter_map(|name| package_ids.get(name)) {
-            if from != to && !is_ancestor(from, to) && !is_ancestor(to, from) {
+            if !tree.related(from, to) {
                 edges.insert(Edge {
                     from: from.clone(),
                     to: to.clone(),

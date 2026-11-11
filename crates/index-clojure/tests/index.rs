@@ -547,3 +547,330 @@ fn imports_edges_cross_modules_and_do_not_depend_on_the_order_of_the_files() {
     assert_eq!(imports(&g), [("pkg::a", "pkg:modules/m:b")]);
     assert_eq!(index(&reversed), g);
 }
+
+fn edges_of(g: &Graph, kind: EdgeKind) -> Vec<(&str, &str)> {
+    g.edges
+        .iter()
+        .filter(|e| e.kind == kind)
+        .map(|e| (e.from.as_str(), e.to.as_str()))
+        .collect()
+}
+
+fn calls(g: &Graph) -> Vec<(&str, &str)> {
+    edges_of(g, EdgeKind::Calls)
+}
+
+#[test]
+fn a_qualified_symbol_in_a_function_body_gives_a_calls_edge_to_the_function_of_the_alias_or_full_namespace()
+ {
+    let g = index(&[
+        DEPS,
+        (
+            "src/x/y.clj",
+            "(ns x.y)\n(defn f [])\n(defn- p [])\n(defmacro m [])\n(defmulti mm :k)\n",
+        ),
+        (
+            "src/user.clj",
+            "(ns user (:require [x.y :as a]))\n\
+             (defn by-alias [] (a/f))\n\
+             (defn- by-name [] (x.y/p))\n\
+             (defmacro macro-caller [] (a/m))\n\
+             (defmulti multi-caller (fn [x] (a/mm x)))\n",
+        ),
+        (
+            "src/rec.clj",
+            "(ns rec (:require [x.y :as a]))\n\
+             (defrecord R [k] Object (toString [_] (a/f)))\n\
+             (deftype T [k] Object (toString [_] (x.y/f)))\n",
+        ),
+    ]);
+
+    let mut found = calls(&g);
+    found.sort();
+    assert_eq!(
+        found,
+        vec![
+            ("fn:rec/R#toString", "fn:x.y/f"),
+            ("fn:rec/T#toString", "fn:x.y/f"),
+            ("fn:user/by-alias", "fn:x.y/f"),
+            ("fn:user/by-name", "fn:x.y/p"),
+            ("fn:user/macro-caller", "fn:x.y/m"),
+            ("fn:user/multi-caller", "fn:x.y/mm"),
+        ]
+    );
+}
+
+#[test]
+fn a_function_named_as_a_value_or_by_var_quote_gives_the_calls_edge_and_is_counted_as_a_value() {
+    let (g, report) = run(&[
+        DEPS,
+        ("src/x.clj", "(ns x)\n(defn f [])\n"),
+        (
+            "src/user.clj",
+            "(ns user (:require [x :as a]))\n\
+             (defn g [xs] (a/f) (map a/f xs) (partial a/f 1) #'a/f)\n",
+        ),
+    ]);
+
+    assert_eq!(calls(&g), vec![("fn:user/g", "fn:x/f")]);
+    assert_eq!(report.calls.to_function, 4);
+    assert_eq!(report.function_values, 3);
+}
+
+#[test]
+fn a_protocol_method_is_a_var_of_the_namespace_of_the_protocol_and_an_interface_method_is_not() {
+    let (g, report) = run(&[
+        DEPS,
+        (
+            "src/x.clj",
+            "(ns x)\n(defprotocol Store (-get [s k]) (-put [s k v]))\n(definterface Iface (poke [k]))\n",
+        ),
+        (
+            "src/user.clj",
+            "(ns user (:require [x :as p]))\n\
+             (defn g [s] (p/-get s 1))\n\
+             (defn h [s] (p/poke s 1))\n",
+        ),
+    ]);
+
+    assert_eq!(calls(&g), vec![("fn:user/g", "fn:x/Store#-get")]);
+    assert_eq!(report.calls.to_function, 1);
+}
+
+#[test]
+fn a_protocol_an_interface_and_the_constructors_of_a_record_or_type_give_type_ref_edges() {
+    let (g, report) = run(&[
+        DEPS,
+        (
+            "src/x.clj",
+            "(ns x)\n(defprotocol Proto (m [x]))\n(definterface Iface)\n(defrecord Rec [a])\n(deftype Ty [a])\n",
+        ),
+        (
+            "src/user.clj",
+            "(ns user (:require [x :as a]))\n\
+             (defn g [] [a/Proto a/Iface (a/->Rec 1) (a/map->Rec {}) (a/->Ty 1) (a/map->Ty {}) a/Rec])\n",
+        ),
+    ]);
+
+    let mut found = edges_of(&g, EdgeKind::TypeRef);
+    found.sort();
+    assert_eq!(
+        found,
+        vec![
+            ("fn:user/g", "type:x/Iface"),
+            ("fn:user/g", "type:x/Proto"),
+            ("fn:user/g", "type:x/Rec"),
+            ("fn:user/g", "type:x/Ty"),
+        ]
+    );
+    assert_eq!(calls(&g), vec![]);
+    assert_eq!(report.calls.to_type, 5);
+}
+
+#[test]
+fn a_symbol_that_gives_no_edge_is_counted_as_external_var_without_node_or_unresolved() {
+    let (g, report) = run(&[
+        DEPS,
+        (
+            "src/x.clj",
+            "(ns x)\n(defn f [])\n(def v 1)\n(defonce w 2)\n",
+        ),
+        (
+            "src/user.clj",
+            "(ns user (:require [clojure.string :as str] [x :as a]))\n\
+             (defn g []\n\
+               (str/join \",\" [])\n\
+               (Math/abs 1)\n\
+               (String/valueOf 1)\n\
+               (a/v)\n\
+               a/w\n\
+               (a/nothing)\n\
+               (x/also-nothing))\n",
+        ),
+    ]);
+
+    assert_eq!(g.edges.iter().filter(|e| e.from == "fn:user/g").count(), 0);
+    assert_eq!(report.calls.to_function + report.calls.to_type, 0);
+    assert_eq!(report.calls.external, 3);
+    assert_eq!(report.var_without_node, 2);
+    // A var without a node is part of the unresolved calls, as a value is part of the
+    // calls to a function.
+    assert_eq!(report.calls.unresolved, 4);
+    let names: Vec<(&str, usize)> = report
+        .unresolved_names
+        .iter()
+        .map(|(k, v)| (k.as_str(), *v))
+        .collect();
+    assert_eq!(names, vec![("x/also-nothing", 1), ("x/nothing", 1)]);
+}
+
+#[test]
+fn quoted_discarded_commented_metadata_keyword_and_destructuring_forms_are_not_read() {
+    let (g, report) = run(&[
+        DEPS,
+        ("src/x.clj", "(ns x)\n(defn f [])\n"),
+        (
+            "src/user.clj",
+            "(ns user (:require [x :as a]))\n\
+             (defn g [^a/T x ^{:tag a/f} y {:keys [a/f] :syms [a/f]}]\n\
+               '(a/f)\n\
+               (quote (a/f))\n\
+               #_(a/f)\n\
+               (comment (a/f))\n\
+               :a/f ::a/f :x/f\n\
+               `(a/f ~x))\n\
+             (defmacro m [x] `(a/f ~x))\n",
+        ),
+    ]);
+
+    assert_eq!(calls(&g), vec![("fn:user/m", "fn:x/f")]);
+    // The macro is the only site that is read.
+    assert_eq!(report.calls.to_function, 1);
+    assert_eq!(report.calls.external + report.calls.unresolved, 0);
+}
+
+#[test]
+fn a_reference_in_code_without_a_function_node_gives_no_edge_and_is_counted_by_the_head_of_its_form()
+ {
+    let (g, report) = run(&[
+        DEPS,
+        ("src/x.clj", "(ns x)\n(defn f [])\n(defrecord R [])\n"),
+        (
+            "src/user.clj",
+            "(ns user (:require [x :as a]))\n\
+             (def v (a/f))\n\
+             (def e (Math/abs 1))\n\
+             (defmethod mm :k [x] (a/f x) a/->R)\n\
+             (extend-protocol P Foo (m [_] (a/f)))\n\
+             (extend-type Foo P (m [_] (a/f)))\n\
+             (a/f)\n\
+             (defn g [] (a/f))\n",
+        ),
+    ]);
+
+    assert_eq!(calls(&g), vec![("fn:user/g", "fn:x/f")]);
+    assert_eq!(edges_of(&g, EdgeKind::TypeRef), vec![]);
+    let by_head: Vec<(&str, usize)> = report
+        .no_source_node
+        .iter()
+        .map(|(k, v)| (k.as_str(), *v))
+        .collect();
+    assert_eq!(
+        by_head,
+        vec![
+            ("def", 1),
+            ("defmethod", 2),
+            ("extend-protocol", 1),
+            ("other", 2)
+        ]
+    );
+    // Only the sites with a source node are counted as calls to a function or a type.
+    assert_eq!(report.calls.to_function, 1);
+    assert_eq!(report.calls.to_type, 0);
+    // A reference that leads nowhere in the repository is counted as before.
+    assert_eq!(report.calls.external, 1);
+}
+
+#[test]
+fn no_edge_joins_a_node_with_itself_or_its_ancestor_and_an_edge_exists_once_for_many_sites() {
+    let (g, report) = run(&[
+        DEPS,
+        ("src/x/sub.clj", "(ns x.sub)\n(defn s [])\n"),
+        (
+            "src/x.clj",
+            "(ns x (:require [x.sub :as sub]))\n\
+             (defn f [] (x/f) (x/g) (x/g) (x/g))\n\
+             (defn g [] (sub/s))\n\
+             (defrecord R [] Object (toString [_] (x/->R) (x/g)))\n",
+        ),
+    ]);
+
+    let mut all = calls(&g);
+    all.sort();
+    assert_eq!(
+        all,
+        vec![
+            ("fn:x/R#toString", "fn:x/g"),
+            ("fn:x/f", "fn:x/g"),
+            ("fn:x/g", "fn:x.sub/s"),
+        ]
+    );
+    assert_eq!(edges_of(&g, EdgeKind::TypeRef), vec![]);
+    // The sites are counted, also those that give no edge.
+    assert_eq!(report.calls.to_function, 6);
+    assert_eq!(report.calls.to_type, 1);
+}
+
+#[test]
+fn a_type_implements_the_protocols_and_interfaces_of_the_repository_that_its_body_names() {
+    let g = index(&[
+        DEPS,
+        (
+            "src/x.clj",
+            "(ns x)\n(defprotocol P (pm [s]))\n(definterface I)\n(defrecord Rec [a])\n",
+        ),
+        (
+            "src/user.clj",
+            "(ns user (:require [x :as p :refer [P I Rec]]))\n\
+             (defprotocol Local (lm [s]))\n\
+             (defrecord R [a] p/P (pm [_] 1) Local (lm [_] 2) I Closeable java.io.Closeable Object (toString [_] \"\"))\n\
+             (deftype T [a] P (pm [_] 1))\n\
+             (defrecord Q [a] Rec x/Rec p/Nothing)\n",
+        ),
+    ]);
+
+    let mut found = edges_of(&g, EdgeKind::Implements);
+    found.sort();
+    assert_eq!(
+        found,
+        vec![
+            ("type:user/R", "type:user/Local"),
+            ("type:user/R", "type:x/I"),
+            ("type:user/R", "type:x/P"),
+            ("type:user/T", "type:x/P"),
+        ]
+    );
+}
+
+#[test]
+fn unqualified_heads_that_name_a_function_are_counted_with_those_that_a_local_could_hide() {
+    let (g, report) = run(&[
+        DEPS,
+        (
+            "src/x.clj",
+            "(ns x)\n(defn r-plain [])\n(defn r-other [])\n(defn rv [])\n",
+        ),
+        (
+            "src/user.clj",
+            "(ns user (:require [x :refer [r-plain r-other rv]]))\n\
+             (defn plain [] 1)\n\
+             (defn v1 [] 1)\n\
+             (defn v2 [] 1)\n\
+             (defn v3 [] 1)\n\
+             (defn v4 [] 1)\n\
+             (defn v5 [] 1)\n\
+             (defn v6 [] 1)\n\
+             (defn v7 [] 1)\n\
+             (defn plain-user [] (plain) (r-plain) (inc 1) (x/rv) (unknown))\n\
+             (defn t1 [v1] (v1))\n\
+             (defn t2 [{v2 :k}] (v2))\n\
+             (defn t3 [{:k v3}] (v3))\n\
+             (defn t4 [] (as-> 1 v4 (v4)))\n\
+             (defn t5 [] (try 1 (catch Exception v5 (v5))))\n\
+             (defn t6 [] (fn v6 [] (v6)))\n\
+             (defn t7 [] (letfn [(v7 [] 1)] (v7)))\n\
+             (defn t8 [rv] (rv) (r-other))\n\
+             (def d (plain))\n\
+             (defn quoted [] '(plain))\n",
+        ),
+    ]);
+
+    // No edge comes from an unqualified symbol, except the one qualified call.
+    assert_eq!(calls(&g), vec![("fn:user/plain-user", "fn:x/rv")]);
+    let u = &report.unqualified;
+    // The head of the binding `(v7 [] 1)` of a letfn is counted, too.
+    assert_eq!(u.same_namespace, 9);
+    assert_eq!(u.same_namespace_maybe_local, 8);
+    assert_eq!(u.referred, 3);
+    assert_eq!(u.referred_maybe_local, 1);
+}
