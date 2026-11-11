@@ -1812,3 +1812,91 @@ fn a_file_without_a_type_gives_no_package_node_and_the_default_package_does_not_
     assert_eq!(parent(&g, "type:Top").id, "pkg::");
     assert_eq!(g.node("pkg::").unwrap().parent.as_deref(), Some("mod:"));
 }
+
+#[test]
+fn new_record_calls_the_compact_constructor_by_the_number_of_components() {
+    let dir = repo(&[
+        (
+            "a/P.java",
+            "package a;\nrecord P(String a, int b) { P { if (a == null) throw new IllegalStateException(); } }\n",
+        ),
+        ("a/Q.java", "package a;\nrecord Q(String a, int b) {}\n"),
+        (
+            "a/User.java",
+            "package a;\n\
+             class User {\n\
+             \x20   void compact() { new P(\"x\", 1); }\n\
+             \x20   void implicit() { new Q(\"x\", 1); }\n\
+             }\n",
+        ),
+    ]);
+
+    let g = index(dir.path()).unwrap();
+
+    assert_eq!(calls_from(&g, "fn:a.User#compact()"), ["fn:a.P#P()"]);
+    assert_eq!(calls_from(&g, "fn:a.User#implicit()"), ["type:a.Q"]);
+}
+
+#[test]
+fn an_implicit_record_accessor_wins_over_an_inherited_method_of_the_same_name() {
+    let dir = repo(&[
+        (
+            "a/Req.java",
+            "package a;\ninterface Req { String domain(); String other(); }\n",
+        ),
+        (
+            "a/FetchReq.java",
+            "package a;\nrecord FetchReq(String domain, String other) implements Req {\n    public String other() { return other; }\n}\n",
+        ),
+        (
+            "a/C.java",
+            "package a;\n\
+             class C {\n\
+             \x20   void implicit(FetchReq r) { r.domain(); }\n\
+             \x20   void written(FetchReq r) { r.other(); }\n\
+             \x20   void viaInterface(Req r) { r.domain(); }\n\
+             \x20   void withArgument(FetchReq r) { r.domain(1); }\n\
+             }\n",
+        ),
+    ]);
+
+    let g = index(dir.path()).unwrap();
+
+    assert_eq!(
+        calls_from(&g, "fn:a.C#implicit(FetchReq)"),
+        ["type:a.FetchReq"]
+    );
+    assert_eq!(
+        calls_from(&g, "fn:a.C#written(FetchReq)"),
+        ["fn:a.FetchReq#other()"]
+    );
+    assert_eq!(
+        calls_from(&g, "fn:a.C#viaInterface(Req)"),
+        ["fn:a.Req#domain()"]
+    );
+    // Not an accessor: the arity differs, so the inherited search finds nothing.
+    assert_eq!(
+        calls_from(&g, "fn:a.C#withArgument(FetchReq)"),
+        ["type:a.FetchReq"]
+    );
+}
+
+#[test]
+fn an_unqualified_call_in_a_record_reaches_its_implicit_accessor_as_the_type() {
+    let dir = repo(&[
+        (
+            "a/Req.java",
+            "package a;\ninterface Req { String domain(); }\n",
+        ),
+        (
+            "a/Other.java",
+            "package a;\nrecord Other(String domain) implements Req {\n    String twice() { return domain() + domain(); }\n    String viaThis() { return this.domain(); }\n}\n",
+        ),
+    ]);
+
+    let g = index(dir.path()).unwrap();
+
+    // Calls to the own type are dropped (ADR 0014): no edge to the interface method.
+    assert!(calls_from(&g, "fn:a.Other#twice()").is_empty());
+    assert!(calls_from(&g, "fn:a.Other#viaThis()").is_empty());
+}

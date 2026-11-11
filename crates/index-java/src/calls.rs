@@ -49,6 +49,8 @@ struct TypeInfo {
     /// type that the repository does not declare.
     superclass: Option<Ty>,
     fields: HashMap<String, Ty>,
+    /// The names of the components of a record.
+    components: HashSet<String>,
 }
 
 /// What the declarations of all files say about the types.
@@ -84,10 +86,14 @@ impl Model {
                         info.supers = supers;
                         info.superclass = superclass;
                         info.fields = fields_of(decl, &ctx);
+                        info.components = components_of(decl, &unit.source);
                     }
                     NodeKind::Function => {
                         let Some(owner) = &decl.parent else { continue };
-                        if decl.node.kind() == "constructor_declaration" {
+                        if matches!(
+                            decl.node.kind(),
+                            "constructor_declaration" | "compact_constructor_declaration"
+                        ) {
                             types
                                 .entry(owner.clone())
                                 .or_default()
@@ -156,8 +162,31 @@ fn fields_of<'a>(decl: &Decl<'a>, ctx: &TypeCtx<'a>) -> HashMap<String, Ty> {
     fields
 }
 
+/// The names of the components of a record; empty for every other type.
+fn components_of(decl: &Decl, source: &str) -> HashSet<String> {
+    let components = decl
+        .node
+        .child_by_field_name("parameters")
+        .filter(|_| decl.node.kind() == "record_declaration");
+    components
+        .into_iter()
+        .flat_map(children)
+        .filter(|c| c.kind() == "formal_parameter")
+        .filter_map(|c| c.child_by_field_name("name"))
+        .map(|name| text(name, source).to_string())
+        .collect()
+}
+
 fn method_of<'a>(decl: &Decl<'a>, ctx: &TypeCtx<'a>) -> Method {
-    let parameters = decl.node.child_by_field_name("parameters");
+    // A compact constructor has no parameter list: it takes the components of its record.
+    let parameters = if decl.node.kind() == "compact_constructor_declaration" {
+        decl.node
+            .parent()
+            .and_then(|body| body.parent())
+            .and_then(|record| record.child_by_field_name("parameters"))
+    } else {
+        decl.node.child_by_field_name("parameters")
+    };
     let list: Vec<Ts> = parameters
         .map(|p| children(p).collect())
         .unwrap_or_default();
@@ -191,6 +220,21 @@ impl Model {
             level = next;
         }
         None
+    }
+
+    /// Whether the call reaches the accessor that a record has for its component `name`:
+    /// the record has such a component, no written method of that name takes no
+    /// argument, and the call can have none. The accessor has no node. It hides the
+    /// methods that the record inherits.
+    fn implicit_accessor(&self, type_id: &str, name: &str, arguments: Option<usize>) -> bool {
+        arguments.is_none_or(|n| n == 0)
+            && self.types.get(type_id).is_some_and(|info| {
+                info.components.contains(name)
+                    && !info
+                        .methods
+                        .get(name)
+                        .is_some_and(|written| written.iter().any(|m| m.params == 0))
+            })
     }
 
     /// The methods called `name` that fit `arguments`, declared in the type.
@@ -695,6 +739,9 @@ impl<'a> Walker<'a> {
                     }
                 }
             };
+            if self.model.implicit_accessor(id, name, arguments) {
+                return Outcome::Type(id.clone());
+            }
             match self.model.methods(id, name, arguments).as_slice() {
                 [] => {}
                 [one] => return Outcome::Function(one),
@@ -736,6 +783,9 @@ impl<'a> Walker<'a> {
     /// The method of the receiver's type that fits, else the type itself.
     fn by_receiver(&self, receiver: &Ty, name: &str, arguments: Option<usize>) -> Outcome<'a> {
         match receiver {
+            Ty::Repo(id) if self.model.implicit_accessor(id, name, arguments) => {
+                Outcome::Type(id.clone())
+            }
             Ty::Repo(id) => match self.model.methods(id, name, arguments).as_slice() {
                 [one] => Outcome::Function(one),
                 [] if is_object_method(name, arguments) => Outcome::External,
