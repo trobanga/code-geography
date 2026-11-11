@@ -35,6 +35,8 @@
   const win = globalThis as { showDirectoryPicker?: (o?: { id?: string; mode?: 'read' }) => Promise<DirHandle> };
   const picker = typeof win.showDirectoryPicker === 'function';
   let dirInput: HTMLInputElement | undefined = $state();
+  let fileInput: HTMLInputElement | undefined = $state();
+  let menu = $state(false);
 
   async function pick() {
     try {
@@ -46,19 +48,61 @@
   }
 </script>
 
-<button
-  type="button"
-  class="{btn} cursor-pointer"
-  title={picker
-    ? 'Index a Java or Rust project in this browser. Not stored: a reload returns to graph.json.'
-    : 'Index a Java or Rust project in this browser. This browser lists every file of the directory first, which is slow for a tree with node_modules or target: drop the directory on the page instead.'}
-  onclick={() => (picker ? pick() : dirInput?.click())}
->
-  open directory
-</button>
-{#if !picker}
-  <span class="text-[var(--muted)]" data-drop-advice>or drop it (faster)</span>
-{/if}
+<svelte:window
+  onpointerdown={(e) => {
+    if (menu && !(e.target as Element | null)?.closest?.('[data-open-menu]')) menu = false;
+  }}
+  onkeydown={(e) => {
+    if (menu && e.key === 'Escape') menu = false;
+  }}
+/>
+
+<!-- One control for the two local sources: a browser dialog can offer directories or files, not both. -->
+<span class="relative" data-open-menu>
+  <button
+    type="button"
+    class="{btn} cursor-pointer"
+    aria-haspopup="menu"
+    aria-expanded={menu}
+    title="Open a project directory, or a graph.json"
+    onclick={() => (menu = !menu)}
+  >
+    open ▾
+  </button>
+  {#if menu}
+    <div class="absolute left-0 top-full z-40 mt-1 flex w-max flex-col border border-[var(--line)] bg-[var(--bg)] shadow-lg" role="menu">
+      <button
+        type="button"
+        role="menuitem"
+        class="cursor-pointer px-2 py-1 text-left hover:bg-[var(--line)]"
+        data-open-item="directory"
+        title={picker
+          ? 'Index a project in this browser. Not stored: a reload returns to graph.json.'
+          : 'Index a project in this browser. This browser lists every file of the directory first, which is slow for a tree with node_modules or target: drop the directory on the page instead.'}
+        onclick={() => {
+          menu = false;
+          if (picker) pick();
+          else dirInput?.click();
+        }}
+      >
+        project directory
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        class="cursor-pointer px-2 py-1 text-left hover:bg-[var(--line)]"
+        data-open-item="file"
+        title="Open a graph.json made by cg index"
+        onclick={() => {
+          menu = false;
+          fileInput?.click();
+        }}
+      >
+        graph file
+      </button>
+    </div>
+  {/if}
+</span>
 <input
   bind:this={dirInput}
   type="file"
@@ -72,20 +116,18 @@
     if (fs.length > 0) ondir(collectFiles(fs));
   }}
 />
-<label class="{btn} cursor-pointer" title="Open a graph.json made by cg index">
-  open file
-  <input
-    type="file"
-    accept=".json,application/json"
-    class="hidden"
-    data-open="file"
-    onchange={(e) => {
-      const f = e.currentTarget.files?.[0];
-      if (f) onfile(f);
-      e.currentTarget.value = '';
-    }}
-  />
-</label>
+<input
+  bind:this={fileInput}
+  type="file"
+  accept=".json,application/json"
+  class="hidden"
+  data-open="file"
+  onchange={(e) => {
+    const f = e.currentTarget.files?.[0];
+    if (f) onfile(f);
+    e.currentTarget.value = '';
+  }}
+/>
 <form
   class="flex items-center gap-1"
   data-open="repository"

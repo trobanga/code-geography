@@ -7,6 +7,7 @@
   import EdgeBar from './components/EdgeBar.svelte';
   import FocusBar from './components/FocusBar.svelte';
   import OpenButtons from './components/OpenButtons.svelte';
+  import Survey from './components/Survey.svelte';
   import Toolbar from './components/Toolbar.svelte';
   import type { Offset } from './lib/drag';
   import { DEFAULT_EDGE_OPTIONS, edgePipeline, painted, type Drawn, type EdgeOptions } from './lib/edgeOptions';
@@ -200,6 +201,8 @@
       graph = g;
       tree = buildTree(g.nodes);
       offsets = new Map();
+      // The layout of the graph before this one does not fit the new one.
+      laid = null;
       error = null;
       applyHash(hash);
     } catch (e) {
@@ -552,9 +555,7 @@
     onrepo={openForgeInput}
     {auth}
   />
-  {#if phase}
-    <div class="border-b border-[var(--line)] px-3 py-1 text-[var(--muted)]" data-phase>{phase}…</div>
-  {:else if project}
+  {#if project && !phase}
     <div class="border-b border-[var(--line)] px-3 py-1 text-[var(--muted)]" title={project.tooltip} data-project>
       {project.text}
     </div>
@@ -602,7 +603,13 @@
   {#if error}
     <div class="border-b border-[var(--line)] px-3 py-1 text-[var(--accent)]">{error}</div>
   {/if}
-  <div class="flex min-h-0 flex-1">
+  <div class="relative flex min-h-0 flex-1">
+    {#if phase || (tree && !laid && busy)}
+      <!-- A load in progress covers the picture of the source before it; a failed load uncovers it again. -->
+      <div class="absolute inset-0 z-10 flex items-center justify-center bg-[var(--bg)]" data-loading>
+        <Survey label={phase ?? 'layout'} />
+      </div>
+    {/if}
     {#if tree && view && laid}
       <Diagram
         bind:this={diagram}
