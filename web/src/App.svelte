@@ -11,7 +11,7 @@
   import type { Offset } from './lib/drag';
   import { DEFAULT_EDGE_OPTIONS, edgePipeline, painted, type Drawn, type EdgeOptions } from './lib/edgeOptions';
   import { toElkGraph } from './lib/elkGraph';
-  import { commitTotals, openChanged, pathToOpen } from './lib/commit';
+  import { commitTotals, openChangedStep, pathToOpen } from './lib/commit';
   import { changedFiles } from './lib/files';
   import { focusActive, focusOn, NO_FOCUS, type Focus } from './lib/focus';
   import {
@@ -488,7 +488,7 @@
       {files}
       onopen={() => {
         if (!tree) return;
-        expanded = openChanged(tree, tests);
+        expanded = openChangedStep(tree, tests, expanded);
         unfolded = new Set();
         setFocus({ nodes: [], changes: true, neighbors: focus.neighbors });
       }}

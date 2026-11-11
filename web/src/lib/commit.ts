@@ -37,6 +37,18 @@ export function openChanged(tree: Tree, tests: boolean): Set<string> {
   return out;
 }
 
+/**
+ * The next set for "open changed": down to the changed types, with the types closed, so that a
+ * changed type is one box with its badge. If `expanded` is already that set, the changed types
+ * open also (the set of `openChanged`).
+ */
+export function openChangedStep(tree: Tree, tests: boolean, expanded: ReadonlySet<string>): Set<string> {
+  const all = openChanged(tree, tests);
+  const closed = new Set([...all].filter((id) => tree.byId.get(id)?.kind !== 'type'));
+  const shown = closed.size === expanded.size && [...closed].every((id) => expanded.has(id));
+  return shown ? all : closed;
+}
+
 export interface CommitTotals {
   nodes: ChangeCount;
   edges: { added: number; removed: number };

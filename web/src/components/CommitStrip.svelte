@@ -60,7 +60,7 @@
   <label class="flex items-center gap-1 border-l border-[var(--line)] pl-3">
     <input type="checkbox" checked={changesOnly} onchange={(e) => onchanges(e.currentTarget.checked)} />changes only
   </label>
-  <button class={btn} onclick={onopen}>open changed</button>
+  <button class={btn} onclick={onopen} title="Opens down to the changed types. A second click opens the changed types also.">open changed</button>
   {#if onlist}
     <button class="{btn} {listOpen ? 'bg-[var(--line)]' : ''}" onclick={onlist} data-list-toggle>commits</button>
   {/if}

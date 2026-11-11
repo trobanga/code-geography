@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { badgeLabel, changeLabel, commitTotals, markedByModule, openChanged, pathToOpen } from './commit';
+import { badgeLabel, changeLabel, commitTotals, markedByModule, openChanged, openChangedStep, pathToOpen } from './commit';
 import { buildTree } from './expansion';
 import type { Graph } from './types';
 
@@ -102,5 +102,22 @@ describe('badgeLabel', () => {
     expect(badgeLabel({ added: 3, removed: 0, modified: 2 })).toBe('+3 ~2');
     expect(badgeLabel({ added: 1, removed: 1, modified: 1 }, 'modified')).toBe('+1 −1');
     expect(badgeLabel({ added: 1, removed: 0, modified: 0 }, 'added')).toBe('');
+  });
+});
+
+describe('openChangedStep', () => {
+  it('first opens down to the changed types and leaves the types closed', () => {
+    expect([...openChangedStep(tree, false, new Set())].sort()).toEqual(['m1', 'm2', 'p1', 'p2']);
+  });
+});
+
+describe('openChangedStep, second step', () => {
+  it('opens the changed types also when the first step is already shown', () => {
+    const first = openChangedStep(tree, false, new Set());
+    expect([...openChangedStep(tree, false, first)].sort()).toEqual(['A', 'm1', 'm2', 'p1', 'p2']);
+  });
+
+  it('starts again at the types from any other set', () => {
+    expect([...openChangedStep(tree, false, new Set(['m1']))].sort()).toEqual(['m1', 'm2', 'p1', 'p2']);
   });
 });
