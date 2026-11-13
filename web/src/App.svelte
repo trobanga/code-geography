@@ -577,6 +577,19 @@
           {#if fs.branch}<span>{fs.branch}</span>{/if}
           <span class="text-[var(--muted)]" aria-hidden="true">▾</span>
         </button>
+        <!-- The commit shown, or the two commits of the overlay: the control of the commit list. -->
+        <button
+          class="flex shrink-0 items-center gap-2 border border-[var(--line)] px-2 py-0.5 text-[var(--fg)] tabular-nums hover:border-[var(--muted)] {fs.listOpen ? 'bg-[var(--line)]' : ''}"
+          onclick={forge.toggleList}
+          title="pick another commit"
+          aria-haspopup="listbox"
+          aria-expanded={fs.listOpen}
+          data-list-toggle
+        >
+          <span class="text-[var(--muted)]">commit</span>
+          <span>{diff ? `${diff.base} → ${diff.head}` : fs.at.slice(fs.at.lastIndexOf('@') + 1, fs.at.lastIndexOf('@') + 8)}</span>
+          <span class="text-[var(--muted)]" aria-hidden="true">▾</span>
+        </button>
       {/if}
       <span class="min-w-0">{project.text}</span>
     </div>
@@ -595,10 +608,15 @@
       </div>
     </div>
   {/if}
-  <EdgeBar {opts} onchange={(patch) => Object.assign(opts, patch)} drawn={paintedCount} total={drawn?.total ?? 0} dropped={drawn?.dropped ?? 0}
-    hideImplied={drawn?.hideImplied ?? false}
-    implied={drawn?.implied.length ?? 0}
-  />
+  {#if fs.at && fs.listOpen}
+    {@const rows = fs.commits ? commitRows(fs.commits.list, fs.overlay?.range ?? null) : null}
+    <!-- A menu over the diagram: it takes no height, so that the diagram does not move when it opens. -->
+    <div class="relative z-30">
+      <div class="absolute inset-x-0 top-0 shadow-lg">
+        <CommitList {rows} hidden={fs.commits && rows ? fs.commits.list.length - rows.length : 0} status={fs.listStatus} onpick={forge.pick} />
+      </div>
+    </div>
+  {/if}
   {#if diff && totals}
     <CommitStrip
       {diff}
@@ -612,19 +630,13 @@
         unfolded = new Set();
         setFocus({ nodes: [], changes: true, neighbors: focus.neighbors });
       }}
-      listOpen={fs.listOpen}
-      onlist={fs.at ? forge.toggleList : undefined}
+      label={!fs.at}
     />
   {/if}
-  {#if fs.at && fs.mode === 'commit' && fs.listOpen}
-    {@const rows = fs.commits ? commitRows(fs.commits.list, fs.overlay?.range ?? null) : null}
-    <!-- A menu over the diagram: it takes no height, so that the diagram does not move when it opens. -->
-    <div class="relative z-30">
-      <div class="absolute inset-x-0 top-0 shadow-lg">
-        <CommitList {rows} hidden={fs.commits && rows ? fs.commits.list.length - rows.length : 0} status={fs.listStatus} onpick={forge.pick} />
-      </div>
-    </div>
-  {/if}
+  <EdgeBar {opts} onchange={(patch) => Object.assign(opts, patch)} drawn={paintedCount} total={drawn?.total ?? 0} dropped={drawn?.dropped ?? 0}
+    hideImplied={drawn?.hideImplied ?? false}
+    implied={drawn?.implied.length ?? 0}
+  />
   {#if tree && focusActive(focus)}
     <FocusBar
       {tree}

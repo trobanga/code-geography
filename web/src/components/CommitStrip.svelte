@@ -9,8 +9,7 @@
     changesOnly,
     onchanges,
     onopen,
-    listOpen = false,
-    onlist,
+    label = true,
   }: {
     diff: { base: string; head: string };
     totals: CommitTotals;
@@ -18,9 +17,8 @@
     changesOnly: boolean;
     onchanges: (v: boolean) => void;
     onopen: () => void;
-    listOpen?: boolean;
-    /** A click on the commit at the left opens or closes the commit list. Absent: no commit list (a commit.json from the CLI). */
-    onlist?: () => void;
+    /** False: the line above names the commit (a repository of a forge), so this strip holds the counts only. */
+    label?: boolean;
   } = $props();
 
   const btn = 'px-2 py-0.5 border border-[var(--line)] hover:border-[var(--muted)]';
@@ -31,24 +29,11 @@
 </script>
 
 <div class="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-[var(--line)] bg-[var(--panel)] px-3 py-1 tabular-nums">
-  {#if onlist}
-    <button
-      class="{btn} flex items-center gap-2 {listOpen ? 'bg-[var(--line)]' : ''}"
-      onclick={onlist}
-      title="pick another commit"
-      aria-haspopup="listbox"
-      aria-expanded={listOpen}
-      data-list-toggle
-    >
-      <span class="text-[var(--muted)]">commit</span>
-      <span>{diff.base} → {diff.head}</span>
-      <span class="text-[var(--muted)]" aria-hidden="true">▾</span>
-    </button>
-  {:else}
+  {#if label}
     <span class="text-[var(--muted)]">commit</span>
     <span>{diff.base} → {diff.head}</span>
   {/if}
-  <span class="border-l border-[var(--line)] pl-3">
+  <span class={label ? 'border-l border-[var(--line)] pl-3' : ''}>
     <span class="text-[var(--muted)]">nodes</span>
     <span style={tint(totals.nodes.added, 'added')}>+{totals.nodes.added}</span>
     <span style={tint(totals.nodes.removed, 'removed')}>−{totals.nodes.removed}</span>
