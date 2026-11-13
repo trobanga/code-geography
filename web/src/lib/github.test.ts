@@ -209,6 +209,22 @@ describe('commits', () => {
   });
 });
 
+describe('branches', () => {
+  it('lists the first 100 branches with the sha of their head, in one call', async () => {
+    const net = fakeFetch({
+      'https://api.github.com/repos/a/b/branches?per_page=100': json([
+        { name: 'main', commit: { sha: SHA, url: 'u' }, protected: true },
+        { name: 'feature/x', commit: { sha: P1, url: 'u' }, protected: false },
+      ]),
+    });
+    expect(await github({ fetch: net.fetch }).branches({ owner: 'a', name: 'b' })).toEqual([
+      { name: 'main', sha: SHA },
+      { name: 'feature/x', sha: P1 },
+    ]);
+    expect(net.calls).toHaveLength(1);
+  });
+});
+
 const P2 = '2222222222222222222222222222222222222222';
 
 describe('mergeBase and pull', () => {

@@ -1,7 +1,7 @@
 // A repository of a forge in the viewer (ADR 0020, 0021): open the head, build an overlay,
 // switch between both, the commit list, restore from the hash. No Svelte and no DOM: the app
 // passes the forge, the cache, the index jobs and what to do with the results.
-import { fetchRepo, type Commit, type Forge, type Repo, type TextCache } from './forge';
+import { fetchRepo, type Branch, type Commit, type Forge, type Repo, type TextCache } from './forge';
 import { fetchOverlay, listedCommits, overlayNames, resolveRange, type OverlaySpec, type Parsed, type Range } from './forgeDiff';
 import { headOf } from './commit';
 import type { DiffRequest, IndexRequest } from './indexProject';
@@ -28,6 +28,12 @@ export interface ForgeState {
   commits: { anchor: string; list: Commit[] } | null;
   listStatus: string | null;
   listOpen: boolean;
+  /** The branches, as listed when the branch menu was opened last. */
+  branches: Branch[] | null;
+  branchStatus: string | null;
+  branchOpen: boolean;
+  /** The branch picked from the branch menu; null when the commit shown came another way. */
+  branch: string | null;
 }
 
 export const NO_FORGE: ForgeState = {
@@ -39,6 +45,10 @@ export const NO_FORGE: ForgeState = {
   commits: null,
   listStatus: null,
   listOpen: false,
+  branches: null,
+  branchStatus: null,
+  branchOpen: false,
+  branch: null,
 };
 
 /** The base of the overlay shown: undefined for the plain graph, null for a root commit. */
@@ -85,12 +95,14 @@ const bare = (repo: Repo): Repo => ({ owner: repo.owner, name: repo.name, ...(re
 export function forgeSession(d: SessionDeps) {
   let s = NO_FORGE;
   const set = (patch: Partial<ForgeState>) => d.onState((s = { ...s, ...patch }));
+  /** The branches listed for the repository shown, if `repo` is that one; else none. */
+  const branchesFor = (repo: Repo) => (s.repo && atOf(s.repo, '') === atOf(repo, '') ? s.branches : null);
 
   /**
    * Fetches the inputs of a repository and indexes them as a directory (ADR 0020). `hash` is
    * the view to show afterwards; a failed open leaves the present graph as it is (G6).
    */
-  async function open(repo: Repo, note?: string, hash?: string) {
+  async function open(repo: Repo, note?: string, hash?: string, branch?: string) {
     const current = d.begin();
     const id = `${repo.owner}/${repo.name}`;
     try {
@@ -121,6 +133,8 @@ export function forgeSession(d: SessionDeps) {
         mode: 'graph',
         commits: s.commits?.anchor === f.sha ? s.commits : null,
         listOpen: false,
+        branch: branch ?? null,
+        branches: branchesFor(repo),
       });
       await d.show(r.graphText, summary, hash);
     } catch (e) {
@@ -174,7 +188,9 @@ export function forgeSession(d: SessionDeps) {
       const summary = summarize(`${id} ${names.base} → ${names.head}`, inputs.head.paths, graph, r.report, origin);
       summary.text += `, ${inputs.changed.length} changed files${note ? ` (${note})` : ''}`;
       set({
-        ...(keepList ? {} : { commits: null, listOpen: false }),
+        // A commit of the list stays on the branch it was listed from.
+        ...(keepList ? {} : { commits: null, listOpen: false, branch: null }),
+        branches: branchesFor(repo),
         at: atOf(repo, range.head),
         repo: bare(repo),
         head: { text: JSON.stringify(head), summary: headSummary },
@@ -251,13 +267,44 @@ export function forgeSession(d: SessionDeps) {
 
   /** Opens or closes the commit list. */
   function toggleList() {
-    set({ listOpen: !s.listOpen });
+    set(s.listOpen ? { listOpen: false } : { listOpen: true, branchOpen: false });
     if (s.listOpen) loadCommits();
   }
 
   /** Escape, or a click outside the list. */
   function closeList() {
     if (s.listOpen) set({ listOpen: false });
+  }
+
+  /** The branch menu: opens or closes it; each open lists the branches again, since they move. */
+  function toggleBranches() {
+    set(s.branchOpen ? { branchOpen: false } : { branchOpen: true, listOpen: false });
+    if (s.branchOpen) loadBranches();
+  }
+
+  /** Escape, or a click outside the menu. */
+  function closeBranches() {
+    if (s.branchOpen) set({ branchOpen: false });
+  }
+
+  /** One call; the list shown before stays while it waits. */
+  async function loadBranches() {
+    if (!s.repo) return;
+    const repo = s.repo;
+    set({ branchStatus: 'listing the branches' });
+    try {
+      const branches = await d.forge(repo).branches(repo);
+      if (s.repo === repo) set({ branches, branchStatus: null });
+    } catch (e) {
+      if (s.repo === repo) set({ branchStatus: `cannot list the branches: ${message(e)}` });
+    }
+  }
+
+  /** A branch of the menu: the plain graph of its head with a fresh view; the menu closes at once. */
+  async function pickBranch(name: string) {
+    if (!s.repo || !s.branches?.some((b) => b.name === name)) return;
+    set({ branchOpen: false });
+    await open({ ...s.repo, ref: name }, undefined, undefined, name);
   }
 
   /** The source switch of the toolbar. Without an overlay the commit view is the list to pick one from. */
@@ -293,6 +340,9 @@ export function forgeSession(d: SessionDeps) {
     followHash,
     toggleList,
     closeList,
+    toggleBranches,
+    closeBranches,
+    pickBranch,
     switchTo,
     pick,
     openInput,

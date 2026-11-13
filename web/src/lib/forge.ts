@@ -61,6 +61,14 @@ export interface Forge {
   mergeBase(repo: Repo, a: string, b: string): Promise<string>;
   /** The head commit of a pull request and its merge base with the base branch. */
   pull(repo: Repo, n: number): Promise<{ base: string; head: string }>;
+  /** The branches of the repository, at most the first 100, in the order of the forge. */
+  branches(repo: Repo): Promise<Branch[]>;
+}
+
+/** A branch with the sha of its head commit. */
+export interface Branch {
+  name: string;
+  sha: string;
 }
 
 /** `work` on each item with at most `limit` running at a time; the results in the order of the items. Rejects on the first failure. */

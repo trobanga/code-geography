@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, tick, untrack } from 'svelte';
   import CommitList from './components/CommitList.svelte';
+  import BranchList from './components/BranchList.svelte';
   import CommitStrip from './components/CommitStrip.svelte';
   import DetailPanel from './components/DetailPanel.svelte';
   import Diagram from './components/Diagram.svelte';
@@ -384,7 +385,12 @@
   }
 
   function onKey(e: KeyboardEvent) {
-    // Escape closes the commit list first, also from an input field.
+    // Escape closes the branch menu or the commit list first, also from an input field.
+    if (e.key === 'Escape' && fs.branchOpen) {
+      e.preventDefault();
+      forge.closeBranches();
+      return;
+    }
     if (e.key === 'Escape' && fs.listOpen) {
       e.preventDefault();
       forge.closeList();
@@ -503,6 +509,7 @@
   onpointerdown={(e) => {
     // A click outside the commit list closes it. Not on its control: the click that follows toggles it.
     if (fs.listOpen && !(e.target as Element | null)?.closest?.('[data-commits], [data-list-toggle]')) forge.closeList();
+    if (fs.branchOpen && !(e.target as Element | null)?.closest?.('[data-branches], [data-branch-toggle]')) forge.closeBranches();
   }}
   ondragenter={(e) => {
     if (carriesFiles(e)) dragDepth++;
@@ -556,8 +563,36 @@
     {auth}
   />
   {#if project && !phase}
-    <div class="border-b border-[var(--line)] px-3 py-1 text-[var(--muted)]" title={project.tooltip} data-project>
-      {project.text}
+    <div class="flex items-center gap-3 border-b border-[var(--line)] px-3 py-1 text-[var(--muted)]" title={project.tooltip} data-project>
+      {#if fs.at}
+        <button
+          class="flex shrink-0 items-center gap-2 border border-[var(--line)] px-2 py-0.5 text-[var(--fg)] hover:border-[var(--muted)] {fs.branchOpen ? 'bg-[var(--line)]' : ''}"
+          onclick={forge.toggleBranches}
+          title="switch to another branch"
+          aria-haspopup="listbox"
+          aria-expanded={fs.branchOpen}
+          data-branch-toggle
+        >
+          <span class="text-[var(--muted)]">branch</span>
+          {#if fs.branch}<span>{fs.branch}</span>{/if}
+          <span class="text-[var(--muted)]" aria-hidden="true">▾</span>
+        </button>
+      {/if}
+      <span class="min-w-0">{project.text}</span>
+    </div>
+  {/if}
+  {#if fs.at && fs.branchOpen}
+    <!-- A menu over the diagram, like the commit list. -->
+    <div class="relative z-30">
+      <div class="absolute inset-x-0 top-0 shadow-lg">
+        <BranchList
+          branches={fs.branches}
+          status={fs.branchStatus}
+          current={fs.branch}
+          head={fs.at.slice(fs.at.lastIndexOf('@') + 1)}
+          onpick={forge.pickBranch}
+        />
+      </div>
     </div>
   {/if}
   <EdgeBar {opts} onchange={(patch) => Object.assign(opts, patch)} drawn={paintedCount} total={drawn?.total ?? 0} dropped={drawn?.dropped ?? 0}

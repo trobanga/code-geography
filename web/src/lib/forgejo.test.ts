@@ -135,6 +135,18 @@ describe('forgejo commits and pull', () => {
   });
 });
 
+describe('forgejo branches', () => {
+  it('lists the first 100 branches with the id of their head commit, in one call, with the token of the origin', async () => {
+    const b = (name: string, id: string) => ({ name, commit: { id, message: 'm', url: `${ORIGIN}/mergiraf/mergiraf/commit/${id}` }, protected: false });
+    const net = fakeFetch({ [`${API}/branches?limit=100`]: () => json([b('main', SHA), b('feature/x', PARENT)]) });
+    expect(await forgejo(net, ORIGIN, 'secret').branches(repo)).toEqual([
+      { name: 'main', sha: SHA },
+      { name: 'feature/x', sha: PARENT },
+    ]);
+    expect(net.calls).toEqual([{ url: `${API}/branches?limit=100`, headers: { Authorization: 'token secret' } }]);
+  });
+});
+
 describe('forgejo mergeBase', () => {
   const MB = '1e848e491951b94e233c9ca52102b7b7e63bde39';
   const c = (sha: string, ...parents: string[]) => ({ sha, parents: parents.map((p) => ({ sha: p })) });

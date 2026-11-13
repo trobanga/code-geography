@@ -57,6 +57,14 @@ function setup() {
     async pull() {
       throw new Error('unused');
     },
+    async branches(repo) {
+      calls.push(`branches ${repo.name}`);
+      if (repo.name === 'broken') throw new Error('o/broken: HTTP 500');
+      return [
+        { name: 'main', sha: HEAD },
+        { name: 'old', sha: BASE },
+      ];
+    },
   };
   let seq = 0;
   let state: ForgeState = NO_FORGE;
@@ -377,6 +385,146 @@ describe('forgeSession', () => {
     await first;
     expect(t.errors).toEqual([]);
     expect(t.shown).toEqual([]);
+  });
+});
+
+describe('the branch menu', () => {
+  it('toggleBranches opens the menu and lists the branches of the repository shown', async () => {
+    const t = setup();
+    await t.session.open({ ...REPO, ref: 'main' });
+    t.session.toggleBranches();
+    expect(t.state().branchOpen).toBe(true);
+    await until(() => t.state().branches !== null);
+    expect(t.state().branches).toEqual([
+      { name: 'main', sha: HEAD },
+      { name: 'old', sha: BASE },
+    ]);
+    expect(t.calls.filter((c) => c.startsWith('branches'))).toEqual(['branches r']);
+  });
+
+  it('shows a status while it waits, and the message of the forge when the listing fails', async () => {
+    const t = setup();
+    await t.session.open({ ...REPO, ref: 'main' });
+    t.session.toggleBranches();
+    expect(t.state().branchStatus).toBe('listing the branches');
+    await until(() => t.state().branches !== null);
+    expect(t.state().branchStatus).toBeNull();
+    const u = setup();
+    await u.session.open({ owner: 'o', name: 'broken', ref: 'main' });
+    u.session.toggleBranches();
+    await until(() => u.state().branchStatus !== 'listing the branches');
+    expect(u.state()).toMatchObject({ branchOpen: true, branches: null, branchStatus: 'cannot list the branches: o/broken: HTTP 500' });
+  });
+
+  it('a second open of the menu lists the branches again and shows the list of before meanwhile; a close fetches nothing', async () => {
+    const t = setup();
+    await t.session.open({ ...REPO, ref: 'main' });
+    t.session.toggleBranches();
+    await until(() => t.state().branches !== null);
+    t.session.toggleBranches();
+    expect(t.state().branchOpen).toBe(false);
+    t.session.toggleBranches();
+    expect(t.state()).toMatchObject({ branchOpen: true, branchStatus: 'listing the branches', branches: [{ name: 'main' }, { name: 'old' }] });
+    await until(() => t.state().branchStatus === null);
+    expect(t.calls.filter((c) => c.startsWith('branches'))).toEqual(['branches r', 'branches r']);
+  });
+
+  it('pickBranch closes the menu at once and opens the head of that branch as the plain graph with a fresh view', async () => {
+    const t = setup();
+    await t.session.overlay({ ...REPO, ref: HEAD }, { base: BASE, head: HEAD });
+    t.session.toggleBranches();
+    await until(() => t.state().branches !== null);
+    const picked = t.session.pickBranch('old');
+    expect(t.state().branchOpen).toBe(false);
+    await picked;
+    expect(t.calls).toContain('resolve old');
+    expect(t.shown.at(-1)).toMatchObject({ name: `o/r@old (${BASE.slice(0, 7)})`, hash: undefined, at: `o/r@${BASE}` });
+    expect(t.state()).toMatchObject({ mode: 'graph', overlay: null, branch: 'old', repo: REPO });
+  });
+
+  it('pickBranch of a name that the menu does not list does nothing', async () => {
+    const t = setup();
+    await t.session.open({ ...REPO, ref: 'main' });
+    t.session.toggleBranches();
+    await until(() => t.state().branches !== null);
+    const before = t.state();
+    const fetched = t.calls.length;
+    await t.session.pickBranch('nope');
+    expect(t.state()).toBe(before);
+    expect(t.calls).toHaveLength(fetched);
+  });
+
+  it('a pick from the commit list keeps the branch; any other open or overlay resets it', async () => {
+    const t = setup();
+    const onBranch = async () => {
+      t.session.toggleBranches();
+      await until(() => t.state().branchStatus === null);
+      await t.session.pickBranch('main');
+      expect(t.state().branch).toBe('main');
+    };
+    await t.session.open({ ...REPO, ref: 'main' });
+    await onBranch();
+    t.session.toggleList();
+    await until(() => t.state().commits !== null);
+    await t.session.pick(HEAD);
+    expect(t.state()).toMatchObject({ mode: 'commit', branch: 'main' });
+    await t.session.open({ ...REPO, ref: 'main' });
+    expect(t.state().branch).toBeNull();
+    await onBranch();
+    await t.session.overlay({ ...REPO, ref: HEAD }, { base: BASE, head: HEAD });
+    expect(t.state().branch).toBeNull();
+  });
+
+  it('the branch menu and the commit list close each other when one opens', async () => {
+    const t = setup();
+    await t.session.open({ ...REPO, ref: 'main' });
+    t.session.toggleList();
+    t.session.toggleBranches();
+    expect(t.state()).toMatchObject({ branchOpen: true, listOpen: false });
+    t.session.toggleList();
+    expect(t.state()).toMatchObject({ branchOpen: false, listOpen: true });
+  });
+
+  it('closeBranches closes the open menu and keeps its branches; on a closed menu it does nothing', async () => {
+    const t = setup();
+    await t.session.open({ ...REPO, ref: 'main' });
+    t.session.toggleBranches();
+    await until(() => t.state().branches !== null);
+    t.session.closeBranches();
+    expect(t.state()).toMatchObject({ branchOpen: false, branches: [{ name: 'main' }, { name: 'old' }] });
+    const before = t.state();
+    t.session.closeBranches();
+    expect(t.state()).toBe(before);
+  });
+
+  it('a reply for a repository no longer shown changes nothing, also a failed one', async () => {
+    const t = setup();
+    await t.session.open({ ...REPO, ref: 'main' });
+    t.session.toggleBranches();
+    t.session.forget();
+    await until(() => false);
+    expect(t.state()).toEqual(NO_FORGE);
+    await t.session.open({ owner: 'o', name: 'broken', ref: 'main' });
+    t.session.toggleBranches();
+    t.session.forget();
+    await until(() => false);
+    expect(t.state()).toEqual(NO_FORGE);
+  });
+
+  it('keeps the branches for another commit of the same repository and drops them for another repository', async () => {
+    const t = setup();
+    await t.session.open({ ...REPO, ref: 'main' });
+    t.session.toggleBranches();
+    await until(() => t.state().branches !== null);
+    await t.session.pickBranch('old');
+    await t.session.overlay({ ...REPO, ref: HEAD }, { base: BASE, head: HEAD });
+    expect(t.state().branches).toHaveLength(2);
+    await t.session.open({ owner: 'o', name: 'other', ref: 'main' });
+    expect(t.state().branches).toBeNull();
+    t.session.toggleBranches();
+    await until(() => t.state().branches !== null);
+    await t.session.overlay({ owner: 'o', name: 'r', ref: HEAD }, { base: BASE, head: HEAD });
+    expect(t.state().branches).toBeNull();
   });
 });
 

@@ -117,6 +117,8 @@ pnpm dev                                     # http://localhost:5173/
   `[[bin]]` paths other than the Cargo defaults are not read (ADR 0016).
 - No AI grouping (deferred, ADR 0010). GitHub: public repositories only (no token yet,
   60 API calls per hour); the overlay from a forge compares trees by blob sha (ADR 0021).
+  The branch menu lists at most the first 100 branches; the hash holds the sha only, so a
+  reload shows the same commit but no longer knows the branch name.
 - Forgejo (ADR 0022): an unknown host is taken as Forgejo (`kindOf`); GitLab is
   planned, not built ("not supported yet"). A private
   repository needs a token and `[cors] ENABLED = true` with the viewer origin in

@@ -1,6 +1,6 @@
 // Forgejo (and Gitea) as a `Forge` (ADR 0022): the only place that knows their URLs and answers.
 // Every URL is built from the origin and a path; no URL of an answer is ever followed (T-2).
-import type { Commit, Entry, Fetch, Forge, Repo } from './forge';
+import type { Branch, Commit, Entry, Fetch, Forge, Repo } from './forge';
 import type { Parsed } from './forgeDiff';
 import { withRange } from './github';
 import { authorized, ForeignOrigin } from './tokenStore';
@@ -122,6 +122,12 @@ export function forgejo(net: { fetch: Fetch }, origin: string, token?: string): 
     async pull(repo, n) {
       const body = (await (await get(api(repo, `/pulls/${n}`), repo)).json()) as { merge_base: string; head: { sha: string } };
       return { base: body.merge_base, head: body.head.sha };
+    },
+
+    /** One API call; the first page of 100. */
+    async branches(repo) {
+      const body = (await (await get(api(repo, '/branches?limit=100'), repo)).json()) as { name: string; commit: { id: string } }[];
+      return body.map((b): Branch => ({ name: b.name, sha: b.commit.id }));
     },
   };
 }

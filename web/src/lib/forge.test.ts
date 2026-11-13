@@ -25,6 +25,7 @@ function fakeForge(files: Record<string, string>, host = 'example.org') {
     commits: async () => [],
     mergeBase: async () => SHA,
     pull: async () => ({ base: SHA, head: SHA }),
+    branches: async () => [],
   };
   return { forge, calls };
 }

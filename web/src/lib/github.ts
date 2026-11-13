@@ -1,6 +1,6 @@
 // GitHub as a `Forge` (ADR 0020): the only place that knows GitHub URLs and answers.
 // The tree comes from the API (one call), the texts from the raw host (no API limit).
-import type { Commit, Entry, Fetch, Forge, Repo } from './forge';
+import type { Branch, Commit, Entry, Fetch, Forge, Repo } from './forge';
 import type { Parsed } from './forgeDiff';
 
 const OWNER = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/;
@@ -139,6 +139,13 @@ export function github(net: Net): Forge {
       }
       const body = (await r.json()) as { head: { sha: string }; base: { sha: string } };
       return { base: await mergeBase(net, repo, body.base.sha, body.head.sha), head: body.head.sha };
+    },
+
+    /** One API call; the first page of 100. */
+    async branches(repo) {
+      const url = `${API}/repos/${repo.owner}/${repo.name}/branches?per_page=100`;
+      const body = (await (await get(net, url, repo)).json()) as { name: string; commit: { sha: string } }[];
+      return body.map((b): Branch => ({ name: b.name, sha: b.commit.sha }));
     },
   };
 }
