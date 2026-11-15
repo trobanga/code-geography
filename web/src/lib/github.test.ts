@@ -209,8 +209,17 @@ describe('commits', () => {
   });
 });
 
+describe('an unknown commit', () => {
+  it('the commit list names the commit that GitHub does not find (404), not only the repository', async () => {
+    const net = fakeFetch({});
+    await expect(github({ fetch: net.fetch }).commits({ owner: 'a', name: 'b' }, 'deadbeef', 1)).rejects.toThrow(
+      'a/b: no branch, tag or commit "deadbeef", or the repository is not found or private',
+    );
+  });
+});
+
 describe('branches', () => {
-  it('lists the first 100 branches with the sha of their head, in one call', async () => {
+  it('lists the branches with the sha of their head; one call for less than 100 branches', async () => {
     const net = fakeFetch({
       'https://api.github.com/repos/a/b/branches?per_page=100': json([
         { name: 'main', commit: { sha: SHA, url: 'u' }, protected: true },
@@ -222,6 +231,18 @@ describe('branches', () => {
       { name: 'feature/x', sha: P1 },
     ]);
     expect(net.calls).toHaveLength(1);
+  });
+
+  it('lists all branches: further pages of 100 until a page is not full', async () => {
+    const page = (from: number, n: number) => json(Array.from({ length: n }, (_, i) => ({ name: `b${from + i}`, commit: { sha: SHA } })));
+    const net = fakeFetch({
+      'https://api.github.com/repos/a/b/branches?per_page=100': page(0, 100),
+      'https://api.github.com/repos/a/b/branches?per_page=100&page=2': page(100, 100),
+      'https://api.github.com/repos/a/b/branches?per_page=100&page=3': page(200, 1),
+    });
+    const all = await github({ fetch: net.fetch }).branches({ owner: 'a', name: 'b' });
+    expect(all.map((b) => b.name)).toEqual(Array.from({ length: 201 }, (_, i) => `b${i}`));
+    expect(net.calls).toHaveLength(3);
   });
 });
 

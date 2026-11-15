@@ -25,7 +25,7 @@ export interface ForgeState {
   overlay: (Kept & { range: Range }) | null;
   mode: Source;
   /** The last commits reachable from the sha at which the list was asked for; kept while its commits are picked. */
-  commits: { anchor: string; list: Commit[] } | null;
+  commits: { anchor: string; list: Commit[]; /** The page that `loadMore` goes on from; null: the list holds the whole history. */ next: number | null } | null;
   listStatus: string | null;
   listOpen: boolean;
   /** The branches, as listed when the branch menu was opened last. */
@@ -257,11 +257,26 @@ export function forgeSession(d: SessionDeps) {
     const anchor = s.at.slice(s.at.lastIndexOf('@') + 1);
     set({ listStatus: `listing the last ${COMMITS} commits` });
     try {
-      const list = await listedCommits(d.forge(repo), repo, anchor, COMMITS, await d.cache());
+      const { list, next } = await listedCommits(d.forge(repo), repo, anchor, COMMITS, await d.cache());
       if (s.repo !== repo) return;
-      set({ commits: { anchor, list }, listStatus: null });
+      set({ commits: { anchor, list, next }, listStatus: null });
     } catch (e) {
       set({ listStatus: `cannot list the commits: ${message(e)}` });
+    }
+  }
+
+  /** The next commits of the history, after those of the list; the list stays while they load, and after a failure. */
+  async function loadMore() {
+    const had = s.commits;
+    if (!s.repo || !had || had.next === null) return;
+    const repo = s.repo;
+    set({ listStatus: `listing ${COMMITS} more commits` });
+    try {
+      const { list, next } = await listedCommits(d.forge(repo), repo, had.anchor, COMMITS, await d.cache(), had.next);
+      if (s.commits !== had) return;
+      set({ commits: { anchor: had.anchor, list: [...had.list, ...list], next }, listStatus: null });
+    } catch (e) {
+      if (s.commits === had) set({ listStatus: `cannot list more commits: ${message(e)}` });
     }
   }
 
@@ -324,6 +339,19 @@ export function forgeSession(d: SessionDeps) {
     await overlay({ ...s.repo, ref: c.sha }, { base: c.parents[0] ?? null, head: c.sha }, undefined, undefined, true);
   }
 
+  /**
+   * A sha typed or pasted into the commit list, full or short: its overlay against the first
+   * parent. A listed commit costs no call; any other is resolved by the forge and can be on
+   * another branch, so the list and the branch do not stay.
+   */
+  async function pickSha(sha: string) {
+    if (!s.repo) return;
+    const c = s.commits?.list.find((x) => x.sha.startsWith(sha));
+    if (c) return pick(c.sha);
+    set({ listOpen: false });
+    await overlay({ ...s.repo, ref: sha }, { kind: 'commit' });
+  }
+
   /** The text of the input field: the message for anything that is not a repository (G1), else null. */
   function openInput(input: string): string | null {
     const p = d.parse(input);
@@ -344,7 +372,9 @@ export function forgeSession(d: SessionDeps) {
     closeBranches,
     pickBranch,
     switchTo,
+    loadMore,
     pick,
+    pickSha,
     openInput,
     /** Another source is shown: nothing of the repository stays. */
     forget: () => {

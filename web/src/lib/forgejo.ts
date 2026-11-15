@@ -124,10 +124,21 @@ export function forgejo(net: { fetch: Fetch }, origin: string, token?: string): 
       return { base: body.merge_base, head: body.head.sha };
     },
 
-    /** One API call; the first page of 100. */
+    /**
+     * One API call per page, until the list holds the total that the host announces
+     * (`X-Total-Count`), or a page is empty. The host can give smaller pages than asked for, so
+     * a page that is not full says nothing.
+     */
     async branches(repo) {
-      const body = (await (await get(api(repo, '/branches?limit=100'), repo)).json()) as { name: string; commit: { id: string } }[];
-      return body.map((b): Branch => ({ name: b.name, sha: b.commit.id }));
+      const out: Branch[] = [];
+      for (let page = 1; ; page++) {
+        const r = await get(api(repo, `/branches?limit=100${page > 1 ? `&page=${page}` : ''}`), repo);
+        const body = (await r.json()) as { name: string; commit: { id: string } }[];
+        for (const b of body) out.push({ name: b.name, sha: b.commit.id });
+        const total = r.headers.get('x-total-count');
+        // No total, or one that the pages do not reach (a branch went away between two calls): an empty page ends the list.
+        if (body.length === 0 || (total !== null && out.length >= Number(total))) return out;
+      }
     },
   };
 }

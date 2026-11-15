@@ -116,18 +116,21 @@ export async function cachedCommits(forge: Forge, repo: Repo, sha: string, n: nu
 }
 
 /**
- * The history from `sha` for the commit list: pages of `want` commits (one call each, cached)
- * until `want` commits stay after the commits of update bots go (`withoutUpdates`), or the history
- * ends, or after `LIST_PAGES` pages (a forge permits a limited number of calls).
+ * The history from `sha` for the commit list: pages of `want` commits (one call each, cached),
+ * the first one `from`, until `want` commits stay after the commits of update bots go
+ * (`withoutUpdates`), or the history ends, or after `LIST_PAGES` pages (a forge permits a limited
+ * number of calls). `next` is the page to go on from; null: the history ended.
  */
-export async function listedCommits(forge: Forge, repo: Repo, sha: string, want: number, cache: TextCache): Promise<Commit[]> {
+export async function listedCommits(forge: Forge, repo: Repo, sha: string, want: number, cache: TextCache, from = 1): Promise<{ list: Commit[]; next: number | null }> {
   const list: Commit[] = [];
-  for (let page = 1; page <= LIST_PAGES; page++) {
+  let page = from;
+  for (; page < from + LIST_PAGES; page++) {
     const more = await cachedCommits(forge, repo, sha, want, cache, page);
     list.push(...more);
-    if (more.length < want || withoutUpdates(list).length >= want) break;
+    if (more.length < want) return { list, next: null };
+    if (withoutUpdates(list).length >= want) return { list, next: page + 1 };
   }
-  return list;
+  return { list, next: page };
 }
 
 const LIST_PAGES = 5;

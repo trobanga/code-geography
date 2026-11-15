@@ -46,6 +46,9 @@ function setup() {
     async commits(repo, s, n, page = 1) {
       calls.push(`commits ${s[0]} ${n}${page > 1 ? ` page ${page}` : ''}`);
       if (repo.name === 'broken') throw new Error('o/broken: HTTP 500');
+      if (s.startsWith('dead')) throw new Error(`o/r@${s.slice(0, 7)}: not found`);
+      // A repository with a history of 70 commits.
+      if (repo.name === 'long') return Array.from({ length: 70 }, (_, i) => commit(`c${i}`, [`c${i + 1}`])).slice((page - 1) * n, page * n);
       // A repository whose newest `n` commits are all of an update bot.
       if (repo.name === 'updates' && page === 1) return Array.from({ length: n }, (_, i) => ({ ...commit(`bot${i}`, []), author: 'renovate[bot]' }));
       if (page > 1 && repo.name !== 'updates') return [];
@@ -291,6 +294,26 @@ describe('forgeSession', () => {
     expect(t.state().commits?.list.slice(-2)).toMatchObject([{ sha: HEAD }, { sha: BASE }]);
   });
 
+  it('loadMore appends the next 30 commits to the list, until the history ends; then it asks no more', async () => {
+    const t = setup();
+    await t.session.open({ owner: 'o', name: 'long', ref: 'main' });
+    t.session.toggleList();
+    await until(() => t.state().commits !== null);
+    expect(t.state().commits).toMatchObject({ next: 2 });
+    const more = t.session.loadMore();
+    expect(t.state().listStatus).toBe('listing 30 more commits');
+    // The rows stay while the next ones load.
+    expect(t.state().commits!.list).toHaveLength(30);
+    await more;
+    expect(t.state()).toMatchObject({ listStatus: null, commits: { anchor: HEAD, next: 3 } });
+    expect(t.state().commits!.list.map((c) => c.sha)).toEqual(Array.from({ length: 60 }, (_, i) => `c${i}`));
+    await t.session.loadMore();
+    expect(t.state().commits).toMatchObject({ next: null });
+    expect(t.state().commits!.list).toHaveLength(70);
+    await t.session.loadMore();
+    expect(t.calls.filter((c) => c.startsWith('commits'))).toEqual(['commits a 30', 'commits a 30 page 2', 'commits a 30 page 3']);
+  });
+
   it('the switch to the commit view without an overlay opens the commit list', async () => {
     const t = setup();
     await t.session.open({ ...REPO, ref: 'main' });
@@ -313,6 +336,47 @@ describe('forgeSession', () => {
     expect(t.state().overlay!.range).toEqual({ base: BASE, head: HEAD });
     expect(t.state()).toMatchObject({ listOpen: false, commits: { anchor: HEAD } });
     expect(t.shown).toHaveLength(2);
+  });
+
+  it('a pasted sha of a listed commit, full or short: the overlay of that commit with no call for it; the list keeps its commits', async () => {
+    const t = setup();
+    await t.session.open({ ...REPO, ref: 'main' });
+    t.session.toggleList();
+    await until(() => t.state().commits !== null);
+    const picked = t.session.pickSha('bbbbbbb');
+    expect(t.state().listOpen).toBe(false);
+    await picked;
+    expect(t.state().overlay!.range).toEqual({ base: null, head: BASE });
+    expect(t.state()).toMatchObject({ commits: { anchor: HEAD } });
+    expect(t.calls.filter((c) => c.startsWith('commits'))).toEqual(['commits a 30']);
+  });
+
+  it('a pasted sha that the list does not hold: one call resolves it, then its overlay; the list and the branch go, since the commit can be on another branch', async () => {
+    const t = setup();
+    await t.session.open({ ...REPO, ref: 'main' });
+    t.session.toggleBranches();
+    await until(() => t.state().branches !== null);
+    await t.session.pickBranch('old');
+    t.session.toggleList();
+    await until(() => t.state().commits !== null);
+    expect(t.state()).toMatchObject({ branch: 'old', commits: { anchor: BASE, list: [{ sha: BASE }] } });
+    const picked = t.session.pickSha('aaaaaaa');
+    expect(t.state().listOpen).toBe(false);
+    await picked;
+    expect(t.calls.filter((c) => c.startsWith('commits'))).toEqual(['commits b 30', 'commits a 1']);
+    expect(t.state().overlay!.range).toEqual({ base: BASE, head: HEAD });
+    expect(t.state()).toMatchObject({ at: `o/r@${HEAD}`, commits: null, branch: null });
+  });
+
+  it('a pasted sha that the forge does not know: its message; the picture, the list and the branch stay', async () => {
+    const t = setup();
+    await t.session.open({ ...REPO, ref: 'main' });
+    t.session.toggleList();
+    await until(() => t.state().commits !== null);
+    await t.session.pickSha('dead'.repeat(10));
+    expect(t.errors).toEqual(['cannot build the overlay of o/r: o/r@deaddea: not found']);
+    expect(t.state()).toMatchObject({ at: `o/r@${HEAD}`, mode: 'graph', overlay: null, commits: { anchor: HEAD } });
+    expect(t.shown).toHaveLength(1);
   });
 
   it('closeList closes the open list and keeps its commits; on a closed list it does nothing', async () => {

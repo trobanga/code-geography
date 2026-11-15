@@ -161,16 +161,30 @@ describe('listedCommits', () => {
     const calls: string[] = [];
     // Pages of 3: [Ann, bot, bot], [bot, Bo, bot], [Cy, Di, Ed], [Fy].
     const forge = linear(['Ann', 'renovate[bot]', 'renovate[bot]', 'dependabot[bot]', 'Bo', 'renovate[bot]', 'Cy', 'Di', 'Ed', 'Fy'], calls);
-    const list = await listedCommits(forge, REPO, 'c0', 3, memoryCache());
+    const { list } = await listedCommits(forge, REPO, 'c0', 3, memoryCache());
     expect(commitRows(list, null).map((r) => r.sha)).toEqual(['c0', 'c4', 'c6', 'c7', 'c8']);
     expect(calls).toEqual(['commits c0 3 1', 'commits c0 3 2', 'commits c0 3 3']);
   });
 
+  it('tells the page to go on from, and goes on from it; none after the page that ends the history', async () => {
+    const calls: string[] = [];
+    const forge = linear(['Ann', 'Bo', 'Cy', 'Di', 'Ed'], calls);
+    const cache = memoryCache();
+    const first = await listedCommits(forge, REPO, 'c0', 2, cache);
+    expect(first).toMatchObject({ list: [{ sha: 'c0' }, { sha: 'c1' }], next: 2 });
+    const second = await listedCommits(forge, REPO, 'c0', 2, cache, 2);
+    expect(second).toMatchObject({ list: [{ sha: 'c2' }, { sha: 'c3' }], next: 3 });
+    const last = await listedCommits(forge, REPO, 'c0', 2, cache, 3);
+    expect(last).toEqual({ list: [expect.objectContaining({ sha: 'c4' })], next: null });
+    expect(calls).toEqual(['commits c0 2 1', 'commits c0 2 2', 'commits c0 2 3']);
+  });
+
   it('stops after 5 pages: a history of bot commits only must not use up the calls that the forge permits', async () => {
     const calls: string[] = [];
-    const list = await listedCommits(linear(Array(40).fill('renovate[bot]'), calls), REPO, 'c0', 2, memoryCache());
+    const { list, next } = await listedCommits(linear(Array(40).fill('renovate[bot]'), calls), REPO, 'c0', 2, memoryCache());
     expect(calls).toHaveLength(5);
     expect(list).toHaveLength(10);
+    expect(next).toBe(6);
   });
 });
 

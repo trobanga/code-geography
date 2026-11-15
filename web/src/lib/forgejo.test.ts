@@ -136,14 +136,42 @@ describe('forgejo commits and pull', () => {
 });
 
 describe('forgejo branches', () => {
-  it('lists the first 100 branches with the id of their head commit, in one call, with the token of the origin', async () => {
-    const b = (name: string, id: string) => ({ name, commit: { id, message: 'm', url: `${ORIGIN}/mergiraf/mergiraf/commit/${id}` }, protected: false });
-    const net = fakeFetch({ [`${API}/branches?limit=100`]: () => json([b('main', SHA), b('feature/x', PARENT)]) });
+  const b = (name: string, id: string) => ({ name, commit: { id, message: 'm', url: `${ORIGIN}/mergiraf/mergiraf/commit/${id}` }, protected: false });
+  /** A page of branches; `total` is the `X-Total-Count` header, which Forgejo exposes to a browser. */
+  const page = (names: string[], total?: number) => () =>
+    new Response(JSON.stringify(names.map((n) => b(n, SHA))), { headers: total === undefined ? {} : { 'x-total-count': String(total) } });
+
+  it('lists the branches with the id of their head commit, with the token of the origin; one call when the first page holds all', async () => {
+    const net = fakeFetch({
+      [`${API}/branches?limit=100`]: () => new Response(JSON.stringify([b('main', SHA), b('feature/x', PARENT)]), { headers: { 'x-total-count': '2' } }),
+    });
     expect(await forgejo(net, ORIGIN, 'secret').branches(repo)).toEqual([
       { name: 'main', sha: SHA },
       { name: 'feature/x', sha: PARENT },
     ]);
     expect(net.calls).toEqual([{ url: `${API}/branches?limit=100`, headers: { Authorization: 'token secret' } }]);
+  });
+
+  it('lists all branches: further pages until the announced total, also when the host gives smaller pages than asked for', async () => {
+    const net = fakeFetch({
+      [`${API}/branches?limit=100`]: page(['a', 'b'], 3),
+      [`${API}/branches?limit=100&page=2`]: page(['c'], 3),
+    });
+    expect((await forgejo(net, ORIGIN).branches(repo)).map((x) => x.name)).toEqual(['a', 'b', 'c']);
+    expect(net.calls).toHaveLength(2);
+  });
+
+  it('without an announced total, or with a total that the pages do not reach, asks until a page is empty', async () => {
+    const silent = fakeFetch({
+      [`${API}/branches?limit=100`]: page(['a', 'b']),
+      [`${API}/branches?limit=100&page=2`]: page(['c']),
+      [`${API}/branches?limit=100&page=3`]: page([]),
+    });
+    expect((await forgejo(silent, ORIGIN).branches(repo)).map((x) => x.name)).toEqual(['a', 'b', 'c']);
+    // A branch was deleted between two calls.
+    const short = fakeFetch({ [`${API}/branches?limit=100`]: page(['a', 'b'], 3), [`${API}/branches?limit=100&page=2`]: page([], 2) });
+    expect((await forgejo(short, ORIGIN).branches(repo)).map((x) => x.name)).toEqual(['a', 'b']);
+    expect(short.calls).toHaveLength(2);
   });
 });
 

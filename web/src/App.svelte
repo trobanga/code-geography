@@ -613,7 +613,15 @@
     <!-- A menu over the diagram: it takes no height, so that the diagram does not move when it opens. -->
     <div class="relative z-30">
       <div class="absolute inset-x-0 top-0 shadow-lg">
-        <CommitList {rows} hidden={fs.commits && rows ? fs.commits.list.length - rows.length : 0} status={fs.listStatus} onpick={forge.pick} />
+        <CommitList
+          {rows}
+          hidden={fs.commits && rows ? fs.commits.list.length - rows.length : 0}
+          status={fs.listStatus}
+          more={fs.commits ? fs.commits.next !== null : false}
+          onpick={forge.pick}
+          onsha={forge.pickSha}
+          onmore={forge.loadMore}
+        />
       </div>
     </div>
   {/if}

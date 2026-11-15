@@ -61,7 +61,7 @@ export interface Forge {
   mergeBase(repo: Repo, a: string, b: string): Promise<string>;
   /** The head commit of a pull request and its merge base with the base branch. */
   pull(repo: Repo, n: number): Promise<{ base: string; head: string }>;
-  /** The branches of the repository, at most the first 100, in the order of the forge. */
+  /** All branches of the repository, in the order of the forge; one call per page. */
   branches(repo: Repo): Promise<Branch[]>;
 }
 

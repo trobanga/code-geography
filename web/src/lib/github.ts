@@ -106,7 +106,11 @@ export function github(net: Net): Forge {
     /** One API call. */
     async commits(repo, sha, n, page = 1) {
       const url = `${API}/repos/${repo.owner}/${repo.name}/commits?sha=${encodeURIComponent(sha)}&per_page=${n}${page > 1 ? `&page=${page}` : ''}`;
-      const body = (await (await get(net, url, { ...repo, ref: sha })).json()) as {
+      // GitHub answers 404 for a repository that it does not show and for a sha that it does not know.
+      const r = await get(net, url, { ...repo, ref: sha }).catch((e) => {
+        throw e instanceof NotFound ? new Error(`${repo.owner}/${repo.name}: no branch, tag or commit "${sha}", or the repository is not found or private`) : e;
+      });
+      const body = (await r.json()) as {
         sha: string;
         parents: { sha: string }[];
         commit: { message: string; author: { name: string; date: string } | null };
@@ -141,11 +145,15 @@ export function github(net: Net): Forge {
       return { base: await mergeBase(net, repo, body.base.sha, body.head.sha), head: body.head.sha };
     },
 
-    /** One API call; the first page of 100. */
+    /** One API call per 100 branches: pages until one is not full. */
     async branches(repo) {
-      const url = `${API}/repos/${repo.owner}/${repo.name}/branches?per_page=100`;
-      const body = (await (await get(net, url, repo)).json()) as { name: string; commit: { sha: string } }[];
-      return body.map((b): Branch => ({ name: b.name, sha: b.commit.sha }));
+      const out: Branch[] = [];
+      for (let page = 1; ; page++) {
+        const url = `${API}/repos/${repo.owner}/${repo.name}/branches?per_page=100${page > 1 ? `&page=${page}` : ''}`;
+        const body = (await (await get(net, url, repo)).json()) as { name: string; commit: { sha: string } }[];
+        for (const b of body) out.push({ name: b.name, sha: b.commit.sha });
+        if (body.length < 100) return out;
+      }
     },
   };
 }
