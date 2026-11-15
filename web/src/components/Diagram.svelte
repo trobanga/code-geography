@@ -1,7 +1,7 @@
 <script lang="ts">
   import { badgeLabel, changeLabel } from '../lib/commit';
   import { breakdown } from '../lib/detail';
-  import { edgePoints, placeNodes, type Offset, type Rect } from '../lib/drag';
+  import { edgeRoutes, placeNodes, type Offset, type Rect } from '../lib/drag';
   import { changed, painted, type Drawn } from '../lib/edgeOptions';
   import { BOX } from '../lib/elkGraph';
   import type { Tree } from '../lib/expansion';
@@ -96,16 +96,19 @@
     const strength = lineStrength(selected, ve, betweenOnly);
     return { strength, touches: selected.length > 0 && strength !== 'dim' };
   };
+  // A line with one moved end gets a new route at right angles; the layout is not run again.
+  const routes = $derived(
+    edgeRoutes(
+      layout.edges.map((le) => ({ points: le.points, from: drawn.edges[le.index].from, to: drawn.edges[le.index].to })),
+      placed.shift,
+      rects,
+    ),
+  );
   const edges = $derived(
     layout.edges
-      .map((le) => {
+      .map((le, i) => {
         const ve = drawn.edges[le.index];
-        const a = rects.get(ve.from);
-        const b = rects.get(ve.to);
-        const pts =
-          a && b
-            ? edgePoints(le.points, placed.shift.get(ve.from) ?? ZERO, placed.shift.get(ve.to) ?? ZERO, a, b)
-            : le.points;
+        const pts = routes[i];
         return {
           key: le.index,
           ve,

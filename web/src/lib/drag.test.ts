@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { borderLine, edgePoints, GROW_PAD, placeNodes } from './drag';
+import { borderLine, edgeRoutes, GROW_PAD, placeNodes } from './drag';
 import type { LaidNode } from './layout';
 
 const n = (id: string, parent: string | null, x: number, y: number, w: number, h: number): LaidNode => ({
@@ -77,26 +77,46 @@ describe('borderLine', () => {
   });
 });
 
-describe('edgePoints', () => {
-  const route = [
+describe('edgeRoutes', () => {
+  const rects = new Map([
+    ['a', { x: 0, y: 0, w: 20, h: 20 }],
+    ['b', { x: 100, y: 60, w: 20, h: 20 }],
+    ['c', { x: 100, y: 0, w: 20, h: 20 }],
+  ]);
+  const elk = [
     { x: 0, y: 0 },
-    { x: 50, y: 0 },
-    { x: 50, y: 40 },
+    { x: 7, y: 0 },
   ];
-  const ra = { x: -10, y: -5, w: 10, h: 10 };
-  const rb = { x: 45, y: 40, w: 10, h: 10 };
+  const orthogonal = (pts: { x: number; y: number }[]) =>
+    pts.slice(1).every((p, i) => p.x === pts[i].x || p.y === pts[i].y);
+
+  it('routes a line with one moved end at right angles, from border to border', () => {
+    const shift = new Map([['a', { dx: 3, dy: 0 }]]);
+    const [pts] = edgeRoutes([{ points: elk, from: 'a', to: 'b' }], shift, rects);
+    expect(orthogonal(pts)).toBe(true);
+    expect(pts.length).toBeGreaterThan(2);
+    expect(pts[0].x).toBe(20);
+    expect(pts[pts.length - 1].x).toBe(100);
+  });
 
   it('keeps the ELK route when neither end moved', () => {
-    expect(edgePoints(route, { dx: 0, dy: 0 }, { dx: 0, dy: 0 }, ra, rb)).toBe(route);
+    expect(edgeRoutes([{ points: elk, from: 'a', to: 'b' }], new Map(), rects)[0]).toBe(elk);
   });
 
   it('translates the route when both ends moved by the same offset', () => {
-    const p = edgePoints(route, { dx: 3, dy: 4 }, { dx: 3, dy: 4 }, ra, rb);
-    expect(p[2]).toEqual({ x: 53, y: 44 });
+    const d = { dx: 3, dy: 4 };
+    const shift = new Map([['a', d], ['b', d]]);
+    expect(edgeRoutes([{ points: elk, from: 'a', to: 'b' }], shift, rects)[0][1]).toEqual({ x: 10, y: 4 });
   });
 
-  it('draws a border-to-border line when one end moved', () => {
-    const p = edgePoints(route, { dx: 3, dy: 0 }, { dx: 0, dy: 0 }, ra, rb);
-    expect(p).toEqual(borderLine(ra, rb));
+  it('gives two new routes at one side of a box distinct attach points', () => {
+    const shift = new Map([['a', { dx: 3, dy: 0 }]]);
+    const lines = [
+      { points: elk, from: 'a', to: 'b' },
+      { points: elk, from: 'a', to: 'c' },
+    ];
+    const [toB, toC] = edgeRoutes(lines, shift, rects);
+    expect(toB[0].x).toBe(toC[0].x);
+    expect(toB[0].y).not.toBe(toC[0].y);
   });
 });

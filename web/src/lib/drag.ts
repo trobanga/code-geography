@@ -1,5 +1,6 @@
 import { BOX } from './elkGraph';
 import type { LaidNode, Point } from './layout';
+import { orthoRoutes } from './ortho';
 
 export interface Offset {
   dx: number;
@@ -84,11 +85,37 @@ export function borderLine(a: Rect, b: Rect): [Point, Point] {
   return [clipFromCentre(a, dx, dy), clipFromCentre(b, -dx, -dy)];
 }
 
-/** The ELK route if neither end moved, translated if both moved alike, else a border-to-border line. */
-export function edgePoints(route: Point[], from: Offset, to: Offset, fromRect: Rect, toRect: Rect): Point[] {
-  if (from.dx === to.dx && from.dy === to.dy) {
-    if (from.dx === 0 && from.dy === 0) return route;
-    return route.map((p) => ({ x: p.x + from.dx, y: p.y + from.dy }));
-  }
-  return borderLine(fromRect, toRect);
+export interface RoutedLine {
+  /** The ELK route. */
+  points: Point[];
+  from: string;
+  to: string;
+}
+
+/**
+ * The points of each line, in input order: the ELK route if neither end moved, translated if
+ * both moved alike. The other lines get new routes at right angles between the boxes as they
+ * are, all in one call of `orthoRoutes`, so that they get distinct attach points.
+ */
+export function edgeRoutes(
+  lines: RoutedLine[],
+  shift: ReadonlyMap<string, Offset>,
+  rects: ReadonlyMap<string, Rect>,
+): Point[][] {
+  const out: Point[][] = [];
+  const again: number[] = [];
+  lines.forEach((l, i) => {
+    const from = shift.get(l.from) ?? ZERO;
+    const to = shift.get(l.to) ?? ZERO;
+    if (from.dx !== to.dx || from.dy !== to.dy) {
+      if (rects.has(l.from) && rects.has(l.to)) again.push(i);
+      out.push(l.points);
+    } else if (from.dx === 0 && from.dy === 0) out.push(l.points);
+    else out.push(l.points.map((p) => ({ x: p.x + from.dx, y: p.y + from.dy })));
+  });
+  orthoRoutes(
+    again.map((i) => lines[i]),
+    rects,
+  ).forEach((pts, k) => (out[again[k]] = pts));
+  return out;
 }
