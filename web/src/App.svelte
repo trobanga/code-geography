@@ -173,11 +173,11 @@
   const pending = $derived(asked && asked.from === view ? asked : null);
   const askBoxes = $derived(pending?.step === 'deeper' ? pending.boxes : null);
   const askLevel = $derived(pending && pending.step !== 'deeper' ? { level: pending.step, boxes: pending.boxes } : null);
-  // O2 → O3.
-  const drawn = $derived(view && tree ? edgePipeline(view.edges, tree, opts, focusActive(focus)) : null);
   const diff = $derived(graph?.diff ?? null);
   // Without a commit graph the option has no effect, even when the hash carries it.
   const changesOnly = $derived(diff !== null && opts.changesOnly);
+  // O2 → O3; with changes only, the layout gets the changed lines only.
+  const drawn = $derived(view && tree ? edgePipeline(view.edges, tree, opts, focusActive(focus), changesOnly) : null);
   const totals = $derived(graph && tree && diff ? commitTotals(graph, tree, tests) : null);
   const files = $derived(graph && tree && diff?.files ? changedFiles(graph, tree, tests) : null);
   /** Per module box: number of changed files that the test-code switch shows. */

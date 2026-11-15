@@ -193,6 +193,20 @@ describe('edgePipeline', () => {
   });
 });
 
+describe('edgePipeline with changes only', () => {
+  const nodes: GraphNode[] = ['m1', 'm2', 'm3'].map((id) => ({ id, parent: null, kind: 'module', name: id }));
+  const tree = buildTree(nodes);
+  const edges = [e('m1', 'm2', { imports: 1 }), e('m2', 'm3', { imports: 2 }, 1, 0), e('m1', 'm3', { imports: 1 })];
+  const pairs = (es: ViewEdge[]) => es.map((x) => `${x.from}>${x.to}`).join(' ');
+
+  it('gives the layout only the changed lines, so that it keeps no room for the others', () => {
+    const r = edgePipeline(edges, tree, { ...DEFAULT_EDGE_OPTIONS, implied: true }, false, true);
+    expect(pairs(r.edges)).toBe('m2>m3');
+    expect(r.implied).toEqual([]);
+    expect(r.total).toBe(3);
+  });
+});
+
 describe('painted with changes only', () => {
   it('paints only changed edges', () => {
     expect(painted(e('a', 'b', { imports: 1 }), false, null, null, true)).toBe(false);

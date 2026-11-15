@@ -138,8 +138,17 @@ export interface Drawn extends Lifted {
   hideImplied: boolean;
 }
 
-/** Drawable view edges → O2 → O3 → hide implied. O4 is in the WASM view, O1 only decides what is painted. */
-export function edgePipeline(viewEdges: ViewEdge[], tree: Tree, o: EdgeOptions, focused = false): Drawn {
+/**
+ * Drawable view edges → O2 → O3 → hide implied. O4 is in the WASM view, O1 only decides what is painted.
+ * `changesOnly`: the option is in effect (a commit is shown). Then only the changed lines stay, so
+ * that the layout keeps no room for lines that are not painted.
+ */
+export function edgePipeline(viewEdges: ViewEdge[], tree: Tree, o: EdgeOptions, focused = false, changesOnly = false): Drawn {
+  const d = allLines(viewEdges, tree, o, focused);
+  return changesOnly ? { ...d, edges: d.edges.filter(changed), implied: d.implied.filter(changed) } : d;
+}
+
+function allLines(viewEdges: ViewEdge[], tree: Tree, o: EdgeOptions, focused: boolean): Drawn {
   const all = viewEdges.filter((e) => drawable(tree, e));
   const kept = filterEdges(all, o.kinds);
   const l = o.lift ? liftEdges(kept, tree, focused) : { edges: kept, badges: new Map<string, Badge>(), lifted: [], dropped: 0 };
