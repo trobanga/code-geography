@@ -111,6 +111,8 @@ export interface EdgeOptions {
   lift: boolean;
   /** Commit overlay: paint only changed edges. */
   changesOnly: boolean;
+  /** With `changesOnly`: lay out the changed boxes together and the others next to them. */
+  changesTogether: boolean;
   /** Hide implied lines (a path shows them); null: auto, on above `IMPLIED_AUTO_FROM` lines. */
   implied: boolean | null;
 }
@@ -120,6 +122,7 @@ export const DEFAULT_EDGE_OPTIONS: EdgeOptions = Object.freeze({
   kinds: Object.freeze({ extends: true, implements: true, imports: true, type_ref: true, calls: true, value_ref: true }),
   lift: true,
   changesOnly: false,
+  changesTogether: false,
   implied: null,
 });
 
@@ -140,12 +143,12 @@ export interface Drawn extends Lifted {
 
 /**
  * Drawable view edges → O2 → O3 → hide implied. O4 is in the WASM view, O1 only decides what is painted.
- * `changesOnly`: the option is in effect (a commit is shown). Then only the changed lines stay, so
- * that the layout keeps no room for lines that are not painted.
+ * `together`: changes together is in effect (a commit is shown, changes only is on). Then only the
+ * changed lines stay, so that the layout keeps no room for lines that are not painted.
  */
-export function edgePipeline(viewEdges: ViewEdge[], tree: Tree, o: EdgeOptions, focused = false, changesOnly = false): Drawn {
+export function edgePipeline(viewEdges: ViewEdge[], tree: Tree, o: EdgeOptions, focused = false, together = false): Drawn {
   const d = allLines(viewEdges, tree, o, focused);
-  return changesOnly ? { ...d, edges: d.edges.filter(changed), implied: d.implied.filter(changed) } : d;
+  return together ? { ...d, edges: d.edges.filter(changed), implied: d.implied.filter(changed) } : d;
 }
 
 function allLines(viewEdges: ViewEdge[], tree: Tree, o: EdgeOptions, focused: boolean): Drawn {

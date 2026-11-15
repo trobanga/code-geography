@@ -164,7 +164,22 @@ function layOut(kids: string[], edges: { from: string; to: string }[], size: (id
   return skew(second.box) < skew(first.box) - Math.log(FLIP_GAIN) ? second : first;
 }
 
-export function toElkGraph(view: View, tree: Tree, nodeCount = view.nodes.length, shown?: ReadonlySet<string>): ElkNode {
+/** Prefix of the ids of boxes that exist only in the layout (`active` of `toElkGraph`); the picture has no such box. */
+export const LAYOUT_BOX = 'layout:';
+const NO_PADDING = '[top=0,left=0,bottom=0,right=0]';
+
+/**
+ * `active`: the boxes of interest (changed boxes and the ends of changed lines, with their
+ * containers). Each container then holds its active children in one layout box and the others in
+ * a second one, so that the active boxes are together at each depth.
+ */
+export function toElkGraph(
+  view: View,
+  tree: Tree,
+  nodeCount = view.nodes.length,
+  shown?: ReadonlySet<string>,
+  active?: ReadonlySet<string>,
+): ElkNode {
   const root: ElkNode = { id: 'root', layoutOptions: rootOptions(nodeCount), children: [], edges: [] };
   const visible = new Set(view.nodes);
   const kept = view.edges.filter((e) => visible.has(e.from) && visible.has(e.to) && drawable(tree, e));
@@ -245,6 +260,33 @@ export function toElkGraph(view: View, tree: Tree, nodeCount = view.nodes.length
     const p = parentOf(tree, id);
     const parent = p !== null ? elkById.get(p) : undefined;
     (parent ?? root).children!.push(elkById.get(id)!);
+  }
+  if (active) {
+    // Boxes with a line at them or below.
+    const lined = new Set<string>();
+    const mark = (id: string | null) => {
+      for (; id !== null && !lined.has(id); id = parentOf(tree, id)) lined.add(id);
+    };
+    for (const e of kept) (mark(e.from), mark(e.to));
+    for (const c of [root, ...elkById.values()]) {
+      const kids = c.children ?? [];
+      let act = kids.filter((k) => active.has(k.id));
+      const idle = kids.filter((k) => !active.has(k.id));
+      if (act.length === 0) continue;
+      const key = c === root ? '' : c.id;
+      const own = { ...layered, 'elk.direction': c === root ? 'RIGHT' : layoutOf(c.id).dir, 'elk.padding': NO_PADDING };
+      // In one graph for the whole hierarchy, ELK puts the children without a line into one
+      // column. A box that is laid out on its own packs them.
+      const loose = separate ? [] : act.filter((k) => !lined.has(k.id));
+      if (loose.length > 1) act = [...act.filter((k) => lined.has(k.id)), { id: `${LAYOUT_BOX}loose:${key}`, children: loose, layoutOptions: own }];
+      c.children =
+        idle.length === 0
+          ? act
+          : [
+              { id: `${LAYOUT_BOX}act:${key}`, children: act, layoutOptions: separate ? own : { 'elk.padding': NO_PADDING } },
+              { id: `${LAYOUT_BOX}idle:${key}`, children: idle, layoutOptions: own },
+            ];
+    }
   }
 
   const edges: ElkExtendedEdge[] = [];

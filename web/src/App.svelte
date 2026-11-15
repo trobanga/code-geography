@@ -13,7 +13,7 @@
   import type { Offset } from './lib/drag';
   import { DEFAULT_EDGE_OPTIONS, edgePipeline, painted, type Drawn, type EdgeOptions } from './lib/edgeOptions';
   import { toElkGraph } from './lib/elkGraph';
-  import { commitTotals, openChangedStep, pathToOpen } from './lib/commit';
+  import { activeBoxes, commitTotals, openChangedStep, pathToOpen } from './lib/commit';
   import { changedFiles } from './lib/files';
   import { focusActive, focusOn, NO_FOCUS, type Focus } from './lib/focus';
   import {
@@ -176,14 +176,17 @@
   const diff = $derived(graph?.diff ?? null);
   // Without a commit graph the option has no effect, even when the hash carries it.
   const changesOnly = $derived(diff !== null && opts.changesOnly);
-  // O2 → O3; with changes only, the layout gets the changed lines only.
-  const drawn = $derived(view && tree ? edgePipeline(view.edges, tree, opts, focusActive(focus), changesOnly) : null);
+  /** Changes together: the layout gets the changed lines only and puts the active boxes together. */
+  const together = $derived(changesOnly && opts.changesTogether);
+  // O2 → O3.
+  const drawn = $derived(view && tree ? edgePipeline(view.edges, tree, opts, focusActive(focus), together) : null);
   const totals = $derived(graph && tree && diff ? commitTotals(graph, tree, tests) : null);
   const files = $derived(graph && tree && diff?.files ? changedFiles(graph, tree, tests) : null);
   /** Per module box: number of changed files that the test-code switch shows. */
   const fileCounts = $derived(
     new Map((files?.groups ?? []).flatMap((g) => (g.module === null ? [] : [[g.module, g.files.length] as const]))),
   );
+  const active = $derived(together && view && tree && drawn ? activeBoxes(tree, view.changes, fileCounts, drawn.edges) : undefined);
   const paintedCount = $derived(
     laid
       ? laid.layout.edges.filter((le) =>
@@ -434,10 +437,11 @@
     if (!view || !tree || !drawn) return;
     const d = drawn;
     const v = view;
+    const a = active;
     const my = ++seq;
     busy = true;
     const t0 = performance.now();
-    runLayout(toElkGraph({ ...v, edges: d.edges }, tree, undefined, shown))
+    runLayout(toElkGraph({ ...v, edges: d.edges }, tree, undefined, shown, a))
       .then(async (l) => {
         if (my !== seq) return;
         console.info(`layout ${v.nodes.length} nodes ${l.edges.length} edges ${Math.round(performance.now() - t0)} ms`);
@@ -631,6 +635,11 @@
       {totals}
       changesOnly={opts.changesOnly}
       onchanges={(v) => (opts.changesOnly = v)}
+      together={opts.changesTogether}
+      ontogether={(v) => {
+        opts.changesTogether = v;
+        fitNext = true;
+      }}
       {files}
       onopen={() => {
         if (!tree) return;

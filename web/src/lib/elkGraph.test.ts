@@ -220,3 +220,60 @@ describe('the ELK layout of a container whose children are leaves', () => {
     expect(await box(v, t, 'p')).toBeLessThan(3);
   });
 });
+
+describe('toElkGraph with the changed boxes together', () => {
+  const ns: GraphNode[] = [
+    { id: 'm', parent: null, kind: 'module', name: 'm' },
+    { id: 'n', parent: null, kind: 'module', name: 'n' },
+    ...['a', 'b', 'c', 'd'].map((id): GraphNode => ({ id, parent: 'm', kind: 'package', name: id })),
+  ];
+  const t = buildTree(ns);
+  const ids = (n: ElkNode | undefined) => (n?.children ?? []).map((c) => c.id);
+  const line = (from: string, to: string) => ({ from, to, count: 1, kinds: { imports: 1 }, added: 1, removed: 0 });
+  const v: View = { nodes: ['m', 'n', 'a', 'b', 'c', 'd'], expandable: [], changes: {}, edges: [line('a', 'b')] };
+
+  it('puts the active children of a container into one box and the others into a second box', () => {
+    const g = toElkGraph(v, t, undefined, undefined, new Set(['m', 'a', 'b']));
+    expect(ids(g)).toEqual(['layout:act:', 'layout:idle:']);
+    expect(ids(find(g, 'layout:act:'))).toEqual(['m']);
+    expect(ids(find(g, 'layout:idle:'))).toEqual(['n']);
+    expect(ids(find(g, 'm'))).toEqual(['layout:act:m', 'layout:idle:m']);
+    expect(ids(find(g, 'layout:act:m'))).toEqual(['a', 'b']);
+    expect(ids(find(g, 'layout:idle:m'))).toEqual(['c', 'd']);
+  });
+  // A line that crosses a container border makes ELK lay out the hierarchy as one graph. There the
+  // children without a line all go into the first layer: one long column.
+  describe('with a line that crosses a container border', () => {
+    const many = (p: string) => Array.from({ length: 12 }, (_, i) => `${p}${i}`);
+    const pk = (id: string, parent: string): GraphNode => ({ id, parent, kind: 'package', name: id });
+    const ns2: GraphNode[] = [
+      { id: 'm', parent: null, kind: 'module', name: 'm' },
+      { id: 'n', parent: null, kind: 'module', name: 'n' },
+      pk('a', 'm'),
+      pk('x', 'n'),
+      pk('q', 'm'),
+      ...many('idle').map((id) => pk(id, 'm')),
+      ...many('deep').map((id) => pk(id, 'q')),
+      ...many('loose').map((id) => pk(id, 'm')),
+    ];
+    const t2 = buildTree(ns2);
+    const v2: View = { nodes: ns2.map((x) => x.id), expandable: [], changes: {}, edges: [line('a', 'x')] };
+    const act = new Set(['m', 'n', 'a', 'x', ...many('loose')]);
+    const rows = async (of: string[]) => {
+      const res = (await new ELK().layout(toElkGraph(v2, t2, undefined, undefined, act))) as ElkNode;
+      return new Set(of.map((id) => Math.round(find(res, id)!.y!))).size;
+    };
+
+    it('does not put the idle children into one column', async () => {
+      expect(await rows(many('idle'))).toBeLessThan(12);
+    });
+
+    it('does not put the children of an idle container into one column', async () => {
+      expect(await rows(many('deep'))).toBeLessThan(12);
+    });
+
+    it('does not put the active children without a line into one column', async () => {
+      expect(await rows(many('loose'))).toBeLessThan(12);
+    });
+  });
+});

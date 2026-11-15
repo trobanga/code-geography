@@ -1,6 +1,6 @@
 import ELK, { type ElkNode } from 'elkjs/lib/elk-api';
 import workerUrl from 'elkjs/lib/elk-worker.min.js?url';
-import { edgeIndex } from './elkGraph';
+import { edgeIndex, LAYOUT_BOX } from './elkGraph';
 
 export interface Point {
   x: number;
@@ -50,16 +50,24 @@ function getElk(): InstanceType<typeof ELK> {
 export async function runLayout(graph: ElkNode): Promise<Layout> {
   const e = getElk();
   const res = await Promise.race([e.layout(graph), workerError!]);
+  return toLayout(res);
+}
+
+/** The answer of ELK as a layout. The boxes that exist only in the layout (`LAYOUT_BOX`) give no node. */
+export function toLayout(res: ElkNode): Layout {
   const nodes: LaidNode[] = [];
-  const walk = (n: ElkNode, depth: number) => {
-    const parent = depth === 0 ? null : n.id;
+  const walk = (n: ElkNode, parent: string | null, depth: number) => {
     for (const c of n.children ?? []) {
+      if (c.id.startsWith(LAYOUT_BOX)) {
+        walk(c, parent, depth);
+        continue;
+      }
       const container = (c.children?.length ?? 0) > 0;
       nodes.push({ id: c.id, parent, x: c.x ?? 0, y: c.y ?? 0, w: c.width ?? 0, h: c.height ?? 0, container, depth });
-      walk(c, depth + 1);
+      walk(c, c.id, depth + 1);
     }
   };
-  walk(res, 0);
+  walk(res, null, 0);
   const edges: LaidEdge[] = [];
   const collect = (n: ElkNode) => {
     for (const e of n.edges ?? []) {

@@ -193,7 +193,7 @@ describe('edgePipeline', () => {
   });
 });
 
-describe('edgePipeline with changes only', () => {
+describe('edgePipeline with changes together', () => {
   const nodes: GraphNode[] = ['m1', 'm2', 'm3'].map((id) => ({ id, parent: null, kind: 'module', name: id }));
   const tree = buildTree(nodes);
   const edges = [e('m1', 'm2', { imports: 1 }), e('m2', 'm3', { imports: 2 }, 1, 0), e('m1', 'm3', { imports: 1 })];

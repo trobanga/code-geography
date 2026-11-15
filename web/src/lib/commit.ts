@@ -1,4 +1,4 @@
-import type { Tree } from './expansion';
+import { parentOf, type Tree } from './expansion';
 import type { ChangeCount, Graph, NodeChange, ViewEdge } from './types';
 
 /** The node or one of its ancestors is test code; the WASM view hides such nodes. */
@@ -120,4 +120,24 @@ export function headOf(overlay: Graph): Graph {
     nodes: overlay.nodes.filter((n) => n.change !== 'removed').map(plain),
     edges: overlay.edges.filter((e) => e.change !== 'removed').map(plain),
   };
+}
+
+/**
+ * The boxes that changes only does not dim (a change at or below, or changed files), plus the ends
+ * of the given lines; each with its containers.
+ */
+export function activeBoxes(
+  tree: Tree,
+  changes: Readonly<Record<string, ChangeCount>>,
+  fileCounts: ReadonlyMap<string, number>,
+  lines: readonly Pick<ViewEdge, 'from' | 'to'>[],
+): Set<string> {
+  const out = new Set<string>();
+  const add = (id: string | null) => {
+    for (; id !== null && !out.has(id); id = parentOf(tree, id)) out.add(id);
+  };
+  Object.keys(changes).forEach(add);
+  [...fileCounts.keys()].forEach(add);
+  for (const l of lines) (add(l.from), add(l.to));
+  return out;
 }

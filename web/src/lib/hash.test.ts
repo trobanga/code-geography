@@ -24,6 +24,7 @@ describe('hash', () => {
         kinds: { extends: true, implements: false, imports: false, type_ref: true, calls: true, value_ref: true },
         lift: false,
         changesOnly: true,
+        changesTogether: true,
         implied: false,
       },
     };

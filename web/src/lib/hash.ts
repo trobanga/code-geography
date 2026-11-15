@@ -28,6 +28,7 @@ const FLAGS = [
   ['sel', 'onSelection'],
   ['lift', 'lift'],
   ['changes', 'changesOnly'],
+  ['together', 'changesTogether'],
 ] as const;
 
 export function encodeHash(s: HashState): string {

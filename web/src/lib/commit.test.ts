@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { badgeLabel, changeLabel, commitTotals, markedByModule, openChanged, openChangedStep, pathToOpen } from './commit';
+import { activeBoxes, badgeLabel, changeLabel, commitTotals, markedByModule, openChanged, openChangedStep, pathToOpen } from './commit';
 import { buildTree } from './expansion';
 import type { Graph } from './types';
 
@@ -119,5 +119,16 @@ describe('openChangedStep, second step', () => {
 
   it('starts again at the types from any other set', () => {
     expect([...openChangedStep(tree, false, new Set(['m1']))].sort()).toEqual(['m1', 'm2', 'p1', 'p2']);
+  });
+});
+
+describe('activeBoxes', () => {
+  const tree = buildTree(graph.nodes);
+  const count = { added: 0, removed: 0, modified: 1 };
+
+  it('holds the boxes with a change at or below them, and the ends of the lines with their containers', () => {
+    const changes = { m1: count, p1: count };
+    const lines = [{ from: 'A', to: 'B' }];
+    expect([...activeBoxes(tree, changes, new Map(), lines)].sort()).toEqual(['A', 'B', 'm1', 'm2', 'p1', 'p2']);
   });
 });

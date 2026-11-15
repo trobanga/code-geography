@@ -8,6 +8,8 @@
     files,
     changesOnly,
     onchanges,
+    together,
+    ontogether,
     onopen,
     label = true,
   }: {
@@ -16,6 +18,9 @@
     files: ChangedFiles | null;
     changesOnly: boolean;
     onchanges: (v: boolean) => void;
+    /** With changes only: the changed boxes together, the others next to them. */
+    together: boolean;
+    ontogether: (v: boolean) => void;
     onopen: () => void;
     /** False: the line above names the commit (a repository of a forge), so this strip holds the counts only. */
     label?: boolean;
@@ -59,6 +64,13 @@
   {/if}
   <label class="flex items-center gap-1 border-l border-[var(--line)] pl-3">
     <input type="checkbox" checked={changesOnly} onchange={(e) => onchanges(e.currentTarget.checked)} />changes only
+  </label>
+  <label
+    class="flex items-center gap-1"
+    class:opacity-50={!changesOnly}
+    title="Lays out the changed boxes together and the others next to them. Without it, each box stays where it is."
+  >
+    <input type="checkbox" checked={together} disabled={!changesOnly} onchange={(e) => ontogether(e.currentTarget.checked)} />together
   </label>
   <button class={btn} onclick={onopen} title="Opens down to the changed types. A second click opens the changed types also.">open changed</button>
 </div>
