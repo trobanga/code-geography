@@ -29,6 +29,7 @@ const FLAGS = [
   ['lift', 'lift'],
   ['changes', 'changesOnly'],
   ['together', 'changesTogether'],
+  ['between', 'betweenOnly'],
 ] as const;
 
 export function encodeHash(s: HashState): string {

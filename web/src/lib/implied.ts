@@ -99,19 +99,18 @@ export function impliedLines<T extends { from: string; to: string }>(lines: read
 }
 
 /**
- * The hidden lines in and out of the selected box, as straight segments from border to border
+ * The hidden lines in and out of the selected boxes, as straight segments from border to border
  * between the boxes as they are; no new layout.
  */
 export function impliedSegments<T extends { from: string; to: string }>(
   lines: readonly T[],
-  selected: string | null,
+  selected: readonly string[],
   rects: ReadonlyMap<string, Rect>,
 ): { line: T; points: Point[] }[] {
-  if (selected === null) return [];
   return lines.flatMap((line) => {
     const a = rects.get(line.from);
     const b = rects.get(line.to);
-    if ((line.from !== selected && line.to !== selected) || !a || !b) return [];
+    if ((!selected.includes(line.from) && !selected.includes(line.to)) || !a || !b) return [];
     return [{ line, points: borderLine(a, b) }];
   });
 }

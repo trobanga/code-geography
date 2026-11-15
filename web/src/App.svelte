@@ -15,6 +15,7 @@
   import { toElkGraph } from './lib/elkGraph';
   import { activeBoxes, commitTotals, openChangedStep, pathToOpen } from './lib/commit';
   import { changedFiles } from './lib/files';
+  import { openOrClose, pick } from './lib/selection';
   import { focusActive, focusOn, NO_FOCUS, type Focus } from './lib/focus';
   import {
     buildTree,
@@ -117,7 +118,8 @@
   let focus = $state.raw<Focus>(NO_FOCUS);
   // Deep state: each consumer tracks only the fields it reads, so O1 does not trigger a layout.
   let opts = $state<EdgeOptions>({ ...DEFAULT_EDGE_OPTIONS, kinds: { ...DEFAULT_EDGE_OPTIONS.kinds } });
-  let selected = $state<string | null>(null);
+  /** The selected boxes, in the order of selection; Shift+click adds or removes one. */
+  let selected = $state.raw<string[]>([]);
   let hoverNode = $state<string | null>(null);
   let offsets = $state.raw<Map<string, Offset>>(new Map());
   /** A layout together with the edge list it was computed for. */
@@ -162,6 +164,11 @@
     return JSON.parse(json) as View;
   }
   const depth = $derived<Depth>({ expanded, unfolded });
+  /** What open / close does to the selected boxes now. */
+  const selectionStep = $derived.by(() => {
+    const next = tree && view ? openOrClose(tree, expanded, view.expandable, selected) : null;
+    return next ? { expanded: next, step: next.size > expanded.size ? ('open' as const) : ('close' as const) } : null;
+  });
   const view = $derived(explorer && tree ? cut(explorer, depth) : null);
   /** What "+" would give; equal to `depth` when nothing visible can open or unfold. */
   const deeperSet = $derived(view && tree ? deeper(tree, view, depth, shown) : depth);
@@ -237,7 +244,7 @@
       const text = await r.text();
       src = s;
       forge.forget();
-      selected = null;
+      selected = [];
       project = null;
       await load(text);
     } catch (e) {
@@ -248,7 +255,7 @@
   /** Replaces the graph by one opened from disk or a forge (`keep`): by default nothing open, no focus, no selection. */
   async function loadOpened(text: string, summary: Summary | null, hash = freshHash(location.hash), keep = false) {
     if (!keep) forge.forget();
-    selected = null;
+    selected = [];
     src = null;
     project = summary;
     await load(text, hash);
@@ -340,7 +347,7 @@
       expanded = new Set([...expanded, ...path]);
       fitNext = true;
     }
-    selected = id;
+    selected = [id];
   }
 
   /**
@@ -420,6 +427,13 @@
     inViewNext = id;
   }
 
+  /** Open / close for two or more selected boxes: one step, one layout. */
+  function stepSelection() {
+    if (!selectionStep) return;
+    expanded = selectionStep.expanded;
+    fitNext = true;
+  }
+
   function unfold(id: string) {
     unfolded = new Set([...unfolded, id]);
     inViewNext = id;
@@ -428,7 +442,7 @@
   $effect(() => {
     const v = view;
     untrack(() => {
-      if (v && selected && !v.nodes.includes(selected)) selected = null;
+      if (v && selected.some((id) => !v.nodes.includes(id))) selected = selected.filter((id) => v.nodes.includes(id));
     });
   });
 
@@ -683,13 +697,14 @@
         layout={laid.layout}
         drawn={laid.drawn}
         onSelection={opts.onSelection}
+        betweenOnly={opts.betweenOnly}
         commit={diff !== null}
         {changesOnly}
         {offsets}
         {expanded}
         {selected}
         {fileCounts}
-        onselect={(id) => (selected = id)}
+        onselect={(id, add) => (selected = pick(selected, id, add))}
         onunfold={unfold}
         {shown}
         focused={focusActive(focus)}
@@ -700,11 +715,14 @@
         {tree}
         {view}
         lines={drawn ? [...drawn.edges, ...drawn.implied] : []}
-        {selected}
+        selected={selected.length === 1 ? selected[0] : null}
+        selection={selected}
+        step={selectionStep?.step ?? null}
+        onstep={stepSelection}
         {tests}
         commit={diff !== null}
         {files}
-        onselect={(id) => (selected = id)}
+        onselect={(id) => (selected = [id])}
         onreveal={reveal}
         onfocus={(id) => {
           if (!tree) return;

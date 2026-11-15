@@ -23,7 +23,7 @@
     onchange: (patch: Partial<EdgeOptions>) => void;
   } = $props();
 
-  const flag = (key: 'onSelection' | 'lift') => (e: Event) =>
+  const flag = (key: 'onSelection' | 'lift' | 'betweenOnly') => (e: Event) =>
     onchange({ [key]: (e.currentTarget as HTMLInputElement).checked });
 </script>
 
@@ -31,6 +31,9 @@
   <span class="text-[var(--muted)]">edges</span>
   <label class="flex items-center gap-1">
     <input type="checkbox" checked={opts.onSelection} onchange={flag('onSelection')} />on selection
+  </label>
+  <label class="flex items-center gap-1" title="With two or more selected boxes (Shift+click): show the lines between them only. Off: the lines to other boxes stay, weaker.">
+    <input type="checkbox" checked={opts.betweenOnly} onchange={flag('betweenOnly')} />between selected
   </label>
   <span class="flex items-center gap-2 border-l border-[var(--line)] pl-3">
     {#each EDGE_KINDS as k (k)}

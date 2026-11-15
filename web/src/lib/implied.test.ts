@@ -66,7 +66,7 @@ describe('impliedSegments', () => {
   ]);
   it('draws the hidden lines in and out of the selected box as straight border-to-border segments', () => {
     const lines = [l('a', 'b'), l('c', 'a'), l('b', 'c')];
-    const s = impliedSegments(lines, 'a', rects);
+    const s = impliedSegments(lines, ['a'], rects);
     expect(s.map((x) => `${x.line.from}>${x.line.to}`)).toEqual(['a>b', 'c>a']);
     expect(s[0].points).toEqual([
       { x: 10, y: 5 },
@@ -77,8 +77,12 @@ describe('impliedSegments', () => {
       { x: 5, y: 10 },
     ]);
   });
+  it('draws each hidden line of some selected boxes one time', () => {
+    const s = impliedSegments([l('a', 'b'), l('c', 'a'), l('b', 'c')], ['a', 'b'], rects);
+    expect(s.map((x) => `${x.line.from}>${x.line.to}`)).toEqual(['a>b', 'c>a', 'b>c']);
+  });
   it('draws nothing without a selection or for a box not laid out', () => {
-    expect(impliedSegments([l('a', 'b')], null, rects)).toEqual([]);
-    expect(impliedSegments([l('a', 'x')], 'a', rects)).toEqual([]);
+    expect(impliedSegments([l('a', 'b')], [], rects)).toEqual([]);
+    expect(impliedSegments([l('a', 'x')], ['a'], rects)).toEqual([]);
   });
 });

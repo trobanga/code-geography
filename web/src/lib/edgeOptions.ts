@@ -113,6 +113,8 @@ export interface EdgeOptions {
   changesOnly: boolean;
   /** With `changesOnly`: lay out the changed boxes together and the others next to them. */
   changesTogether: boolean;
+  /** With two or more selected boxes: dim also the lines from a selected box to the outside. */
+  betweenOnly: boolean;
   /** Hide implied lines (a path shows them); null: auto, on above `IMPLIED_AUTO_FROM` lines. */
   implied: boolean | null;
 }
@@ -123,6 +125,7 @@ export const DEFAULT_EDGE_OPTIONS: EdgeOptions = Object.freeze({
   lift: true,
   changesOnly: false,
   changesTogether: false,
+  betweenOnly: false,
   implied: null,
 });
 
@@ -168,20 +171,20 @@ function allLines(viewEdges: ViewEdge[], tree: Tree, o: EdgeOptions, focused: bo
 }
 
 /**
- * O1: with `onSelection`, paint only edges at the selected or the hovered node.
+ * O1: with `onSelection`, paint only edges at a selected or the hovered node.
  * With `changesOnly`, paint only changed edges.
  */
 export function painted(
   e: ViewEdge,
   onSelection: boolean,
-  selected: string | null,
+  selected: readonly string[],
   hover: string | null,
   changesOnly = false,
 ): boolean {
   if (changesOnly && !changed(e)) return false;
   if (!onSelection) return true;
   const at = (id: string | null) => id !== null && (e.from === id || e.to === id);
-  return at(selected) || at(hover);
+  return selected.some(at) || at(hover);
 }
 
 /** Readout of the edge bar: painted lines / drawable view edges, plus dropped background lines and implied lines. */

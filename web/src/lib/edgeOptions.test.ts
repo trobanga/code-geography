@@ -209,24 +209,27 @@ describe('edgePipeline with changes together', () => {
 
 describe('painted with changes only', () => {
   it('paints only changed edges', () => {
-    expect(painted(e('a', 'b', { imports: 1 }), false, null, null, true)).toBe(false);
-    expect(painted(e('a', 'b', { imports: 2 }, 0, 1), false, null, null, true)).toBe(true);
-    expect(painted(e('a', 'b', { imports: 2 }, 0, 1), true, 'x', null, true)).toBe(false);
+    expect(painted(e('a', 'b', { imports: 1 }), false, [], null, true)).toBe(false);
+    expect(painted(e('a', 'b', { imports: 2 }, 0, 1), false, [], null, true)).toBe(true);
+    expect(painted(e('a', 'b', { imports: 2 }, 0, 1), true, ['x'], null, true)).toBe(false);
   });
 });
 
 describe('painted (O1)', () => {
   const ab = e('a', 'b', { imports: 1 });
   it('paints everything when the option is off', () => {
-    expect(painted(ab, false, null, null)).toBe(true);
+    expect(painted(ab, false, [], null)).toBe(true);
   });
   it('paints nothing without selection and hover', () => {
-    expect(painted(ab, true, null, null)).toBe(false);
+    expect(painted(ab, true, [], null)).toBe(false);
   });
   it('paints edges at the selected or the hovered node', () => {
-    expect(painted(ab, true, 'a', null)).toBe(true);
-    expect(painted(ab, true, 'x', 'b')).toBe(true);
-    expect(painted(ab, true, 'x', 'y')).toBe(false);
+    expect(painted(ab, true, ['a'], null)).toBe(true);
+    expect(painted(ab, true, ['x'], 'b')).toBe(true);
+    expect(painted(ab, true, ['x'], 'y')).toBe(false);
+  });
+  it('paints edges at each of the selected nodes', () => {
+    expect(painted(ab, true, ['x', 'b'], null)).toBe(true);
   });
 });
 

@@ -25,6 +25,7 @@ describe('hash', () => {
         lift: false,
         changesOnly: true,
         changesTogether: true,
+        betweenOnly: true,
         implied: false,
       },
     };

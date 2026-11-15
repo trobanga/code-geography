@@ -22,6 +22,7 @@ model. Record each new decision of that weight as a new ADR.
 | overlay | The diff graph of a commit: the union of two graphs with `change` marks, plus the list of changed files (ADR 0009, 0012). |
 | implied line | A line A→C of a view for which the drawn lines hold a path from A to C through another box. The viewer can hide these (`hide implied`, ADR 0026); the graph keeps the edge. |
 | changes together | A viewer option on top of `changes only`: the layout gets the changed lines only and puts the active boxes of each container together, in `layout:` boxes that only the ELK input knows (ADR 0028). Off: the layout stays, the other boxes are dimmed. |
+| selection | The boxes that the developer selected: a click selects one, Shift+click adds or removes one. Lines between two selected boxes are full, lines to the outside weak (dim with `between selected`); `open all` / `close all` works on all of them (ADR 0029). |
 | front end | The part that turns the sources of one language into a graph (Java, Rust, Clojure). `cg-index` runs all of them. |
 | test code | Code in a source set other than `src/main`; for Clojure, code in a directory that only an alias of `deps.edn` names (ADR 0023). Hidden by default. |
 

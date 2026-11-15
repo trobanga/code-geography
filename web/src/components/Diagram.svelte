@@ -10,6 +10,7 @@
   import type { LaidNode, Layout, Point } from '../lib/layout';
   import type { View, ViewEdge } from '../lib/types';
   import { orthoRoutes } from '../lib/ortho';
+  import { lineStrength, type Strength } from '../lib/selection';
   import { impliedSegments } from '../lib/implied';
   import { fitTransform, labelAnchor, reveal as revealBox, zoomAt, type Transform } from '../lib/viewport';
 
@@ -19,6 +20,7 @@
     layout,
     drawn,
     onSelection,
+    betweenOnly,
     commit,
     changesOnly,
     offsets,
@@ -39,17 +41,21 @@
     /** The edge list `layout` was computed for; LaidEdge.index points into drawn.edges. */
     drawn: Drawn;
     onSelection: boolean;
+    /** With two or more selected boxes: dim also the lines to the outside. */
+    betweenOnly: boolean;
     /** A commit graph is loaded: draw the overlay. */
     commit: boolean;
     /** Paint only changed edges and draw untouched boxes pale. */
     changesOnly: boolean;
     offsets: ReadonlyMap<string, Offset>;
     expanded: ReadonlySet<string>;
-    selected: string | null;
+    /** The selected boxes; Shift+click adds or removes one. */
+    selected: readonly string[];
     /** Commit overlay: changed files per module box (ADR 0012). */
     fileCounts: ReadonlyMap<string, number>;
     hoverNode?: string | null;
-    onselect: (id: string | null) => void;
+    /** A click on a box or on the background (null); `add`: with Shift. */
+    onselect: (id: string | null, add: boolean) => void;
     ontoggle: (id: string) => void;
     onoffset: (id: string, o: Offset) => void;
     /** Show all children of the container of a placeholder. */
@@ -84,11 +90,16 @@
   const ZERO = { dx: 0, dy: 0 };
   const width = (count: number) => Math.min(6, 0.75 + 0.6 * Math.log2(count));
   const pathOf = (pts: Point[]) => 'M' + pts.map((p) => `${p.x},${p.y}`).join('L');
+  const OPACITY: Record<Strength, number> = { full: 1, weak: 0.45, dim: 0.15 };
+  /** Strength of a line for the selection; `touches`: drawn in the color of the selection. */
+  const mark = (ve: ViewEdge) => {
+    const strength = lineStrength(selected, ve, betweenOnly);
+    return { strength, touches: selected.length > 0 && strength !== 'dim' };
+  };
   const edges = $derived(
     layout.edges
       .map((le) => {
         const ve = drawn.edges[le.index];
-        const touches = selected !== null && (ve.from === selected || ve.to === selected);
         const a = rects.get(ve.from);
         const b = rects.get(ve.to);
         const pts =
@@ -98,7 +109,7 @@
         return {
           key: le.index,
           ve,
-          touches,
+          ...mark(ve),
           show: painted(ve, onSelection, selected, hoverNode, changesOnly),
           d: pathOf(pts),
           w: width(ve.count),
@@ -114,26 +125,25 @@
   // O3: the real edges of the selected node that were lifted away, as orthogonal lines between
   // the boxes as they are; the layout is not run again.
   const realLines = $derived.by(() => {
-    if (selected === null) return [];
-    const ves = drawn.lifted.filter((e) => (e.from === selected || e.to === selected) && rects.has(e.from) && rects.has(e.to));
+    const ves = drawn.lifted.filter((e) => mark(e).touches && rects.has(e.from) && rects.has(e.to));
     return orthoRoutes(ves, rects).map((pts, i) => {
       const ve = ves[i];
       // Drawn like an ELK line at the selection.
       const key = `real:${ve.from}\u0000${ve.to}`;
-      return { key, ve, touches: true, d: pathOf(pts), w: width(ve.count), lab: labelAnchor(pts), ch: edgeChange(ve), bg: false, implied: false };
+      return { key, ve, ...mark(ve), d: pathOf(pts), w: width(ve.count), lab: labelAnchor(pts), ch: edgeChange(ve), bg: false, implied: false };
     });
   });
   // Hide implied: the hidden lines of the selected node, as dashed straight segments between the
   // boxes as they are, so that they differ from the routed lines; the layout is not run again.
   const impliedShown = $derived(
     impliedSegments(
-      drawn.implied.filter((ve) => painted(ve, false, null, null, changesOnly)),
+      drawn.implied.filter((ve) => painted(ve, false, [], null, changesOnly) && mark(ve).touches),
       selected,
       rects,
     ).map(({ line: ve, points }) => ({
       key: `implied:${ve.from}\u0000${ve.to}`,
       ve,
-      touches: true,
+      ...mark(ve),
       d: pathOf(points),
       w: Math.min(width(ve.count), 2),
       lab: labelAnchor(points),
@@ -197,8 +207,8 @@
     if (drag.kind === 'pan') t = { ...t, x: drag.tx + dx, y: drag.ty + dy };
     else onoffset(drag.id, { dx: drag.start.dx + dx / t.k, dy: drag.start.dy + dy / t.k });
   }
-  function up() {
-    if (drag?.kind === 'pan' && !drag.moved) onselect(null);
+  function up(e: PointerEvent) {
+    if (drag?.kind === 'pan' && !drag.moved) onselect(null, e.shiftKey);
     if (drag?.kind === 'node' && drag.moved) {
       swallowClick = true;
       lastNodeDrag = performance.now();
@@ -252,7 +262,7 @@
   {@const g = tree.byId.get(n.id)}
   {#if g}
     {@const c = kindColor(g.kind)}
-    {@const sel = n.id === selected}
+    {@const sel = selected.includes(n.id)}
     {@const mid = n.container ? n.y + BOX.header / 2 : n.y + n.h / 2}
     {@const own = commit ? g.change : undefined}
     {@const below = commit ? view.changes[n.id] : undefined}
@@ -266,7 +276,7 @@
       class="cursor-default outline-none"
       role="button"
       tabindex="-1"
-      onclick={() => onselect(n.id)}
+      onclick={(e) => onselect(n.id, e.shiftKey)}
       ondblclick={() => ontoggle(n.id)}
       onkeydown={() => {}}
     >
@@ -410,7 +420,7 @@
       {#each [...edges, ...realLines, ...impliedShown] as e (e.key)}
         <g
           data-edge
-          opacity={(selected === null || e.touches || onSelection ? 1 : 0.15) * (e.bg && !e.touches ? 0.35 : 1)}
+          opacity={(onSelection && !e.touches ? 1 : OPACITY[e.strength]) * (e.bg && !e.touches ? 0.35 : 1)}
           role="presentation"
           onpointerenter={(ev) => edgeHover(ev, e.ve)}
           onpointermove={(ev) => edgeHover(ev, e.ve)}
@@ -451,7 +461,7 @@
             font-size="9"
             fill={e.ch ? e.ch.color : hi ? 'var(--accent)' : 'var(--muted)'}
             font-weight={e.ch ? 700 : undefined}
-            opacity={selected === null || hi || onSelection ? (commit && !e.ch && !hi ? 0.6 : 1) : 0.15}
+            opacity={selected.length === 0 || hi || onSelection ? (commit && !e.ch && !hi ? 0.6 : 1) : 0.15}
             stroke="var(--bg)"
             stroke-width="3"
             paint-order="stroke"

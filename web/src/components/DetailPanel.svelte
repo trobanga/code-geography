@@ -11,6 +11,9 @@
     view,
     lines,
     selected,
+    selection,
+    step,
+    onstep,
     tests,
     commit,
     files,
@@ -22,7 +25,13 @@
     view: View;
     /** The lines after lift that the diagram draws or hides as implied: the dependencies of an open container. */
     lines: readonly ViewEdge[];
+    /** The one selected box; null with none or with two or more. */
     selected: string | null;
+    /** All selected boxes. */
+    selection: readonly string[];
+    /** What open / close does to the selection now; null: nothing. */
+    step: 'open' | 'close' | null;
+    onstep: () => void;
     tests: boolean;
     commit: boolean;
     files: ChangedFiles | null;
@@ -169,6 +178,18 @@
       <div class="mt-3 text-[var(--muted)]">changes below ({marked.reduce((a, g) => a + g.nodes.length, 0)})</div>
       {@render markedList(marked)}
     {/if}
+  {:else if selection.length > 1}
+    <div class="font-bold">{selection.length} boxes selected</div>
+    <button class="mt-2 {btn} disabled:opacity-40" disabled={step === null} onclick={onstep}>{step ?? 'open'} all</button>
+    <div class="mt-3">
+      {#each selection as id (id)}
+        {@const k = tree.byId.get(id)?.kind}
+        <button class="flex w-full gap-1 border-b border-[var(--line)] py-0.5 text-left hover:bg-[var(--bg)]" onclick={() => onselect(id)}>
+          {#if k}<span class="font-bold" style="color: {kindColor(k)}">{KIND_LETTER[k]}</span>{/if}
+          <span class="truncate" title={id}>{nameOf(id)}</span>
+        </button>
+      {/each}
+    </div>
   {:else if commit}
     <div class="text-[var(--muted)]">changed ({marked.reduce((a, g) => a + g.nodes.length, 0)})</div>
     {@render markedList(marked)}
