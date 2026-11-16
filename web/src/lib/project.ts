@@ -71,13 +71,13 @@ export function summarize(
   return { name, sources, nodes: graph.nodes.length, edges: graph.edges.length, resolved, unresolved: c.unresolved, text, tooltip };
 }
 
-/** A source file, as opposed to a build file (`pom.xml`, `Cargo.toml`). */
+/** A source file, as opposed to a build file (`pom.xml`, `Cargo.toml`, `deps.edn`). */
 function isSourceFile(path: string): boolean {
-  return path.endsWith('.java') || path.endsWith('.rs');
+  return ['.java', '.rs', '.clj', '.cljc'].some((ext) => path.endsWith(ext));
 }
 
 /** Why the chosen files cannot be indexed, or null. */
 export function inputError(chosen: Chosen<unknown>): string | null {
   if (chosen.inputs.some((i) => isSourceFile(i.path))) return null;
-  return `no Java or Rust sources found in ${chosen.root || 'the directory'} (only Java and Rust are supported now)`;
+  return `no Java, Rust or Clojure sources found in ${chosen.root || 'the directory'} (only these languages are supported now)`;
 }

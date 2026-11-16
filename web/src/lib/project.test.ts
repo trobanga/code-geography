@@ -65,9 +65,9 @@ describe('summarize', () => {
 });
 
 describe('inputError', () => {
-  it('says that only Java and Rust are supported when no input is found', () => {
+  it('names the supported languages when no input is found', () => {
     expect(inputError({ root: 'docs', inputs: [] })).toBe(
-      'no Java or Rust sources found in docs (only Java and Rust are supported now)',
+      'no Java, Rust or Clojure sources found in docs (only these languages are supported now)',
     );
   });
 
@@ -76,8 +76,14 @@ describe('inputError', () => {
   });
 });
 
+describe('inputError for Clojure', () => {
+  it('accepts a repository with Clojure source files only', () => {
+    expect(inputError({ root: 'p', inputs: [{ path: 'deps.edn', file: null }, { path: 'src/blaze/core.clj', file: null }] })).toBeNull();
+  });
+});
+
 describe('inputError with build files only', () => {
   it('counts a directory with pom.xml and Cargo.toml files but no source file as without sources', () => {
-    expect(inputError({ root: 'p', inputs: [{ path: 'pom.xml', file: null }, { path: 'Cargo.toml', file: null }] })).toMatch(/no Java or Rust sources found in p/);
+    expect(inputError({ root: 'p', inputs: [{ path: 'pom.xml', file: null }, { path: 'Cargo.toml', file: null }] })).toMatch(/no Java, Rust or Clojure sources found in p/);
   });
 });

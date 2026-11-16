@@ -84,7 +84,7 @@ impl Explorer {
     }
 }
 
-/// Whether some indexer (Java, Rust) wants the file at `path`. See `cg_index::is_input`.
+/// Whether some indexer (Java, Rust, Clojure) wants the file at `path`. See `cg_index::is_input`.
 pub fn is_input(path: &str) -> bool {
     cg_index::is_input(path)
 }

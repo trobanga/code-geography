@@ -288,7 +288,7 @@
     if (graph) missing = false;
   }
 
-  /** Indexes the Java and Rust sources of a chosen directory in a worker (ADR 0015). Only inputs are read. */
+  /** Indexes the Java, Rust and Clojure sources of a chosen directory in a worker (ADR 0015). Only inputs are read. */
   /** Starts an open of a directory or a repository; the result tells whether it is still the latest. */
   function begin() {
     const my = ++openSeq;
@@ -769,7 +769,7 @@
     {:else if missing}
       <div class="flex flex-1 items-center justify-center">
         <div class="flex max-w-md flex-col gap-3" data-start>
-          <p>No <code>graph.json</code> here. Open a project directory, or drop one anywhere on this page, to index it in this browser (Java and Rust). Or give a repository of GitHub or of a Forgejo host (a private one with a token). Or open a graph file made by <code>cg index</code>.</p>
+          <p>No <code>graph.json</code> here. Open a project directory, or drop one anywhere on this page, to index it in this browser (Java, Rust and Clojure). Or give a repository of GitHub or of a Forgejo host (a private one with a token). Or open a graph file made by <code>cg index</code>.</p>
           <p class="text-[var(--muted)]">A local directory is not stored: a reload returns to this screen. A repository stays in the link; its token does not.</p>
           <div class="flex flex-wrap gap-2">
             <OpenButtons
