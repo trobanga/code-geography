@@ -1902,3 +1902,287 @@ fn an_unqualified_call_in_a_record_reaches_its_implicit_accessor_as_the_type() {
     assert!(calls_from(&g, "fn:a.Other#twice()").is_empty());
     assert!(calls_from(&g, "fn:a.Other#viaThis()").is_empty());
 }
+
+fn indexed(files: &[(&str, &str)]) -> Graph {
+    let files: Vec<SourceFile> = files
+        .iter()
+        .map(|(path, text)| SourceFile {
+            path: path.to_string(),
+            text: text.to_string(),
+        })
+        .collect();
+    index_sources("repo", &files).0
+}
+
+/// The site entries of the one edge `from` -> `to` of `kind`: (file, lines).
+fn sites(g: &Graph, from: &str, to: &str, kind: EdgeKind) -> Vec<(Option<String>, Vec<u32>)> {
+    g.edge(from, to, kind)
+        .unwrap_or_else(|| panic!("no edge {from} -> {to} {kind:?}"))
+        .sites
+        .iter()
+        .map(|s| (s.file.clone(), s.lines.clone()))
+        .collect()
+}
+
+#[test]
+fn a_call_keeps_the_line_of_the_call_in_an_entry_without_a_file() {
+    let g = indexed(&[
+        ("a/B.java", "package a;\nclass B { void m() {} }\n"),
+        (
+            "a/C.java",
+            "package a;\nclass C {\n    void run(B b) {\n        b.m();\n    }\n}\n",
+        ),
+    ]);
+
+    assert_eq!(
+        sites(&g, "fn:a.C#run(B)", "fn:a.B#m()", EdgeKind::Calls),
+        [(None, vec![4])]
+    );
+}
+
+#[test]
+fn a_method_called_on_three_lines_is_one_edge_with_the_three_lines_ascending() {
+    let g = indexed(&[
+        ("a/B.java", "package a;\nclass B { void m() {} }\n"),
+        (
+            "a/C.java",
+            "package a;\nclass C {\n    void run(B b) {\n        b.m();\n        b.m(); b.m();\n\n        b.m();\n    }\n}\n",
+        ),
+    ]);
+
+    assert_eq!(
+        sites(&g, "fn:a.C#run(B)", "fn:a.B#m()", EdgeKind::Calls),
+        [(None, vec![4, 5, 7])]
+    );
+}
+
+#[test]
+fn a_call_in_a_chain_over_several_lines_has_the_line_of_its_method_name() {
+    let g = indexed(&[
+        (
+            "a/B.java",
+            "package a;\nclass B { B first() { return this; } C second() { return null; } }\n",
+        ),
+        ("a/C.java", "package a;\nclass C { void done() {} }\n"),
+        (
+            "a/D.java",
+            "package a;\nclass D {\n    void run(B b) {\n        b\n            .first()\n            .second()\n            .done();\n    }\n}\n",
+        ),
+    ]);
+
+    assert_eq!(
+        sites(&g, "fn:a.D#run(B)", "fn:a.B#first()", EdgeKind::Calls),
+        [(None, vec![5])]
+    );
+    assert_eq!(
+        sites(&g, "fn:a.D#run(B)", "fn:a.B#second()", EdgeKind::Calls),
+        [(None, vec![6])]
+    );
+    assert_eq!(
+        sites(&g, "fn:a.D#run(B)", "fn:a.C#done()", EdgeKind::Calls),
+        [(None, vec![7])]
+    );
+}
+
+#[test]
+fn a_creation_over_two_lines_has_the_line_of_the_type_name() {
+    let g = indexed(&[
+        ("a/B.java", "package a;\nclass B { B() {} }\n"),
+        (
+            "a/C.java",
+            "package a;\nclass C {\n    Object make() {\n        return new\n            B();\n    }\n}\n",
+        ),
+    ]);
+
+    assert_eq!(
+        sites(&g, "fn:a.C#make()", "fn:a.B#B()", EdgeKind::Calls),
+        [(None, vec![5])]
+    );
+}
+
+#[test]
+fn a_method_reference_has_the_line_of_the_name_after_the_colons_and_new_that_of_the_reference() {
+    let g = indexed(&[
+        (
+            "a/B.java",
+            "package a;\nclass B { B() {} static void m() {} }\n",
+        ),
+        (
+            "a/C.java",
+            "package a;\nclass C {\n    void run() {\n        Runnable r = B\n            ::m;\n        java.util.function.Supplier<B> s =\n            B::new;\n    }\n}\n",
+        ),
+    ]);
+
+    assert_eq!(
+        sites(&g, "fn:a.C#run()", "fn:a.B#m()", EdgeKind::Calls),
+        [(None, vec![5])]
+    );
+    assert_eq!(
+        sites(&g, "fn:a.C#run()", "fn:a.B#B()", EdgeKind::Calls),
+        [(None, vec![7])]
+    );
+}
+
+#[test]
+fn this_and_super_calls_of_a_constructor_have_the_line_of_the_call() {
+    let g = indexed(&[
+        ("a/P.java", "package a;\nclass P { P(int x) {} }\n"),
+        (
+            "a/C.java",
+            "package a;\nclass C extends P {\n    C() {\n        this(1);\n    }\n    C(int x) {\n        super(x);\n    }\n}\n",
+        ),
+    ]);
+
+    assert_eq!(
+        sites(&g, "fn:a.C#C(int)", "fn:a.P#P(int)", EdgeKind::Calls),
+        [(None, vec![7])]
+    );
+    assert_eq!(
+        sites(&g, "fn:a.C#C()", "fn:a.C#C(int)", EdgeKind::Calls),
+        [(None, vec![4])]
+    );
+}
+
+#[test]
+fn a_field_type_and_a_parameter_type_keep_their_lines_on_the_edges_of_type_and_function() {
+    let g = indexed(&[
+        ("a/B.java", "package a;\nclass B {}\n"),
+        (
+            "a/C.java",
+            "package a;\nclass C {\n    B field;\n\n    void m(\n        B param) {}\n    B other;\n}\n",
+        ),
+    ]);
+
+    assert_eq!(
+        sites(&g, "type:a.C", "type:a.B", EdgeKind::TypeRef),
+        [(None, vec![3, 7])]
+    );
+    assert_eq!(
+        sites(&g, "fn:a.C#m(B)", "type:a.B", EdgeKind::TypeRef),
+        [(None, vec![6])]
+    );
+}
+
+#[test]
+fn extends_and_implements_have_the_line_of_each_supertype_name_in_a_header_over_several_lines() {
+    let g = indexed(&[
+        ("a/P.java", "package a;\nclass P {}\n"),
+        ("a/I.java", "package a;\ninterface I {}\n"),
+        ("a/J.java", "package a;\ninterface J {}\n"),
+        (
+            "a/C.java",
+            "package a;\nclass C\n    extends P\n    implements\n        I,\n        J {\n}\n",
+        ),
+    ]);
+
+    assert_eq!(
+        sites(&g, "type:a.C", "type:a.P", EdgeKind::Extends),
+        [(None, vec![3])]
+    );
+    assert_eq!(
+        sites(&g, "type:a.C", "type:a.I", EdgeKind::Implements),
+        [(None, vec![5])]
+    );
+    assert_eq!(
+        sites(&g, "type:a.C", "type:a.J", EdgeKind::Implements),
+        [(None, vec![6])]
+    );
+}
+
+#[test]
+fn an_import_keeps_the_line_of_the_import_outside_the_span_of_the_type() {
+    let g = indexed(&[
+        ("a/B.java", "package a;\npublic class B {}\n"),
+        (
+            "a/U.java",
+            "package a;\npublic class U { public static void h() {} }\n",
+        ),
+        (
+            "b/C.java",
+            "package b;\n\nimport a.B;\nimport static a.U.h;\n\nclass C {}\n",
+        ),
+    ]);
+
+    assert_eq!(
+        sites(&g, "type:b.C", "type:a.B", EdgeKind::Imports),
+        [(None, vec![3])]
+    );
+    assert_eq!(
+        sites(&g, "type:b.C", "type:a.U", EdgeKind::Imports),
+        [(None, vec![4])]
+    );
+    let span = g.node("type:b.C").unwrap().span.unwrap();
+    assert!(span.start_line > 4);
+}
+
+#[test]
+fn calls_in_a_lambda_and_in_an_anonymous_class_are_sites_of_the_edge_of_the_method() {
+    let g = indexed(&[
+        (
+            "a/B.java",
+            "package a;\nclass B { void m() {} void n() {} }\n",
+        ),
+        (
+            "a/C.java",
+            "package a;\nclass C {\n    void run(B b) {\n        Runnable r = () -> {\n            b.m();\n        };\n        new Object() {\n            void x() {\n                b.n();\n            }\n        };\n    }\n}\n",
+        ),
+    ]);
+
+    assert_eq!(
+        sites(&g, "fn:a.C#run(B)", "fn:a.B#m()", EdgeKind::Calls),
+        [(None, vec![5])]
+    );
+    assert_eq!(
+        sites(&g, "fn:a.C#run(B)", "fn:a.B#n()", EdgeKind::Calls),
+        [(None, vec![9])]
+    );
+}
+
+#[test]
+fn a_call_in_a_field_initializer_is_a_site_of_the_edge_of_the_type() {
+    let g = indexed(&[
+        (
+            "a/B.java",
+            "package a;\nclass B { static int m() { return 1; } }\n",
+        ),
+        (
+            "a/C.java",
+            "package a;\nclass C {\n    int x =\n        B.m();\n}\n",
+        ),
+    ]);
+
+    assert_eq!(
+        sites(&g, "type:a.C", "fn:a.B#m()", EdgeKind::Calls),
+        [(None, vec![4])]
+    );
+}
+
+#[test]
+fn every_edge_of_a_mixed_fixture_has_a_site() {
+    let g = indexed(&[
+        ("a/I.java", "package a;\ninterface I { void go(); }\n"),
+        ("a/P.java", "package a;\nclass P { P(int x) {} }\n"),
+        (
+            "a/B.java",
+            "package a;\nclass B extends P implements I {\n    B() { super(1); }\n    public void go() {}\n    static B make() { return new B(); }\n}\n",
+        ),
+        (
+            "b/C.java",
+            "package b;\nimport a.B;\nimport a.I;\nimport static a.B.make;\nclass C {\n    B field = B.make();\n    void run(I i, B b) {\n        i.go();\n        b.go();\n        Runnable r = b::go;\n        Runnable q = () -> i.go();\n    }\n}\n",
+        ),
+    ]);
+
+    for kind in [
+        EdgeKind::Extends,
+        EdgeKind::Implements,
+        EdgeKind::Imports,
+        EdgeKind::TypeRef,
+        EdgeKind::Calls,
+    ] {
+        assert!(g.edges.iter().any(|e| e.kind == kind), "no {kind:?} edge");
+    }
+    for e in &g.edges {
+        assert!(!e.sites.is_empty(), "{} -> {} {:?}", e.from, e.to, e.kind);
+        assert!(e.sites.iter().all(|s| !s.lines.is_empty()));
+    }
+}

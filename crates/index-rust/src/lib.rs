@@ -217,7 +217,7 @@ pub fn index_sources(_root_name: &str, files: &[SourceFile]) -> (Graph, Report) 
             });
         }
     }
-    graph.edges = edges.into_iter().collect();
+    graph.edges = edges.into_edges(&graph.nodes);
     (graph, report)
 }
 

@@ -88,6 +88,11 @@ pub fn text<'a>(node: Ts, source: &'a str) -> &'a str {
     &source[node.byte_range()]
 }
 
+/// The line on which `node` starts: 1-based.
+pub fn line_of(node: Ts) -> u32 {
+    node.start_position().row as u32 + 1
+}
+
 /// Whether the metadata of a symbol marks it private (`^:private`, `^{:private true}`).
 pub fn private(form: Ts, source: &str) -> bool {
     (0..form.named_child_count())

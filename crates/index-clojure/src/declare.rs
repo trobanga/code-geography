@@ -1,7 +1,7 @@
 //! The declarations of a file: the forms at its top level that make nodes.
 
 use crate::Report;
-use crate::syntax::{flat_items, plain_symbol, string, symbol, text};
+use crate::syntax::{flat_items, line_of, plain_symbol, string, symbol, text};
 use cg_core::NodeKind;
 use std::collections::HashSet;
 use tree_sitter::Node as Ts;
@@ -243,20 +243,26 @@ fn extensions<'t>(items: &[Ts<'t>], protocol_first: bool, source: &str) -> Vec<L
 }
 
 /// The pairs of type and protocol that an `extend-protocol` or `extend-type` form names,
-/// as written, also for a type without methods.
-pub fn extend_pairs(items: &[Ts], protocol_first: bool, source: &str) -> Vec<(String, String)> {
+/// as written, also for a type without methods. The third is the line (1-based) of the
+/// symbol that varies inside the form: the type of an `extend-protocol`, the protocol of an
+/// `extend-type`.
+pub fn extend_pairs(
+    items: &[Ts],
+    protocol_first: bool,
+    source: &str,
+) -> Vec<(String, String, u32)> {
     let Some(first) = items.get(1).and_then(|f| written(*f, source)) else {
         return Vec::new();
     };
     items
         .iter()
         .skip(2)
-        .filter_map(|item| written(*item, source))
-        .map(|other| {
+        .filter_map(|item| Some((written(*item, source)?, line_of(*item))))
+        .map(|(other, line)| {
             if protocol_first {
-                (other, first.clone())
+                (other, first.clone(), line)
             } else {
-                (first.clone(), other)
+                (first.clone(), other, line)
             }
         })
         .collect()

@@ -1,4 +1,4 @@
-use cg_core::{Change, Edge, EdgeKind, Graph, Node, NodeKind, View};
+use cg_core::{Change, Edge, EdgeKind, FileSites, Graph, Node, NodeKind, View};
 use cg_wasm::Explorer;
 
 fn node(id: &str, parent: Option<&str>, kind: NodeKind, test: bool) -> Node {
@@ -34,12 +34,14 @@ fn graph_json() -> String {
                 to: "T".into(),
                 kind: EdgeKind::Imports,
                 change: None,
+                sites: Vec::new(),
             },
             Edge {
                 from: "TT".into(),
                 to: "T".into(),
                 kind: EdgeKind::TypeRef,
                 change: None,
+                sites: Vec::new(),
             },
         ],
         ..Graph::default()
@@ -115,12 +117,14 @@ fn the_edges_between_carry_the_marks_of_a_diff_graph() {
                 to: "U".into(),
                 kind: EdgeKind::Calls,
                 change: Some(Change::Added),
+                sites: Vec::new(),
             },
             Edge {
                 from: "T".into(),
                 to: "U".into(),
                 kind: EdgeKind::TypeRef,
                 change: None,
+                sites: Vec::new(),
             },
         ],
         ..Graph::default()
@@ -130,6 +134,48 @@ fn the_edges_between_carry_the_marks_of_a_diff_graph() {
     assert_eq!(
         explorer.edges_between_json("T", "U", false, true),
         r#"[{"from":"T","to":"U","kind":"calls","change":"added"},{"from":"T","to":"U","kind":"type_ref"}]"#
+    );
+}
+
+#[test]
+fn the_edges_between_carry_their_sites() {
+    let graph = Graph {
+        nodes: vec![
+            node("T", None, NodeKind::Type, false),
+            node("U", None, NodeKind::Type, false),
+        ],
+        edges: vec![
+            Edge {
+                from: "T".into(),
+                to: "U".into(),
+                kind: EdgeKind::Calls,
+                change: None,
+                sites: vec![
+                    FileSites {
+                        file: None,
+                        lines: vec![3, 9],
+                    },
+                    FileSites {
+                        file: Some("x/Y.java".into()),
+                        lines: vec![4],
+                    },
+                ],
+            },
+            Edge {
+                from: "T".into(),
+                to: "U".into(),
+                kind: EdgeKind::TypeRef,
+                change: None,
+                sites: Vec::new(),
+            },
+        ],
+        ..Graph::default()
+    };
+    let explorer = Explorer::from_json(&serde_json::to_string(&graph).unwrap()).unwrap();
+
+    assert_eq!(
+        explorer.edges_between_json("T", "U", false, true),
+        r#"[{"from":"T","to":"U","kind":"calls","sites":[{"lines":[3,9]},{"file":"x/Y.java","lines":[4]}]},{"from":"T","to":"U","kind":"type_ref"}]"#
     );
 }
 
@@ -173,12 +219,14 @@ fn the_marks_of_a_diff_graph_reach_the_view_in_each_variant() {
                 to: "U".into(),
                 kind: EdgeKind::Imports,
                 change: Some(Change::Added),
+                sites: Vec::new(),
             },
             Edge {
                 from: "T".into(),
                 to: "U".into(),
                 kind: EdgeKind::TypeRef,
                 change: Some(Change::Removed),
+                sites: Vec::new(),
             },
         ],
         ..Graph::default()

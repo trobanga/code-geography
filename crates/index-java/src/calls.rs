@@ -3,8 +3,8 @@
 //! or none is declared, the type of the receiver.
 
 use super::{
-    CallReport, Decl, Scope, Unit, children, is_function_declaration, is_type_declaration, members,
-    supertypes, text, type_id,
+    CallReport, Decl, Scope, Unit, children, is_function_declaration, is_type_declaration, line_of,
+    members, supertypes, text, type_id,
 };
 use cg_core::NodeKind;
 use std::collections::{HashMap, HashSet};
@@ -73,13 +73,13 @@ impl Model {
                     NodeKind::Type => {
                         let supers = supertypes(decl.node, &unit.source)
                             .into_iter()
-                            .filter(|(_, name)| !decl.type_parameters.iter().any(|p| p == name))
-                            .filter_map(|(_, name)| scope.resolve(name, &decl.types))
+                            .filter(|(_, name, _)| !decl.type_parameters.iter().any(|p| p == name))
+                            .filter_map(|(_, name, _)| scope.resolve(name, &decl.types))
                             .collect();
                         let superclass = (decl.node.kind() == "class_declaration").then(|| {
                             let named = supertypes(decl.node, &unit.source).into_iter().next();
                             named
-                                .and_then(|(_, name)| scope.resolve(name, &decl.types))
+                                .and_then(|(_, name, _)| scope.resolve(name, &decl.types))
                                 .map_or(Ty::External, Ty::Repo)
                         });
                         let info = types.entry(decl.id.clone()).or_default();
@@ -319,6 +319,22 @@ enum Frame {
     },
 }
 
+/// The line of the name that a call resolves: the method name of an invocation, the type of
+/// a creation, the name after `::` of a method reference; else the first line of the node.
+fn site_line(node: Ts) -> u32 {
+    let named = match node.kind() {
+        "method_invocation" => node.child_by_field_name("name"),
+        "object_creation_expression" => node.child_by_field_name("type"),
+        "method_reference" => (0..node.child_count())
+            .filter_map(|i| node.child(i))
+            .skip_while(|c| c.kind() != "::")
+            .nth(1)
+            .filter(|c| c.kind() == "identifier"),
+        _ => None,
+    };
+    line_of(named.unwrap_or(node))
+}
+
 pub(crate) struct Walker<'a> {
     model: &'a Model,
     ctx: TypeCtx<'a>,
@@ -330,7 +346,7 @@ pub(crate) struct Walker<'a> {
     /// The own type of a function: a call that reaches it gives no edge.
     from_parent: Option<&'a str>,
     report: &'a mut CallReport,
-    found: &'a mut Vec<(String, String)>,
+    found: &'a mut Vec<(String, String, u32)>,
     seen: HashMap<usize, Outcome<'a>>,
 }
 
@@ -341,7 +357,7 @@ impl<'a> Walker<'a> {
         scope: &'a Scope<'a>,
         decl: &'a Decl<'a>,
         report: &'a mut CallReport,
-        found: &'a mut Vec<(String, String)>,
+        found: &'a mut Vec<(String, String, u32)>,
     ) {
         let ctx = TypeCtx {
             scope,
@@ -633,14 +649,15 @@ impl<'a> Walker<'a> {
             return known.clone();
         }
         let outcome = self.compute(node);
+        let line = site_line(node);
         match &outcome {
             Outcome::Function(method) => {
                 self.report.to_function += 1;
-                self.emit(method.id.clone());
+                self.emit(method.id.clone(), line);
             }
             Outcome::Type(id) => {
                 self.report.to_type += 1;
-                self.emit(id.clone());
+                self.emit(id.clone(), line);
             }
             Outcome::External => self.report.external += 1,
             Outcome::Unresolved(_) => self.report.unresolved += 1,
@@ -649,9 +666,9 @@ impl<'a> Walker<'a> {
         outcome
     }
 
-    fn emit(&mut self, to: String) {
+    fn emit(&mut self, to: String, line: u32) {
         if to != self.from && Some(to.as_str()) != self.from_parent {
-            self.found.push((self.from.to_string(), to));
+            self.found.push((self.from.to_string(), to, line));
         }
     }
 

@@ -38,8 +38,9 @@ describe('the indexer in WASM', () => {
     expect(ids).toContain('type:b.Bar');
     expect(ids).toContain('fn:b.Bar#g()');
     expect(graph.nodes.find((n) => n.id === 'mod:')?.name).toBe('repo');
-    expect(graph.edges).toContainEqual({ from: 'type:a.Foo', to: 'type:b.Bar', kind: 'extends' });
-    expect(graph.edges).toContainEqual({ from: 'fn:a.Foo#f()', to: 'fn:b.Bar#g()', kind: 'calls' });
+    // Each edge has the lines of its references (ADR 0032).
+    expect(graph.edges).toContainEqual({ from: 'type:a.Foo', to: 'type:b.Bar', kind: 'extends', sites: [{ lines: [3] }] });
+    expect(graph.edges).toContainEqual({ from: 'fn:a.Foo#f()', to: 'fn:b.Bar#g()', kind: 'calls', sites: [{ lines: [4] }] });
     expect(report.calls.to_function).toBe(1);
   });
 
@@ -66,6 +67,7 @@ describe('the indexer in WASM', () => {
     expect(there.length).toBeGreaterThan(0);
     expect(there.map((e) => e.from)).toContain('fn:a.Foo#f()');
     expect(there.every((e) => e.from === 'type:a.Foo' || e.from === 'fn:a.Foo#f()')).toBe(true);
+    expect(there.find((e) => e.from === 'fn:a.Foo#f()' && e.kind === 'calls')?.sites).toEqual([{ lines: [4] }]);
     expect(back).toEqual([]);
   });
 
@@ -108,10 +110,10 @@ describe('the indexer in WASM', () => {
     expect(ids).toContain('pkg::my_app::a');
     expect(ids).toContain('type:my_app::a::A');
     expect(ids).toContain('fn:my_app::Top#run');
-    expect(graph.edges).toContainEqual({ from: 'fn:my_app::Top#run', to: 'type:my_app::a::A', kind: 'type_ref' });
+    expect(graph.edges).toContainEqual({ from: 'fn:my_app::Top#run', to: 'type:my_app::a::A', kind: 'type_ref', sites: [{ lines: [4] }] });
     expect(report.rust.unreached_files).toEqual(['src/orphan.rs']);
     expect(report.rust.paths.resolved).toBeGreaterThan(0);
-    expect(graph.edges).toContainEqual({ from: 'fn:my_app::Top#run', to: 'fn:my_app::a::A#new', kind: 'calls' });
+    expect(graph.edges).toContainEqual({ from: 'fn:my_app::Top#run', to: 'fn:my_app::a::A#new', kind: 'calls', sites: [{ lines: [4] }] });
     expect(report.calls.to_function).toBe(1);
   });
 
@@ -136,13 +138,14 @@ describe('the indexer in WASM', () => {
     const ids = graph.nodes.map((n) => n.id);
     expect(ids).toContain('mod:');
     expect(ids).toContain('fn:a/f');
-    expect(graph.edges).toContainEqual({ from: 'pkg::a', to: 'pkg::b', kind: 'imports' });
+    // A namespace is a package without a file: the site names it.
+    expect(graph.edges).toContainEqual({ from: 'pkg::a', to: 'pkg::b', kind: 'imports', sites: [{ file: 'src/a.clj', lines: [1] }] });
     expect(graph.nodes.find((n) => n.id === 'pkg::a-test')?.test).toBe(true);
     expect(report.clojure.files_outside_source_dirs).toBe(1);
     expect(graph.nodes.find((n) => n.id === 'val:a/y')?.kind).toBe('value');
     expect(graph.nodes.find((n) => n.id === 'fn:a/b/m :k')?.kind).toBe('function');
-    expect(graph.edges).toContainEqual({ from: 'fn:a/f', to: 'val:a/y', kind: 'value_ref' });
-    expect(graph.edges).toContainEqual({ from: 'fn:a/b/m :k', to: 'fn:b/m', kind: 'implements' });
+    expect(graph.edges).toContainEqual({ from: 'fn:a/f', to: 'val:a/y', kind: 'value_ref', sites: [{ lines: [2] }] });
+    expect(graph.edges).toContainEqual({ from: 'fn:a/b/m :k', to: 'fn:b/m', kind: 'implements', sites: [{ lines: [4] }] });
     expect(report.clojure.value_nodes).toBe(1);
     expect(report.clojure.method_nodes).toBe(1);
   });
@@ -178,7 +181,9 @@ describe('the indexer in WASM', () => {
 
     expect(graph.nodes.find((n) => n.id === 'type:a.Sub')?.change).toBe('added');
     expect(graph.nodes.find((n) => n.id === 'type:a.Gone')?.change).toBe('removed');
-    expect(graph.edges).toContainEqual({ from: 'type:a.Sub', to: 'type:a.Base', kind: 'extends', change: 'added' });
+    expect(graph.edges).toContainEqual({ from: 'type:a.Sub', to: 'type:a.Base', kind: 'extends', change: 'added', sites: [{ lines: [2] }] });
+    // A removed edge has the lines of the base.
+    expect(graph.edges).toContainEqual({ from: 'type:a.Gone', to: 'type:a.Base', kind: 'extends', change: 'removed', sites: [{ lines: [2] }] });
     expect(graph.diff?.base).toBe('v1');
     expect(graph.diff?.head).toBe('v2');
     expect(graph.diff?.files?.map((f) => f.path)).toEqual(changed.map(([p]) => p));

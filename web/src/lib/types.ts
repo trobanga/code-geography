@@ -19,11 +19,20 @@ export interface GraphNode {
 export type NodeChange = 'added' | 'removed' | 'modified';
 export type EdgeChange = 'added' | 'removed';
 
+/** The lines of one file where the source makes an edge (ADR 0032): 1-based, ascending, each once. */
+export interface FileSites {
+  /** Path like `GraphNode.file`. Absent: the file of the `from` node of the edge. */
+  file?: string;
+  lines: number[];
+}
+
 export interface GraphEdge {
   from: string;
   to: string;
   kind: EdgeKind;
   change?: EdgeChange;
+  /** Where the source makes the edge. In an overlay: the lines of the base for a removed edge, of the head for any other. */
+  sites?: FileSites[];
 }
 
 /** A file changed by the commit (ADR 0012). Paths are relative to the repository, like `GraphNode.file`. */

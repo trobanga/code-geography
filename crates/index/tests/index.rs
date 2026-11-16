@@ -568,3 +568,73 @@ fn extend_type_on_a_java_class_puts_the_method_below_the_class_and_the_class_imp
     assert_eq!(report.clojure.extend_nodes, 1);
     assert_eq!(report.calls.to_value, 1);
 }
+
+/// The site entries of the one edge `(from, to, kind)`: file and lines.
+fn sites(
+    graph: &cg_core::Graph,
+    from: &str,
+    to: &str,
+    kind: cg_core::EdgeKind,
+) -> Vec<(Option<String>, Vec<u32>)> {
+    graph
+        .edge(from, to, kind)
+        .unwrap_or_else(|| panic!("no edge {from} -> {to} {kind:?}"))
+        .sites
+        .iter()
+        .map(|s| (s.file.clone(), s.lines.clone()))
+        .collect()
+}
+
+#[test]
+fn the_edges_of_each_front_end_keep_their_sites_in_the_joined_graph() {
+    use cg_core::EdgeKind;
+    let files = [
+        source("j/pom.xml", ""),
+        source(
+            "j/src/main/java/a/Foo.java",
+            "package a;\nclass Foo {\n    void f() {\n        new Bar().g();\n        new Bar().g();\n    }\n}\n",
+        ),
+        source(
+            "j/src/main/java/a/Bar.java",
+            "package a;\nclass Bar {\n    void g() {}\n}\n",
+        ),
+        source(
+            "r/Cargo.toml",
+            "[package]\nname = \"r\"\nversion = \"0.1.0\"\n",
+        ),
+        source(
+            "r/src/lib.rs",
+            "pub fn f() {\n    g();\n}\n\npub fn g() {}\n",
+        ),
+        source("m/deps.edn", "{:paths [\"src\" \"java\"]}"),
+        source(
+            "m/java/x/Plain.java",
+            "package x;\npublic interface Plain {}\n",
+        ),
+        source(
+            "m/src/user.clj",
+            "(ns user\n  (:import\n   [x Plain]))\n\n(defn f []\n  Plain)\n",
+        ),
+    ];
+
+    let (graph, _) = index_sources("repo", &files);
+
+    assert_eq!(
+        sites(&graph, "fn:a.Foo#f()", "fn:a.Bar#g()", EdgeKind::Calls),
+        [(None, vec![4, 5])]
+    );
+    assert_eq!(
+        sites(&graph, "fn:r::f", "fn:r::g", EdgeKind::Calls),
+        [(None, vec![2])]
+    );
+    // A namespace is a package without a file: the entry names the file.
+    assert_eq!(
+        sites(&graph, "pkg:m:user", "type:x.Plain", EdgeKind::Imports),
+        [(Some("m/src/user.clj".to_string()), vec![3])]
+    );
+    assert_eq!(
+        sites(&graph, "fn:user/f", "type:x.Plain", EdgeKind::TypeRef),
+        [(None, vec![6])]
+    );
+    assert!(graph.edges.iter().all(|e| !e.sites.is_empty()));
+}

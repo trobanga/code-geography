@@ -40,10 +40,12 @@ it can stand for hundreds of edges.
   the two commits (`lineDiff`, Myers, in TypeScript), not from the graph. A removed
   node takes its lines from the base commit. A removed line directly above the first
   line of a span is shown only if that first line is an added one (a replaced first
-  line); else it belongs to what stood before the declaration.
+  line); else it belongs to what stood before the declaration. Update: a file that the
+  base lacks under its path gives marks only for a node that the commit added, see
+  ADR 32.
 - A shown line is an object (`SourceLine`: number, text, mark). The place of a reference
   is not found by text search. It comes with the sites on edges (CG-3) as one more field
-  of the line.
+  of the line. Update: done, see ADR 32 (`refs`, and the numbers `head` and `base`).
 - The diagram keeps the box selected last in view when its viewport changes size, by a
   pan only (`keepInView`), so the panel does not cover the box that opened it.
 
@@ -55,7 +57,8 @@ it can stand for hundreds of edges.
 - Under an active focus, lift drops the lines of placeholders (ADR 13). The list still
   holds their edges, so it can be longer than the count on the line says.
 - A `from` node without a span (a Clojure namespace with an `imports` edge) is listed
-  with its targets and has no lines.
+  with its targets and has no lines. Update: it opens for the lines of its sites, see
+  ADR 32.
 - The marks follow the alignment of the line diff: moved code is removed lines and
   added lines. A rename shows the old declaration with its changed lines only. Above
   1000 changed lines in one file, the part between the first and the last change counts

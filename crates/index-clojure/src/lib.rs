@@ -9,7 +9,7 @@ mod ns;
 mod syntax;
 
 pub use cg_core::SourceFile;
-use cg_core::{ClassTable, Edge, EdgeKind, Graph, Node, NodeKind, PackageHolds, Span};
+use cg_core::{ClassTable, EdgeKind, EdgeSet, Graph, Node, NodeKind, PackageHolds, Span};
 use deps::SourceDirs;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -272,7 +272,9 @@ pub fn index_sources_with(
     let mut declared: Vec<Node> = Vec::new();
     let mut seen: BTreeSet<String> = BTreeSet::new();
     let mut namespaces: BTreeSet<String> = BTreeSet::new();
-    let mut requires: Vec<(String, Vec<String>)> = Vec::new();
+    // For each namespace: the path of its file and the namespaces that it requires, each
+    // with its line.
+    let mut requires: Vec<Requires> = Vec::new();
     let mut package_ids: BTreeMap<String, String> = BTreeMap::new();
     let mut vars: HashMap<String, calls::Vars> = HashMap::new();
     let mut read: Vec<calls::File> = Vec::new();
@@ -303,7 +305,11 @@ pub fn index_sources_with(
         }
         packages.insert((module.to_string(), namespace.clone()), is_test);
         package_ids.insert(namespace.clone(), package_id(module, &namespace));
-        requires.push((namespace.clone(), ns::requires(ns_form, source)));
+        requires.push(Requires {
+            namespace: namespace.clone(),
+            path: &file.path,
+            required: ns::requires(ns_form, source),
+        });
         let specs: Vec<ns::Spec> = ns::specs(ns_form, source)
             .into_iter()
             .filter(|s| !s.as_alias)
@@ -326,8 +332,11 @@ pub fn index_sources_with(
             .filter(|s| s.refer_all)
             .map(|s| (s.name.clone(), s.except.clone()))
             .collect();
-        let mut class_imports = ns::class_imports(ns_form, source);
-        let explicit_imports = class_imports.clone();
+        let explicit_imports = ns::class_imports(ns_form, source);
+        let mut class_imports: Vec<(String, String)> = explicit_imports
+            .iter()
+            .map(|(simple, class, _)| (simple.clone(), class.clone()))
+            .collect();
         let ns_form = ns_form.id();
         let rest: Vec<_> = forms
             .iter()
@@ -393,6 +402,7 @@ pub fn index_sources_with(
         read_info.push((file.path.clone(), is_test, module.to_string()));
         read.push(calls::File {
             late,
+            path: &file.path,
             source,
             tree,
             ns_form,
@@ -444,31 +454,20 @@ pub fn index_sources_with(
             change: None,
         });
     }
-    graph.edges = imports(&graph, &package_ids, &requires);
-    let tree = NodeTree::new(&graph);
-    let mut class_imports = Vec::new();
+    let mut edges = imports(&package_ids, &requires);
     for file in &read {
         let from = &package_ids[&file.namespace];
-        for (_, class) in &file.explicit_imports {
-            if let Some(to) = classes.get(class)
-                && !tree.related(from, to)
-            {
-                class_imports.push(Edge {
-                    from: from.clone(),
-                    to: to.clone(),
-                    kind: EdgeKind::Imports,
-                    change: None,
-                });
+        for (_, class, line) in &file.explicit_imports {
+            if let Some(to) = classes.get(class) {
+                edges.add(from, to, EdgeKind::Imports, file.path, *line);
             }
         }
     }
-    let reached: Vec<Edge> = calls::read(&read, &vars, &classes, &mut report)
-        .into_iter()
-        .filter(|e| !tree.related(&e.from, &e.to))
-        .collect();
-    graph.edges.extend(class_imports);
-    graph.edges.extend(reached);
-    graph.edges.sort();
+    calls::read(&read, &vars, &classes, &mut report, &mut edges);
+    // No edge joins a node and its ancestor or descendant: the tree holds that relation.
+    let tree = NodeTree::new(&graph);
+    edges.retain(|from, to| !tree.related(from, to));
+    graph.edges = edges.into_edges(&graph.nodes);
     Indexed {
         graph,
         report,
@@ -576,26 +575,31 @@ impl<'g> NodeTree<'g> {
 }
 
 /// The `imports` edges from each namespace to the namespaces of the repository that it
-/// requires, but none between a node and its ancestor or descendant in the node tree.
-fn imports(
-    graph: &Graph,
-    package_ids: &BTreeMap<String, String>,
-    requires: &[(String, Vec<String>)],
-) -> Vec<Edge> {
-    let tree = NodeTree::new(graph);
-    let mut edges = BTreeSet::new();
-    for (from, required) in requires {
-        let from = &package_ids[from];
-        for to in required.iter().filter_map(|name| package_ids.get(name)) {
-            if !tree.related(from, to) {
-                edges.insert(Edge {
-                    from: from.clone(),
-                    to: to.clone(),
-                    kind: EdgeKind::Imports,
-                    change: None,
-                });
-            }
+/// requires.
+fn imports(package_ids: &BTreeMap<String, String>, requires: &[Requires]) -> EdgeSet {
+    let mut edges = EdgeSet::new();
+    for Requires {
+        namespace,
+        path,
+        required,
+    } in requires
+    {
+        let from = &package_ids[namespace];
+        for (to, line) in required
+            .iter()
+            .filter_map(|(name, line)| Some((package_ids.get(name)?, *line)))
+        {
+            edges.add(from, to, EdgeKind::Imports, path, line);
         }
     }
-    edges.into_iter().collect()
+    edges
+}
+
+/// The namespaces that one namespace requires.
+struct Requires<'f> {
+    namespace: String,
+    /// The file of the `ns` form: the file of the sites.
+    path: &'f str,
+    /// The namespaces as written, each with the line of its libspec.
+    required: Vec<(String, u32)>,
 }

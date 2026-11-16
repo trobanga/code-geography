@@ -1571,3 +1571,431 @@ fn a_name_that_only_an_external_glob_can_provide_stays_external_and_gives_no_edg
         }
     );
 }
+
+/// The site entries of the one edge `from` -> `to` of `kind`: file (None: the file of `from`)
+/// and lines.
+fn sites(g: &Graph, from: &str, to: &str, kind: EdgeKind) -> Vec<(Option<String>, Vec<u32>)> {
+    g.edge(from, to, kind)
+        .unwrap_or_else(|| panic!("no edge {from} -> {to} {kind:?}"))
+        .sites
+        .iter()
+        .map(|s| (s.file.clone(), s.lines.clone()))
+        .collect()
+}
+
+fn own_file(lines: &[u32]) -> Vec<(Option<String>, Vec<u32>)> {
+    vec![(None, lines.to_vec())]
+}
+
+fn in_file(file: &str, lines: &[u32]) -> Vec<(Option<String>, Vec<u32>)> {
+    vec![(Some(file.to_string()), lines.to_vec())]
+}
+
+#[test]
+fn a_call_of_a_function_has_the_line_of_the_call_as_its_site() {
+    let g = index(&[
+        APP,
+        (
+            "src/lib.rs",
+            "fn helper() {}\n\nfn f() {\n    let x = 1;\n    helper();\n}\n",
+        ),
+    ]);
+
+    assert_eq!(
+        sites(&g, "fn:my_app::f", "fn:my_app::helper", EdgeKind::Calls),
+        own_file(&[5])
+    );
+}
+
+#[test]
+fn several_calls_of_one_function_are_one_edge_with_each_line_once_in_ascending_order() {
+    let g = index(&[
+        APP,
+        (
+            "src/lib.rs",
+            "fn helper() -> u8 { 1 }\n\
+             fn f() {\n    helper();\n    let x = 1;\n    let y = helper() + helper();\n    helper();\n}\n",
+        ),
+    ]);
+
+    assert_eq!(
+        sites(&g, "fn:my_app::f", "fn:my_app::helper", EdgeKind::Calls),
+        own_file(&[3, 5, 6])
+    );
+}
+
+#[test]
+fn a_method_call_in_a_chain_over_several_lines_has_the_line_of_its_own_name() {
+    let g = index(&[
+        APP,
+        (
+            "src/lib.rs",
+            "pub struct B;\n\
+             impl B {\n    pub fn new() -> B { B }\n    pub fn a(self) -> B { self }\n    pub fn b(self) -> B { self }\n    pub fn c(self) -> B { self }\n}\n\
+             pub fn f() {\n    B::new()\n        .a()\n        .b()\n        .c();\n}\n",
+        ),
+    ]);
+
+    let f = "fn:my_app::f";
+    for (name, line) in [("new", 9), ("a", 10), ("b", 11), ("c", 12)] {
+        assert_eq!(
+            sites(&g, f, &format!("fn:my_app::B#{name}"), EdgeKind::Calls),
+            own_file(&[line]),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn a_nested_call_keeps_its_own_line_and_does_not_take_that_of_the_outer_call() {
+    let g = index(&[
+        APP,
+        (
+            "src/lib.rs",
+            "fn g() -> u8 { 1 }\nfn f(x: u8) {}\n\
+             fn top() {\n    f(\n        g(),\n    );\n}\n",
+        ),
+    ]);
+
+    assert_eq!(
+        sites(&g, "fn:my_app::top", "fn:my_app::f", EdgeKind::Calls),
+        own_file(&[4])
+    );
+    assert_eq!(
+        sites(&g, "fn:my_app::top", "fn:my_app::g", EdgeKind::Calls),
+        own_file(&[5])
+    );
+}
+
+#[test]
+fn an_associated_function_and_a_call_that_only_proves_the_type_have_the_line_of_the_path() {
+    let g = index(&[
+        APP,
+        (
+            "src/lib.rs",
+            "pub struct T;\nimpl T {\n    pub fn new() -> T { T }\n}\n\
+             pub fn f() {\n    let t = T::new();\n    let u = T::generated();\n}\n\
+             pub fn g(t: T) {\n    let a = 1;\n    t.generated();\n}\n",
+        ),
+    ]);
+
+    assert_eq!(
+        sites(&g, "fn:my_app::f", "fn:my_app::T#new", EdgeKind::Calls),
+        own_file(&[6])
+    );
+    assert_eq!(
+        sites(&g, "fn:my_app::f", "type:my_app::T", EdgeKind::Calls),
+        own_file(&[7])
+    );
+    assert_eq!(
+        sites(&g, "fn:my_app::g", "type:my_app::T", EdgeKind::Calls),
+        own_file(&[11])
+    );
+}
+
+#[test]
+fn a_call_in_a_constant_of_a_mod_comes_from_the_package_and_the_site_names_its_file() {
+    let g = index(&[
+        APP,
+        ("src/lib.rs", "mod a;\npub const fn helper() -> u8 { 1 }\n"),
+        (
+            "src/a.rs",
+            "use crate::helper;\n\npub const C: u8 =\n    helper();\n",
+        ),
+    ]);
+
+    assert_eq!(
+        sites(&g, "pkg::my_app::a", "fn:my_app::helper", EdgeKind::Calls),
+        in_file("src/a.rs", &[4])
+    );
+}
+
+#[test]
+fn a_type_in_a_signature_a_body_and_a_field_has_the_line_of_each_name() {
+    let g = index(&[
+        APP,
+        (
+            "src/lib.rs",
+            "pub struct A;\npub struct B;\n\
+             pub struct S {\n    a: A,\n    other: u8,\n    b: Vec<\n        A,\n    >,\n}\n\
+             pub fn f(\n    x: A,\n) -> B {\n    let y: A = A;\n    B::default()\n}\n",
+        ),
+    ]);
+
+    assert_eq!(
+        sites(&g, "type:my_app::S", "type:my_app::A", EdgeKind::TypeRef),
+        own_file(&[4, 7])
+    );
+    assert_eq!(
+        sites(&g, "fn:my_app::f", "type:my_app::A", EdgeKind::TypeRef),
+        own_file(&[11, 13])
+    );
+    assert_eq!(
+        sites(&g, "fn:my_app::f", "type:my_app::B", EdgeKind::TypeRef),
+        own_file(&[12, 14])
+    );
+}
+
+#[test]
+fn a_type_in_the_arguments_of_a_macro_has_the_line_of_its_token() {
+    let g = index(&[
+        APP,
+        (
+            "src/lib.rs",
+            "pub struct A;\npub struct B;\n\
+             pub fn f() {\n    assert_eq!(\n        A::new(),\n        1,\n        B::new(),\n    );\n}\n",
+        ),
+    ]);
+
+    assert_eq!(
+        sites(&g, "fn:my_app::f", "type:my_app::A", EdgeKind::TypeRef),
+        own_file(&[5])
+    );
+    assert_eq!(
+        sites(&g, "fn:my_app::f", "type:my_app::B", EdgeKind::TypeRef),
+        own_file(&[7])
+    );
+}
+
+#[test]
+fn a_use_has_the_line_of_its_leaf_and_the_site_names_the_file_of_the_package() {
+    let g = index(&[
+        APP,
+        (
+            "src/lib.rs",
+            "mod a;\nmod b;\npub struct X;\npub struct Y;\npub fn z() {}\n",
+        ),
+        (
+            "src/a.rs",
+            "use crate::X;\n\nuse crate::{\n    Y,\n    z,\n};\n",
+        ),
+    ]);
+
+    let a = "pkg::my_app::a";
+    assert_eq!(
+        sites(&g, a, "type:my_app::X", EdgeKind::Imports),
+        in_file("src/a.rs", &[1])
+    );
+    assert_eq!(
+        sites(&g, a, "type:my_app::Y", EdgeKind::Imports),
+        in_file("src/a.rs", &[4])
+    );
+    assert_eq!(
+        sites(&g, a, "fn:my_app::z", EdgeKind::Imports),
+        in_file("src/a.rs", &[5])
+    );
+}
+
+#[test]
+fn a_use_of_self_an_alias_and_a_nested_group_has_the_line_of_each_leaf() {
+    let g = index(&[
+        APP,
+        (
+            "src/lib.rs",
+            "mod a;\npub mod m {\n    pub struct I;\n    pub struct K;\n    pub mod n {\n        pub struct Deep;\n    }\n}\n",
+        ),
+        (
+            "src/a.rs",
+            "use crate::m::{\n    self,\n    I,\n    K\n        as Alias,\n    n::{\n        Deep,\n    },\n};\n",
+        ),
+    ]);
+
+    let a = "pkg::my_app::a";
+    let line_of = |to: &str| sites(&g, a, to, EdgeKind::Imports);
+    assert_eq!(line_of("pkg::my_app::m"), in_file("src/a.rs", &[2]));
+    assert_eq!(line_of("type:my_app::m::I"), in_file("src/a.rs", &[3]));
+    assert_eq!(line_of("type:my_app::m::K"), in_file("src/a.rs", &[4]));
+    assert_eq!(
+        line_of("type:my_app::m::n::Deep"),
+        in_file("src/a.rs", &[7])
+    );
+}
+
+#[test]
+fn an_impl_of_a_trait_has_the_line_of_the_trait_in_the_header_and_names_its_file_if_it_is_not_the_one_of_the_type()
+ {
+    let g = index(&[
+        APP,
+        (
+            "src/lib.rs",
+            "mod other;\npub trait Tr {}\npub trait Tq {}\npub struct S {\n    x: u8,\n}\n\n\
+             impl\n    Tr\n    for S\n{\n}\n",
+        ),
+        (
+            "src/other.rs",
+            "use crate::{S, Tq};\n\nimpl\n    Tq for S {}\n",
+        ),
+    ]);
+
+    assert_eq!(
+        sites(
+            &g,
+            "type:my_app::S",
+            "type:my_app::Tr",
+            EdgeKind::Implements
+        ),
+        own_file(&[9])
+    );
+    let span = node(&g, "type:my_app::S").span.unwrap();
+    assert!(9 > span.end_line);
+    assert_eq!(
+        sites(
+            &g,
+            "type:my_app::S",
+            "type:my_app::Tq",
+            EdgeKind::Implements
+        ),
+        in_file("src/other.rs", &[4])
+    );
+}
+
+#[test]
+fn a_type_in_an_impl_outside_its_functions_belongs_to_the_type_and_names_a_foreign_file() {
+    let g = index(&[
+        APP,
+        (
+            "src/lib.rs",
+            "mod other;\npub struct A;\npub struct S;\n\nimpl S {\n    const C: Option<A> = None;\n}\n",
+        ),
+        (
+            "src/other.rs",
+            "use crate::{A, S};\n\nimpl S {\n    const D: Option<A> = None;\n}\n",
+        ),
+    ]);
+
+    let span = node(&g, "type:my_app::S").span.unwrap();
+    assert!(6 > span.end_line);
+    assert_eq!(
+        sites(&g, "type:my_app::S", "type:my_app::A", EdgeKind::TypeRef),
+        vec![(None, vec![6]), (Some("src/other.rs".to_string()), vec![4])]
+    );
+}
+
+#[test]
+fn a_supertrait_has_the_line_of_its_bound() {
+    let g = index(&[
+        APP,
+        (
+            "src/lib.rs",
+            "pub trait Base {}\npub trait Other {}\n\
+             pub trait Top:\n    Send\n    + Base\n    + Other\n{\n}\n",
+        ),
+    ]);
+
+    assert_eq!(
+        sites(
+            &g,
+            "type:my_app::Top",
+            "type:my_app::Base",
+            EdgeKind::Extends
+        ),
+        own_file(&[5])
+    );
+    assert_eq!(
+        sites(
+            &g,
+            "type:my_app::Top",
+            "type:my_app::Other",
+            EdgeKind::Extends
+        ),
+        own_file(&[6])
+    );
+}
+
+#[test]
+fn a_function_of_an_impl_in_another_file_than_its_type_has_sites_without_a_file() {
+    let g = index(&[
+        APP,
+        (
+            "src/lib.rs",
+            "mod other;\npub struct S;\npub struct P;\npub fn helper() {}\n",
+        ),
+        (
+            "src/other.rs",
+            "use crate::{P, S, helper};\n\nimpl S {\n    pub fn m(&self, p: P) {\n\n        helper();\n    }\n}\n",
+        ),
+    ]);
+
+    let m = "fn:my_app::S#m";
+    assert_eq!(node(&g, m).file.as_deref(), Some("src/other.rs"));
+    assert_eq!(
+        sites(&g, m, "fn:my_app::helper", EdgeKind::Calls),
+        own_file(&[6])
+    );
+    assert_eq!(
+        sites(&g, m, "type:my_app::P", EdgeKind::TypeRef),
+        own_file(&[4])
+    );
+}
+
+#[test]
+fn every_edge_of_a_mixed_fixture_has_at_least_one_site_with_a_line() {
+    let g = index(&[
+        APP,
+        (
+            "src/lib.rs",
+            "pub mod model;\npub mod service;\nmod util {\n    pub fn clamp(x: u8) -> u8 { x }\n    pub const LIMIT: u8 = super::model::limit();\n}\n\
+             pub use model::Item;\n\
+             pub fn main() {\n    let s = service::Service::new();\n    s.run(Item::default());\n    assert_eq!(util::clamp(1), model::Kind::A.code());\n}\n",
+        ),
+        (
+            "src/model.rs",
+            "use std::fmt::Debug;\n\n\
+             pub trait Named: Debug {\n    fn name(&self) -> String;\n}\n\
+             pub trait Coded: Named {\n    fn code(&self) -> u8;\n}\n\
+             #[derive(Default)]\npub struct Item {\n    pub kind: Option<Kind>,\n}\n\
+             pub enum Kind { A, B }\n\
+             impl Coded for Kind {\n    fn code(&self) -> u8 { crate::util::clamp(1) }\n}\n\
+             impl Named for Kind {\n    fn name(&self) -> String { String::new() }\n}\n\
+             pub const fn limit() -> u8 { 3 }\n",
+        ),
+        (
+            "src/service.rs",
+            "use crate::model::{Item, Kind};\nuse crate::util::*;\n\n\
+             pub struct Service;\n\
+             impl Service {\n    pub fn new() -> Self { Service }\n    pub fn run(&self, item: Item) -> Option<Kind> {\n        let k = item.kind;\n        clamp(2);\n        k\n    }\n}\n",
+        ),
+        (
+            "src/extra.rs",
+            "use crate::service::Service;\nimpl Service {\n    pub fn extra(&self) { self.run(Default::default()); }\n}\n",
+        ),
+    ]);
+
+    let kinds: Vec<EdgeKind> = g.edges.iter().map(|e| e.kind).collect();
+    for kind in [
+        EdgeKind::Imports,
+        EdgeKind::Extends,
+        EdgeKind::Implements,
+        EdgeKind::TypeRef,
+        EdgeKind::Calls,
+    ] {
+        assert!(kinds.contains(&kind), "no {kind:?} edge: {:?}", g.edges);
+    }
+    for e in &g.edges {
+        assert!(!e.sites.is_empty(), "no site: {e:?}");
+        for s in &e.sites {
+            assert!(
+                !s.lines.is_empty() && s.lines.iter().all(|l| *l >= 1),
+                "{e:?}"
+            );
+            assert!(s.lines.windows(2).all(|w| w[0] < w[1]), "{e:?}");
+        }
+    }
+}
+
+#[test]
+fn a_function_used_as_a_value_has_the_line_of_its_name() {
+    let g = index(&[
+        APP,
+        (
+            "src/lib.rs",
+            "fn parse(x: u8) -> u8 { x }\n\
+             fn top(v: Vec<u8>) {\n    let w: Vec<u8> = v\n        .into_iter()\n        .map(parse)\n        .collect();\n}\n",
+        ),
+    ]);
+
+    assert_eq!(
+        sites(&g, "fn:my_app::top", "fn:my_app::parse", EdgeKind::Calls),
+        own_file(&[5])
+    );
+}

@@ -6,11 +6,11 @@ use crate::declare::{Decl, container_id};
 use crate::edges::type_head;
 use crate::model::{Found, Model};
 use crate::modules::ModInfo;
-use crate::syntax::{named_children, path_of, text};
+use crate::syntax::{line_of, named_children, path_of, text};
 use crate::types::{Cx, Ty, Types, Wrapper};
 use crate::world::{Entity, Res, World};
-use cg_core::{CallReport, Edge, EdgeKind, NodeKind};
-use std::collections::{BTreeSet, HashMap};
+use cg_core::{CallReport, EdgeKind, EdgeSet, NodeKind};
+use std::collections::HashMap;
 use tree_sitter::Node as Ts;
 
 /// What the call sites say beyond the four counts.
@@ -28,7 +28,7 @@ pub fn compute<'t>(
     packages: &[(&str, &str)],
     mods: &[ModInfo<'t>],
     decls: &[Decl<'t>],
-    edges: &mut BTreeSet<Edge>,
+    edges: &mut EdgeSet,
 ) -> (CallReport, Stats) {
     let model = Model::build(world, mods, decls);
     let types = Types {
@@ -50,6 +50,8 @@ pub fn compute<'t>(
         let mut walker = Walker {
             types: &types,
             source: mods[decl.module].source,
+            file: mods[decl.module].file,
+            line: 0,
             cx,
             from: &decl.id,
             edges: &mut *edges,
@@ -100,6 +102,8 @@ pub fn compute<'t>(
             let mut walker = Walker {
                 types: &types,
                 source: m.source,
+                file: m.file,
+                line: 0,
                 cx: types.item_cx(index, holder),
                 from: &from,
                 edges: &mut *edges,
@@ -125,8 +129,14 @@ struct Walker<'c, 'w, 't> {
     types: &'c Types<'c, 'w, 't>,
     cx: Cx,
     source: &'t str,
+    /// The file that `source` is the text of.
+    file: &'t str,
+    /// The line of the name that is being resolved, set right before the resolution (the
+    /// arguments and the receiver are visited before, and they hold calls of their own).
+    /// The edge of the resolution takes it; 0: no name is being resolved.
+    line: u32,
     from: &'c str,
-    edges: &'c mut BTreeSet<Edge>,
+    edges: &'c mut EdgeSet,
     report: &'c mut CallReport,
     stats: &'c mut Stats,
     /// The local variables in scope, innermost last.
@@ -298,11 +308,17 @@ impl<'t> Walker<'_, '_, 't> {
                 let name = text(node, self.source);
                 match self.local(name) {
                     Some(ty) => ty.clone(),
-                    None => self.path_value(&[name]),
+                    None => {
+                        self.line = line_of(node);
+                        self.path_value(&[name])
+                    }
                 }
             }
             "scoped_identifier" => match path_of(node, self.source) {
-                Some(path) => self.path_value(&path),
+                Some(path) => {
+                    self.line = line_of(node);
+                    self.path_value(&path)
+                }
                 None => Ty::Unknown,
             },
             "parenthesized_expression" | "reference_expression" => {
@@ -461,7 +477,10 @@ impl<'t> Walker<'_, '_, 't> {
             return self.method_call(function);
         }
         match path_of(function, self.source) {
-            Some(path) => self.path_call(&path, first_argument.unwrap_or(Ty::Unknown)),
+            Some(path) => {
+                self.line = line_of(function);
+                self.path_call(&path, first_argument.unwrap_or(Ty::Unknown))
+            }
             None => {
                 self.visit(function);
                 self.tally(Kind::Unresolved);
@@ -594,9 +613,9 @@ impl<'t> Walker<'_, '_, 't> {
             Some(value) => self.visit(value),
             None => Ty::Unknown,
         };
-        let name = function
-            .child_by_field_name("field")
-            .map_or("", |f| text(f, self.source));
+        let field = function.child_by_field_name("field");
+        self.line = line_of(field.unwrap_or(function));
+        let name = field.map_or("", |f| text(f, self.source));
         self.method(receiver, name)
     }
 
@@ -680,12 +699,13 @@ impl<'t> Walker<'_, '_, 't> {
     }
 
     fn add(&mut self, to: &str) {
-        self.edges.insert(Edge {
-            from: self.from.to_string(),
-            to: to.to_string(),
-            kind: EdgeKind::Calls,
-            change: None,
-        });
+        // Each resolution sets the line and gives at most one edge, which uses the line
+        // up. An edge without a line is then a path that forgot to set it: it would have
+        // taken the line of the call before. Tests and debug builds stop there.
+        let line = std::mem::take(&mut self.line);
+        debug_assert!(line > 0, "a call edge without the line of its name");
+        self.edges
+            .add(self.from, to, EdgeKind::Calls, self.file, line);
     }
 }
 

@@ -320,3 +320,148 @@ fn a_changed_def_is_a_modified_value_and_a_new_defmethod_an_added_function() {
         ]
     );
 }
+
+/// The site entries of an edge: file and lines.
+type Entries = Vec<(Option<String>, Vec<u32>)>;
+
+/// The mark and the site entries of the one edge `(from, to, kind)`.
+fn edge_sites(
+    graph: &cg_core::Graph,
+    from: &str,
+    to: &str,
+    kind: EdgeKind,
+) -> (Option<Change>, Entries) {
+    let edge = graph
+        .edge(from, to, kind)
+        .unwrap_or_else(|| panic!("no edge {from} -> {to} {kind:?}"));
+    (
+        edge.change,
+        edge.sites
+            .iter()
+            .map(|s| (s.file.clone(), s.lines.clone()))
+            .collect(),
+    )
+}
+
+const CALLEE: &str =
+    "package a;\nclass Bar {\n    void g() {}\n    void old() {}\n    void fresh() {}\n}\n";
+
+fn spec(changed_files: &[(&str, Change)]) -> DiffSpec {
+    DiffSpec {
+        base: "v1".into(),
+        head: "v2".into(),
+        changed: changed(changed_files),
+    }
+}
+
+#[test]
+fn a_call_that_moved_to_another_line_is_no_changed_edge_and_has_its_line_at_the_head() {
+    let foo = "src/main/java/a/Foo.java";
+    let before = [
+        source("pom.xml", ""),
+        source("src/main/java/a/Bar.java", CALLEE),
+        source(
+            foo,
+            "package a;\nclass Foo {\n    void f(Bar b) {\n        b.g();\n    }\n}\n",
+        ),
+    ];
+    let after = [
+        source("pom.xml", ""),
+        source("src/main/java/a/Bar.java", CALLEE),
+        source(
+            foo,
+            "package a;\nclass Foo {\n    void f(Bar b) {\n        int x = 1;\n\n        b.g();\n    }\n}\n",
+        ),
+    ];
+
+    let (graph, _) = diff_sources("repo", &before, &after, spec(&[(foo, Change::Modified)]));
+
+    assert_eq!(
+        edge_sites(&graph, "fn:a.Foo#f(Bar)", "fn:a.Bar#g()", EdgeKind::Calls),
+        (None, vec![(None, vec![6])])
+    );
+    assert!(graph.edges.iter().all(|e| e.change.is_none()));
+}
+
+#[test]
+fn a_removed_edge_has_its_lines_at_the_base_and_an_added_edge_at_the_head() {
+    let foo = "src/main/java/a/Foo.java";
+    let before = [
+        source("pom.xml", ""),
+        source("src/main/java/a/Bar.java", CALLEE),
+        source(
+            foo,
+            "package a;\nclass Foo {\n    void f(Bar b) {\n        b.old();\n        b.g();\n        b.old();\n    }\n}\n",
+        ),
+    ];
+    let after = [
+        source("pom.xml", ""),
+        source("src/main/java/a/Bar.java", CALLEE),
+        source(
+            foo,
+            "package a;\nclass Foo {\n    void f(Bar b) {\n        b.g();\n        b.fresh();\n    }\n}\n",
+        ),
+    ];
+
+    let (graph, _) = diff_sources("repo", &before, &after, spec(&[(foo, Change::Modified)]));
+
+    let f = "fn:a.Foo#f(Bar)";
+    assert_eq!(
+        edge_sites(&graph, f, "fn:a.Bar#old()", EdgeKind::Calls),
+        (Some(Change::Removed), vec![(None, vec![4, 6])])
+    );
+    assert_eq!(
+        edge_sites(&graph, f, "fn:a.Bar#fresh()", EdgeKind::Calls),
+        (Some(Change::Added), vec![(None, vec![5])])
+    );
+    assert_eq!(
+        edge_sites(&graph, f, "fn:a.Bar#g()", EdgeKind::Calls),
+        (None, vec![(None, vec![4])])
+    );
+}
+
+#[test]
+fn a_removed_edge_of_a_function_whose_file_moved_names_the_file_of_the_base() {
+    let (old, new) = ("src/main/java/a/Foo.java", "extra/java/a/Foo.java");
+    let before = [
+        source("pom.xml", ""),
+        source("src/main/java/a/Bar.java", CALLEE),
+        source(
+            old,
+            "package a;\nclass Foo {\n    void f(Bar b) {\n        b.old();\n    }\n}\n",
+        ),
+    ];
+    let after = [
+        source("pom.xml", ""),
+        source("src/main/java/a/Bar.java", CALLEE),
+        source(
+            new,
+            "package a;\nclass Foo {\n    void f(Bar b) {\n        b.g();\n    }\n}\n",
+        ),
+    ];
+
+    let (graph, _) = diff_sources(
+        "repo",
+        &before,
+        &after,
+        spec(&[(old, Change::Removed), (new, Change::Added)]),
+    );
+
+    let f = "fn:a.Foo#f(Bar)";
+    assert_eq!(graph.node(f).unwrap().file.as_deref(), Some(new));
+    // The ids hold no path: the nodes of a moved file are not added. Their marks follow
+    // their text alone.
+    assert_eq!(graph.node(f).unwrap().change, Some(Change::Modified));
+    assert_eq!(graph.node("type:a.Foo").unwrap().change, None);
+    assert_eq!(
+        edge_sites(&graph, f, "fn:a.Bar#old()", EdgeKind::Calls),
+        (
+            Some(Change::Removed),
+            vec![(Some(old.to_string()), vec![4])]
+        )
+    );
+    assert_eq!(
+        edge_sites(&graph, f, "fn:a.Bar#g()", EdgeKind::Calls),
+        (Some(Change::Added), vec![(None, vec![4])])
+    );
+}

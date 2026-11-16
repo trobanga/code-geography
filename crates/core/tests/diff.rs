@@ -1,4 +1,6 @@
-use cg_core::{Change, ChangeCount, DiffInfo, Edge, EdgeKind, Graph, Node, NodeKind, diff};
+use cg_core::{
+    Change, ChangeCount, DiffInfo, Edge, EdgeKind, FileSites, Graph, Node, NodeKind, diff,
+};
 use std::collections::{BTreeMap, HashSet};
 
 fn node(id: &str, parent: Option<&str>, kind: NodeKind) -> Node {
@@ -21,7 +23,167 @@ fn edge(from: &str, to: &str, kind: EdgeKind) -> Edge {
         to: to.into(),
         kind,
         change: None,
+        sites: Vec::new(),
     }
+}
+
+fn with_sites(from: &str, to: &str, kind: EdgeKind, file: Option<&str>, lines: &[u32]) -> Edge {
+    Edge {
+        sites: vec![FileSites {
+            file: file.map(Into::into),
+            lines: lines.to_vec(),
+        }],
+        ..edge(from, to, kind)
+    }
+}
+
+fn node_in(id: &str, file: &str) -> Node {
+    Node {
+        file: Some(file.into()),
+        ..node(id, None, NodeKind::Function)
+    }
+}
+
+#[test]
+fn an_edge_that_only_changed_its_sites_carries_no_mark_and_the_sites_of_after() {
+    let before = Graph {
+        nodes: vec![
+            node("a", None, NodeKind::Function),
+            node("b", None, NodeKind::Function),
+        ],
+        edges: vec![with_sites("a", "b", EdgeKind::Calls, None, &[3])],
+        ..Graph::default()
+    };
+    let after = Graph {
+        edges: vec![with_sites("a", "b", EdgeKind::Calls, None, &[8, 9])],
+        ..before.clone()
+    };
+
+    let merged = diff(&before, &after);
+
+    assert_eq!(
+        merged.edges,
+        vec![with_sites("a", "b", EdgeKind::Calls, None, &[8, 9])]
+    );
+}
+
+#[test]
+fn a_removed_edge_keeps_the_sites_of_before_and_an_added_edge_those_of_after() {
+    let nodes = vec![
+        node("a", None, NodeKind::Function),
+        node("b", None, NodeKind::Function),
+        node("c", None, NodeKind::Function),
+    ];
+    let before = Graph {
+        nodes: nodes.clone(),
+        edges: vec![with_sites("a", "b", EdgeKind::Calls, None, &[3])],
+        ..Graph::default()
+    };
+    let after = Graph {
+        nodes,
+        edges: vec![with_sites("a", "c", EdgeKind::Calls, None, &[5])],
+        ..Graph::default()
+    };
+
+    let merged = diff(&before, &after);
+
+    assert_eq!(
+        merged.edges,
+        vec![
+            Edge {
+                change: Some(Change::Removed),
+                ..with_sites("a", "b", EdgeKind::Calls, None, &[3])
+            },
+            Edge {
+                change: Some(Change::Added),
+                ..with_sites("a", "c", EdgeKind::Calls, None, &[5])
+            },
+        ]
+    );
+}
+
+#[test]
+fn a_removed_edge_names_the_file_of_before_when_its_from_node_moved() {
+    let before = Graph {
+        nodes: vec![
+            node_in("moved", "old.rs"),
+            node_in("same", "s.rs"),
+            node_in("gone", "g.rs"),
+            node_in("t", "t.rs"),
+        ],
+        edges: vec![
+            with_sites("moved", "t", EdgeKind::Calls, None, &[1]),
+            with_sites("same", "t", EdgeKind::Calls, None, &[2]),
+            with_sites("gone", "t", EdgeKind::Calls, None, &[3]),
+            with_sites("moved", "t", EdgeKind::TypeRef, Some("x.rs"), &[4]),
+        ],
+        ..Graph::default()
+    };
+    let after = Graph {
+        nodes: vec![
+            node_in("moved", "new.rs"),
+            node_in("same", "s.rs"),
+            node_in("t", "t.rs"),
+        ],
+        edges: Vec::new(),
+        ..Graph::default()
+    };
+
+    let merged = diff(&before, &after);
+
+    let sites_of = |from: &str, kind: EdgeKind| {
+        merged
+            .edges
+            .iter()
+            .find(|e| e.from == from && e.kind == kind)
+            .unwrap()
+            .sites
+            .clone()
+    };
+    let one = |file: Option<&str>, lines: &[u32]| {
+        vec![FileSites {
+            file: file.map(Into::into),
+            lines: lines.to_vec(),
+        }]
+    };
+    assert_eq!(
+        sites_of("moved", EdgeKind::Calls),
+        one(Some("old.rs"), &[1])
+    );
+    assert_eq!(sites_of("same", EdgeKind::Calls), one(None, &[2]));
+    assert_eq!(sites_of("gone", EdgeKind::Calls), one(None, &[3]));
+    assert_eq!(
+        sites_of("moved", EdgeKind::TypeRef),
+        one(Some("x.rs"), &[4])
+    );
+}
+
+#[test]
+fn the_entries_of_a_removed_edge_stay_in_the_order_of_their_paths_when_one_gets_its_file() {
+    let entry = |file: Option<&str>, line: u32| FileSites {
+        file: file.map(Into::into),
+        lines: vec![line],
+    };
+    let before = Graph {
+        nodes: vec![node_in("moved", "old.rs"), node_in("t", "t.rs")],
+        edges: vec![Edge {
+            sites: vec![entry(None, 1), entry(Some("a.rs"), 7)],
+            ..with_sites("moved", "t", EdgeKind::Calls, None, &[])
+        }],
+        ..Graph::default()
+    };
+    let after = Graph {
+        nodes: vec![node_in("moved", "new.rs"), node_in("t", "t.rs")],
+        edges: Vec::new(),
+        ..Graph::default()
+    };
+
+    let merged = diff(&before, &after);
+
+    assert_eq!(
+        merged.edges[0].sites,
+        [entry(Some("a.rs"), 7), entry(Some("old.rs"), 1)]
+    );
 }
 
 #[test]

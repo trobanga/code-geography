@@ -1392,6 +1392,20 @@ fn import_gives_an_imports_edge_to_the_record_type_or_interface_of_the_repositor
     );
 }
 
+#[test]
+fn import_clauses_that_are_not_well_formed_give_no_edge_and_leave_the_valid_ones_alone() {
+    let g = index(&[
+        DEPS,
+        ("src/x/y_z.clj", "(ns x.y-z)\n(defrecord Rec [a])\n"),
+        (
+            "src/u.clj",
+            "(ns u\n  ()\n  (:import)\n  (:import 42 [] [1 Rec] (x.y_z 7) Plain)\n  (:import x.y_z.Rec))\n",
+        ),
+    ]);
+
+    assert_eq!(imports(&g), [("pkg::u", "type:x.y-z/Rec")]);
+}
+
 const CLASSES: &str = "(ns x.y-z)\n(defrecord R1 [a])\n(defrecord R2 [a])\n(defrecord R3 [a])\n\
 (defrecord R4 [a])\n(defrecord R5 [a])\n(defrecord R6 [a])\n(defrecord R7 [a])\n\
 (defrecord R8 [a])\n(defrecord R9 [a])\n(defrecord R10 [a])\n(defrecord R11 [a])\n\
@@ -1980,5 +1994,327 @@ fn methods_in_test_code_are_test_code() {
         "val:user/v",
     ] {
         assert!(node(&g, id).test, "{id}");
+    }
+}
+
+/// The site entries of the one edge `from` to `to` of `kind`: file (None: the file of the
+/// `from` node) and lines.
+fn sites(g: &Graph, from: &str, to: &str, kind: EdgeKind) -> Vec<(Option<String>, Vec<u32>)> {
+    g.edge(from, to, kind)
+        .unwrap_or_else(|| panic!("no edge {from} -> {to} {kind:?}; edges: {:?}", g.edges))
+        .sites
+        .iter()
+        .map(|s| (s.file.clone(), s.lines.clone()))
+        .collect()
+}
+
+fn here(lines: &[u32]) -> Vec<(Option<String>, Vec<u32>)> {
+    vec![(None, lines.to_vec())]
+}
+
+fn in_file(file: &str, lines: &[u32]) -> (Option<String>, Vec<u32>) {
+    (Some(file.to_string()), lines.to_vec())
+}
+
+#[test]
+fn a_call_of_a_function_of_the_same_namespace_has_the_line_of_the_symbol_as_its_site() {
+    let g = index(&[
+        DEPS,
+        (
+            "src/x.clj",
+            "(ns x)\n(defn f [])\n\n(defn g []\n  (println 1)\n  (f))\n",
+        ),
+    ]);
+
+    assert_eq!(sites(&g, "fn:x/g", "fn:x/f", EdgeKind::Calls), here(&[6]));
+}
+
+#[test]
+fn a_function_called_through_an_alias_on_several_lines_is_one_edge_with_each_line_once() {
+    let g = index(&[
+        DEPS,
+        ("src/x.clj", "(ns x)\n(defn f [& _])\n"),
+        (
+            "src/user.clj",
+            "(ns user (:require [x :as a]))\n(defn g []\n  (a/f 1)\n\n  (list (a/f) (a/f)))\n",
+        ),
+    ]);
+
+    assert_eq!(
+        sites(&g, "fn:user/g", "fn:x/f", EdgeKind::Calls),
+        here(&[3, 5])
+    );
+    assert_eq!(calls(&g), vec![("fn:user/g", "fn:x/f")]);
+}
+
+#[test]
+fn a_call_in_a_form_over_several_lines_has_the_line_of_its_own_symbol() {
+    let g = index(&[
+        DEPS,
+        (
+            "src/x.clj",
+            "(ns x)\n(defn f [a])\n(defn g [a])\n(defn h [x]\n  (f\n    (g x)))\n",
+        ),
+    ]);
+
+    assert_eq!(sites(&g, "fn:x/h", "fn:x/f", EdgeKind::Calls), here(&[5]));
+    assert_eq!(sites(&g, "fn:x/h", "fn:x/g", EdgeKind::Calls), here(&[6]));
+}
+
+#[test]
+fn a_value_a_constructor_and_a_class_symbol_have_the_line_of_the_symbol() {
+    let g = index(&[
+        DEPS,
+        (
+            "src/x.clj",
+            "(ns x)\n(def v 1)\n(defrecord Rec [a])\n(defrecord Other [a])\n",
+        ),
+        (
+            "src/user.clj",
+            "(ns user (:require [x :as a]) (:import (x Other)))\n(defn g []\n  [a/v\n   (a/->Rec 1)\n   (Other. 2)])\n",
+        ),
+    ]);
+
+    assert_eq!(
+        sites(&g, "fn:user/g", "val:x/v", EdgeKind::ValueRef),
+        here(&[3])
+    );
+    assert_eq!(
+        sites(&g, "fn:user/g", "type:x/Rec", EdgeKind::TypeRef),
+        here(&[4])
+    );
+    assert_eq!(
+        sites(&g, "fn:user/g", "type:x/Other", EdgeKind::TypeRef),
+        here(&[5])
+    );
+}
+
+#[test]
+fn a_function_used_as_a_value_has_the_line_of_the_symbol() {
+    let g = index(&[
+        DEPS,
+        ("src/x.clj", "(ns x)\n(defn f [a])\n"),
+        (
+            "src/user.clj",
+            "(ns user (:require [x :as a]))\n(defn g [xs]\n  (map\n    a/f\n    xs))\n",
+        ),
+    ]);
+
+    assert_eq!(
+        sites(&g, "fn:user/g", "fn:x/f", EdgeKind::Calls),
+        here(&[4])
+    );
+}
+
+#[test]
+fn a_call_in_a_method_of_a_defrecord_is_a_site_of_the_edge_of_the_method() {
+    let g = index(&[
+        DEPS,
+        ("src/x.clj", "(ns x)\n(defn f [])\n"),
+        (
+            "src/rec.clj",
+            "(ns rec (:require [x :as a]))\n(defrecord R [k]\n  Object\n  (toString [_]\n    (a/f)))\n",
+        ),
+    ]);
+
+    assert_eq!(
+        sites(&g, "fn:rec/R#toString", "fn:x/f", EdgeKind::Calls),
+        here(&[5])
+    );
+}
+
+#[test]
+fn a_call_in_the_syntax_quoted_body_of_a_defmacro_has_the_line_of_the_symbol() {
+    let g = index(&[
+        DEPS,
+        ("src/x.clj", "(ns x)\n(defn f [])\n"),
+        (
+            "src/user.clj",
+            "(ns user (:require [x :as a]))\n(defmacro m []\n  `(do\n     (a/f)))\n",
+        ),
+    ]);
+
+    assert_eq!(
+        sites(&g, "fn:user/m", "fn:x/f", EdgeKind::Calls),
+        here(&[4])
+    );
+}
+
+#[test]
+fn an_imports_edge_to_a_namespace_has_the_line_of_its_libspec_and_names_the_file() {
+    let mut files: Vec<(String, String)> = ["b", "c", "g.h.i", "g.h.k"]
+        .iter()
+        .map(|n| namespaces_file(n))
+        .collect();
+    files.push((
+        "src/a.clj".into(),
+        "(ns a\n  (:require [b :as x]\n            c\n            (g.h [i :as j]\n                 k)))"
+            .into(),
+    ));
+    let files: Vec<(&str, &str)> = std::iter::once(DEPS)
+        .chain(files.iter().map(|(p, t)| (p.as_str(), t.as_str())))
+        .collect();
+    let g = index(&files);
+
+    for (to, line) in [("b", 2), ("c", 3), ("g.h.i", 4), ("g.h.k", 5)] {
+        assert_eq!(
+            sites(&g, "pkg::a", &format!("pkg::{to}"), EdgeKind::Imports),
+            vec![in_file("src/a.clj", &[line])],
+            "{to}"
+        );
+    }
+}
+
+#[test]
+fn an_imports_edge_to_a_class_of_the_repository_has_the_line_of_the_class_symbol() {
+    let g = index(&[
+        DEPS,
+        (
+            "src/x.clj",
+            "(ns x)\n(defrecord Rec [a])\n(defrecord Iface [a])\n(defrecord Other [a])\n",
+        ),
+        (
+            "src/user.clj",
+            "(ns user\n  (:import (x Rec\n              Iface)\n           x.Other))\n",
+        ),
+    ]);
+
+    for (to, line) in [("Rec", 2), ("Iface", 3), ("Other", 4)] {
+        assert_eq!(
+            sites(&g, "pkg::user", &format!("type:x/{to}"), EdgeKind::Imports),
+            vec![in_file("src/user.clj", &[line])],
+            "{to}"
+        );
+    }
+}
+
+#[test]
+fn a_defmethod_implements_its_multimethod_with_the_line_of_the_multimethod_symbol() {
+    let g = index(&[
+        DEPS,
+        ("src/x.clj", "(ns x)\n(defmulti area :shape)\n"),
+        (
+            "src/user.clj",
+            "(ns user (:require [x :as a]))\n(defmethod\n  a/area :circle [s]\n  1)\n",
+        ),
+    ]);
+
+    assert_eq!(
+        sites(
+            &g,
+            "fn:user/x/area :circle",
+            "fn:x/area",
+            EdgeKind::Implements
+        ),
+        here(&[3])
+    );
+}
+
+#[test]
+fn a_defrecord_implements_its_protocols_with_the_line_of_the_protocol_symbol_in_the_body() {
+    let g = index(&[
+        DEPS,
+        (
+            "src/x.clj",
+            "(ns x)\n(defprotocol Proto (m [x]))\n(defprotocol Other (n [x]))\n",
+        ),
+        (
+            "src/user.clj",
+            "(ns user (:require [x :as a]) (:import (x Other)))\n(defrecord R [k]\n  a/Proto\n  (m [_] 1)\n  x.Other\n  (n [_] 2))\n",
+        ),
+    ]);
+
+    assert_eq!(
+        sites(&g, "type:user/R", "type:x/Proto", EdgeKind::Implements),
+        here(&[3])
+    );
+    assert_eq!(
+        sites(&g, "type:user/R", "type:x/Other", EdgeKind::Implements),
+        here(&[5])
+    );
+}
+
+#[test]
+fn an_extend_protocol_implements_from_each_type_with_the_line_of_its_type_symbol_and_names_a_foreign_file()
+ {
+    let g = index(&[
+        DEPS,
+        (
+            "src/x.clj",
+            "(ns x)\n(defprotocol Proto (m [x]))\n(defrecord Rec [a])\n(defrecord Rec2 [a])\n(extend-protocol Proto\n  Rec\n  (m [_] 1))\n",
+        ),
+        (
+            "src/user.clj",
+            "(ns user (:require [x :as a]) (:import (x Rec Rec2)))\n(extend-protocol a/Proto\n  Rec\n  Rec2\n  (m [_] 2))\n",
+        ),
+    ]);
+
+    // The form in the file of the type has no file, the one in another file names it.
+    assert_eq!(
+        sites(&g, "type:x/Rec", "type:x/Proto", EdgeKind::Implements),
+        vec![(None, vec![6]), in_file("src/user.clj", &[3])]
+    );
+    assert_eq!(
+        sites(&g, "type:x/Rec2", "type:x/Proto", EdgeKind::Implements),
+        vec![in_file("src/user.clj", &[4])]
+    );
+}
+
+#[test]
+fn an_extend_type_implements_with_the_line_of_each_protocol_symbol() {
+    let g = index(&[
+        DEPS,
+        (
+            "src/x.clj",
+            "(ns x)\n(defprotocol Proto (m [x]))\n(defprotocol Other (n [x]))\n(defrecord Rec [a])\n",
+        ),
+        (
+            "src/user.clj",
+            "(ns user (:require [x :as a]) (:import (x Rec)))\n(extend-type Rec\n  a/Proto\n  (m [_] 1)\n  a/Other\n  (n [_] 2))\n",
+        ),
+    ]);
+
+    assert_eq!(
+        sites(&g, "type:x/Rec", "type:x/Proto", EdgeKind::Implements),
+        vec![in_file("src/user.clj", &[3])]
+    );
+    assert_eq!(
+        sites(&g, "type:x/Rec", "type:x/Other", EdgeKind::Implements),
+        vec![in_file("src/user.clj", &[5])]
+    );
+}
+
+#[test]
+fn every_edge_of_a_mixed_fixture_has_a_site() {
+    let g = index(&[
+        DEPS,
+        (
+            "src/x.clj",
+            "(ns x)\n(def v 1)\n(defn f [] v)\n(defmulti area :shape)\n(defprotocol Proto (m [x]))\n(defrecord Rec [a] Proto (m [_] (f)))\n(defrecord Other [a])\n",
+        ),
+        (
+            "src/user.clj",
+            "(ns user\n  (:require [x :as a])\n  (:import (x Other)))\n(defmethod a/area :c [s] (a/f))\n(extend-protocol a/Proto\n  Other\n  (m [_] a/v))\n(defn g [] [a/v a/f (a/->Rec 1) (Other. 2)])\n(defmacro mac [] `(a/f))\n",
+        ),
+    ]);
+
+    let kinds: Vec<EdgeKind> = g.edges.iter().map(|e| e.kind).collect();
+    for kind in [
+        EdgeKind::Calls,
+        EdgeKind::TypeRef,
+        EdgeKind::ValueRef,
+        EdgeKind::Imports,
+        EdgeKind::Implements,
+    ] {
+        assert!(kinds.contains(&kind), "no {kind:?} edge in the fixture");
+    }
+    for e in &g.edges {
+        assert!(
+            e.sites.iter().any(|s| !s.lines.is_empty()),
+            "{} -> {} {:?} has no site",
+            e.from,
+            e.to,
+            e.kind
+        );
     }
 }

@@ -7,7 +7,7 @@
 mod calls;
 
 pub use cg_core::SourceFile;
-use cg_core::{ClassTable, Edge, EdgeKind, Graph, Node, NodeKind, PackageHolds, Span};
+use cg_core::{ClassTable, EdgeKind, EdgeSet, Graph, Node, NodeKind, PackageHolds, Span};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io;
@@ -23,6 +23,8 @@ const TYPE_DECLARATIONS: [&str; 5] = [
 ];
 
 struct Unit {
+    /// The path of the file, relative to the root.
+    path: String,
     source: String,
     tree: Tree,
     package: String,
@@ -32,12 +34,14 @@ struct Unit {
 struct Scope<'a> {
     declared: &'a HashSet<String>,
     package: &'a str,
-    /// Simple name -> qualified name, from the single-type imports.
-    explicit: HashMap<&'a str, &'a str>,
+    /// Simple name -> qualified name and the line of the import, from the single-type
+    /// imports.
+    explicit: HashMap<&'a str, (&'a str, u32)>,
     /// Packages from the on-demand imports (`import p.*;`).
     on_demand: Vec<&'a str>,
-    /// Qualified names of the types named by the static imports.
-    static_holders: Vec<&'a str>,
+    /// Qualified names of the types named by the static imports, each with the line of
+    /// its import.
+    static_holders: Vec<(&'a str, u32)>,
     /// The static imports as (type, member); no member for `import static p.T.*;`.
     static_members: Vec<(&'a str, Option<&'a str>)>,
 }
@@ -59,6 +63,7 @@ impl<'a> Scope<'a> {
             let Some(path) = children(import).find(|c| c.kind().ends_with("identifier")) else {
                 continue;
             };
+            let line = line_of(path);
             let path = text(path, &unit.source);
             let wildcard = children(import).any(|c| c.kind() == "asterisk");
             if is_static {
@@ -68,7 +73,7 @@ impl<'a> Scope<'a> {
                 } else {
                     path.rsplit_once('.').map(|(h, _)| h)
                 };
-                scope.static_holders.extend(holder);
+                scope.static_holders.extend(holder.map(|h| (h, line)));
                 if wildcard {
                     scope.static_members.push((path, None));
                 } else if let Some((holder, member)) = path.rsplit_once('.') {
@@ -78,7 +83,7 @@ impl<'a> Scope<'a> {
                 scope.on_demand.push(path);
             } else {
                 let simple = path.rsplit('.').next().unwrap_or(path);
-                scope.explicit.insert(simple, path);
+                scope.explicit.insert(simple, (path, line));
             }
         }
         scope
@@ -113,7 +118,7 @@ impl<'a> Scope<'a> {
             }
             candidates.push(type_id(outer, name));
         }
-        candidates.extend(self.explicit.get(name).map(|path| type_id("", path)));
+        candidates.extend(self.explicit.get(name).map(|(path, _)| type_id("", path)));
         candidates.push(type_id(self.package, name));
         candidates.extend(self.on_demand.iter().map(|p| type_id(p, name)));
         candidates.into_iter().find(|c| self.declared.contains(c))
@@ -286,6 +291,7 @@ pub fn index_sources_in(root_name: &str, files: &[SourceFile], modules: &Modules
             });
         }
         units.push(Unit {
+            path: file,
             source,
             tree,
             package,
@@ -325,24 +331,24 @@ pub fn index_sources_in(root_name: &str, files: &[SourceFile], modules: &Modules
         .map(|u| declarations(u.tree.root_node(), &u.source, &u.package))
         .collect();
     let model = calls::Model::build(&units, &scopes, &all_decls);
-    let mut edges = BTreeSet::new();
+    let mut edges = EdgeSet::new();
     for ((unit, scope), decls) in units.iter().zip(&scopes).zip(all_decls) {
-        let mut edge = |from: &str, to: Option<String>, kind| {
+        let mut edge = |from: &str, to: Option<String>, kind, line: u32| {
             if let Some(to) = to.filter(|to| to != from) {
-                edges.insert(Edge {
-                    from: from.to_string(),
-                    to,
-                    kind,
-                    change: None,
-                });
+                edges.add(from, &to, kind, &unit.path, line);
             }
         };
         let top_level = decls
             .iter()
             .filter(|d| d.kind == NodeKind::Type && d.parent.is_none());
         for top in top_level {
-            for path in scope.explicit.values().chain(&scope.static_holders) {
-                edge(&top.id, scope.resolve_qualified(path), EdgeKind::Imports);
+            for (path, line) in scope.explicit.values().chain(&scope.static_holders) {
+                edge(
+                    &top.id,
+                    scope.resolve_qualified(path),
+                    EdgeKind::Imports,
+                    *line,
+                );
             }
         }
         for decl in decls {
@@ -355,8 +361,8 @@ pub fn index_sources_in(root_name: &str, files: &[SourceFile], modules: &Modules
                 }
             };
             if decl.kind == NodeKind::Type {
-                for (kind, name) in supertypes(decl.node, &unit.source) {
-                    edge(&decl.id, resolve(name), kind);
+                for (kind, name, line) in supertypes(decl.node, &unit.source) {
+                    edge(&decl.id, resolve(name), kind, line);
                 }
                 collect_own_type_names(decl.node, &mut references);
             } else {
@@ -366,16 +372,16 @@ pub fn index_sources_in(root_name: &str, files: &[SourceFile], modules: &Modules
                 // A function says nothing about its own type by naming it.
                 let to = resolve(text(reference, &unit.source))
                     .filter(|to| decl.kind == NodeKind::Type || Some(to) != decl.parent.as_ref());
-                edge(&decl.id, to, EdgeKind::TypeRef);
+                edge(&decl.id, to, EdgeKind::TypeRef, line_of(reference));
             }
             let mut found = Vec::new();
             calls::Walker::run(&model, unit, scope, &decl, &mut report.calls, &mut found);
-            for (from, to) in found {
-                edge(&from, Some(to), EdgeKind::Calls);
+            for (from, to, line) in found {
+                edge(&from, Some(to), EdgeKind::Calls, line);
             }
         }
     }
-    graph.edges = edges.into_iter().collect();
+    graph.edges = edges.into_edges(&graph.nodes);
     let shared: HashSet<&str> = modules.dirs.iter().map(String::as_str).collect();
     let packages = package_holds
         .into_iter()
@@ -433,7 +439,7 @@ fn package_id(module: Option<&str>, package: &str) -> String {
 }
 
 /// The supertypes that a type declaration names, with the kind of the relation.
-fn supertypes<'a>(declaration: Ts, source: &'a str) -> Vec<(EdgeKind, &'a str)> {
+fn supertypes<'a>(declaration: Ts, source: &'a str) -> Vec<(EdgeKind, &'a str, u32)> {
     let mut found = Vec::new();
     for clause in children(declaration) {
         let kind = match clause.kind() {
@@ -443,7 +449,11 @@ fn supertypes<'a>(declaration: Ts, source: &'a str) -> Vec<(EdgeKind, &'a str)> 
         };
         let mut types = Vec::new();
         collect_type_heads(clause, &mut types);
-        found.extend(types.into_iter().map(|t| (kind, text(t, source))));
+        found.extend(
+            types
+                .into_iter()
+                .map(|t| (kind, text(t, source), line_of(t))),
+        );
     }
     found
 }
@@ -682,9 +692,14 @@ fn own_hash(declaration: Ts, source: &str) -> String {
 /// The lines of a declaration: 1-based, inclusive.
 fn span_of(node: Ts) -> Span {
     Span {
-        start_line: node.start_position().row as u32 + 1,
+        start_line: line_of(node),
         end_line: node.end_position().row as u32 + 1,
     }
+}
+
+/// The line on which `node` starts: 1-based.
+pub(crate) fn line_of(node: Ts) -> u32 {
+    node.start_position().row as u32 + 1
 }
 
 fn file_name(path: &Path) -> String {

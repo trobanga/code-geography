@@ -224,7 +224,7 @@
         })
       : null,
   );
-  /** The edges behind the line from one box to another, from the cut in WASM. */
+  /** The edges behind the line from one box to another, from the graph in WASM. */
   const between = (from: string, to: string) =>
     explorer ? (JSON.parse(explorer.edgesBetween(from, to, tests, MERGE_IMPORTS)) as GraphEdge[]) : [];
 

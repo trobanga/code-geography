@@ -21,7 +21,7 @@
     tests: boolean;
     /** The edge kinds that the picture draws. */
     kinds: KindSwitch;
-    /** The edges behind the line from one box to another, from the cut in WASM. */
+    /** The edges behind the line from one box to another, from the graph in WASM. */
     between: (from: string, to: string) => GraphEdge[];
     /** Reads the lines of a node. Null: the graph has no texts (a local graph or directory). */
     read: ReadSource | null;

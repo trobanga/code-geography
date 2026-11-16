@@ -4,7 +4,7 @@
 
 use crate::declare::Decl;
 use crate::modules::ModInfo;
-use crate::syntax::{named_children, path_of, text};
+use crate::syntax::{line_of, named_children, path_of, text};
 use cg_core::NodeKind;
 use std::collections::{HashMap, HashSet};
 use tree_sitter::Node as Ts;
@@ -50,10 +50,11 @@ struct Scope {
     types: HashMap<String, Entity>,
     /// Functions.
     values: HashMap<String, Entity>,
-    /// The names that `use` declarations bring in, with the path they were written with.
-    uses: Vec<(String, Vec<String>)>,
-    /// The paths of `use path::*`.
-    globs: Vec<Vec<String>>,
+    /// The names that `use` declarations bring in, with the path they were written with
+    /// and the line (1-based) of its leaf.
+    uses: Vec<(String, Vec<String>, u32)>,
+    /// The paths of `use path::*`, with their lines.
+    globs: Vec<(Vec<String>, u32)>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -283,7 +284,7 @@ impl<'a, 't> World<'a, 't> {
             return Some(Res::Item(*entity, 1));
         }
         let mut unfollowed = None;
-        for (_, path) in scope.uses.iter().filter(|(bound, _)| bound == name) {
+        for (_, path, _) in scope.uses.iter().filter(|(bound, _, _)| bound == name) {
             let segments: Vec<&str> = path.iter().map(String::as_str).collect();
             match self.resolve_from(module, &segments, ns, depth - 1) {
                 Res::Item(entity, consumed) if consumed == segments.len() => {
@@ -300,7 +301,7 @@ impl<'a, 't> World<'a, 't> {
         if unfollowed.is_some() {
             return unfollowed;
         }
-        for path in &scope.globs {
+        for (path, _) in &scope.globs {
             let segments: Vec<&str> = path.iter().map(String::as_str).collect();
             match self.resolve_from(module, &segments, Ns::Type, depth - 1) {
                 Res::Item(Entity::Mod(target), consumed) if consumed == segments.len() => {
@@ -385,8 +386,9 @@ fn is_external_head(name: &str) -> bool {
     KNOWN.contains(&name)
 }
 
-/// The paths that a `use` declaration names, globs included.
-pub fn use_paths(item: Ts, source: &str) -> Vec<Vec<String>> {
+/// The paths that a `use` declaration names, globs included, each with the line (1-based)
+/// of its leaf in the `use` tree.
+pub fn use_paths(item: Ts, source: &str) -> Vec<(Vec<String>, u32)> {
     let mut scope = Scope::default();
     if let Some(argument) = item.child_by_field_name("argument") {
         collect_uses(argument, source, &[], &mut scope);
@@ -394,7 +396,7 @@ pub fn use_paths(item: Ts, source: &str) -> Vec<Vec<String>> {
     scope
         .uses
         .into_iter()
-        .map(|(_, path)| path)
+        .map(|(_, path, line)| (path, line))
         .chain(scope.globs)
         .collect()
 }
@@ -405,7 +407,7 @@ pub fn use_names(item: Ts, source: &str) -> Vec<String> {
     if let Some(argument) = item.child_by_field_name("argument") {
         collect_uses(argument, source, &[], &mut scope);
     }
-    scope.uses.into_iter().map(|(name, _)| name).collect()
+    scope.uses.into_iter().map(|(name, _, _)| name).collect()
 }
 
 /// Collects the names that a `use` argument brings in.
@@ -418,16 +420,22 @@ fn collect_uses(argument: Ts, source: &str, prefix: &[String], scope: &mut Scope
     match argument.kind() {
         "identifier" | "scoped_identifier" | "crate" | "super" => {
             if let Some(path) = path_with(argument) {
-                bind(scope, path, None);
+                let leaf = argument.child_by_field_name("name").unwrap_or(argument);
+                bind(scope, path, None, line_of(leaf));
             }
         }
-        "self" => bind(scope, prefix.to_vec(), None),
+        "self" => bind(scope, prefix.to_vec(), None, line_of(argument)),
         "use_as_clause" => {
             let alias = argument
                 .child_by_field_name("alias")
                 .map(|a| text(a, source).to_string());
             if let Some(path) = argument.child_by_field_name("path").and_then(path_with) {
-                bind(scope, path, Some(alias.unwrap_or_default()));
+                bind(
+                    scope,
+                    path,
+                    Some(alias.unwrap_or_default()),
+                    line_of(argument),
+                );
             }
         }
         "use_wildcard" => {
@@ -435,7 +443,9 @@ fn collect_uses(argument: Ts, source: &str, prefix: &[String], scope: &mut Scope
                 Some(node) => path_with(*node),
                 None => Some(prefix.to_vec()),
             };
-            scope.globs.extend(path);
+            scope
+                .globs
+                .extend(path.map(|path| (path, line_of(argument))));
         }
         "scoped_use_list" => {
             let Some(path) = argument.child_by_field_name("path").and_then(path_with) else {
@@ -454,7 +464,7 @@ fn collect_uses(argument: Ts, source: &str, prefix: &[String], scope: &mut Scope
     }
 }
 
-fn bind(scope: &mut Scope, path: Vec<String>, alias: Option<String>) {
+fn bind(scope: &mut Scope, path: Vec<String>, alias: Option<String>, line: u32) {
     let name = match alias {
         Some(alias) => alias,
         None => match path.last().map(String::as_str) {
@@ -463,6 +473,6 @@ fn bind(scope: &mut Scope, path: Vec<String>, alias: Option<String>) {
         },
     };
     if name != "_" && !name.is_empty() {
-        scope.uses.push((name, path));
+        scope.uses.push((name, path, line));
     }
 }

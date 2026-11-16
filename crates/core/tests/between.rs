@@ -1,4 +1,4 @@
-use cg_core::{Edge, EdgeKind, Graph, Node, NodeKind};
+use cg_core::{Edge, EdgeKind, FileSites, Graph, Node, NodeKind};
 use std::collections::HashSet;
 
 fn node(id: &str, parent: Option<&str>, kind: NodeKind) -> Node {
@@ -21,6 +21,7 @@ fn edge(from: &str, to: &str, kind: EdgeKind) -> Edge {
         to: to.into(),
         kind,
         change: None,
+        sites: Vec::new(),
     }
 }
 
@@ -47,6 +48,50 @@ fn two_modules() -> Graph {
         ],
         ..Graph::default()
     }
+}
+
+#[test]
+fn the_filters_and_edges_between_keep_the_sites_of_the_edges_they_keep() {
+    let sited = |from: &str, to: &str, kind, line: u32| Edge {
+        sites: vec![FileSites {
+            file: None,
+            lines: vec![line],
+        }],
+        ..edge(from, to, kind)
+    };
+    let test_type = Node {
+        test: true,
+        ..node("TT", Some("a"), NodeKind::Type)
+    };
+    let mut graph = two_modules();
+    graph.nodes.push(test_type);
+    graph.edges = vec![
+        sited("T1", "U", EdgeKind::Extends, 4),
+        sited("T1", "U", EdgeKind::Imports, 1),
+        sited("T2", "TT", EdgeKind::TypeRef, 7),
+    ];
+
+    assert_eq!(
+        graph.edges_between("T1", "U"),
+        vec![
+            &sited("T1", "U", EdgeKind::Extends, 4),
+            &sited("T1", "U", EdgeKind::Imports, 1)
+        ]
+    );
+    assert_eq!(
+        graph.without_redundant_imports().edges,
+        vec![
+            sited("T1", "U", EdgeKind::Extends, 4),
+            sited("T2", "TT", EdgeKind::TypeRef, 7)
+        ]
+    );
+    assert_eq!(
+        graph.without_tests().edges,
+        vec![
+            sited("T1", "U", EdgeKind::Extends, 4),
+            sited("T1", "U", EdgeKind::Imports, 1)
+        ]
+    );
 }
 
 #[test]

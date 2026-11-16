@@ -3,10 +3,10 @@
 use crate::PathReport;
 use crate::declare::{Decl, TYPE_ITEMS, container_id, generic_names};
 use crate::modules::ModInfo;
-use crate::syntax::{named_children, path_of, text};
+use crate::syntax::{line_of, named_children, path_of, text};
 use crate::world::{Ctx, Entity, Res, World, use_names, use_paths};
-use cg_core::{Edge, EdgeKind};
-use std::collections::{BTreeSet, HashMap, HashSet};
+use cg_core::{EdgeKind, EdgeSet};
+use std::collections::{HashMap, HashSet};
 use tree_sitter::Node as Ts;
 
 /// Items whose `name` field declares something instead of naming something.
@@ -46,13 +46,13 @@ pub fn compute<'t>(
     mods: &[ModInfo<'t>],
     decls: &[Decl<'t>],
     report: &mut PathReport,
-) -> BTreeSet<Edge> {
+) -> EdgeSet {
     let decl_at: HashMap<(usize, usize), usize> = decls
         .iter()
         .enumerate()
         .map(|(index, d)| ((d.module, d.item.id()), index))
         .collect();
-    let mut edges = BTreeSet::new();
+    let mut edges = EdgeSet::new();
     for (index, m) in mods.iter().enumerate() {
         let (dir, crate_name) = packages[m.package];
         let container = container_id(dir, crate_name, m);
@@ -61,6 +61,7 @@ pub fn compute<'t>(
             decls,
             module: index,
             source: m.source,
+            file: m.file,
             edges: &mut edges,
             report: &mut *report,
         };
@@ -68,7 +69,7 @@ pub fn compute<'t>(
             let own = decl_at.get(&(index, item.id())).copied();
             match item.kind() {
                 "use_declaration" => {
-                    for path in use_paths(*item, m.source) {
+                    for (path, line) in use_paths(*item, m.source) {
                         let resolution = world.resolve_use(index, &path);
                         emit.report.count(resolution);
                         let Res::Item(entity, _) = resolution else {
@@ -84,7 +85,7 @@ pub fn compute<'t>(
                             }
                             Entity::Other => continue,
                         };
-                        emit.add(&container, &to, EdgeKind::Imports);
+                        emit.add(&container, &to, EdgeKind::Imports, line);
                     }
                 }
                 "trait_item" => {
@@ -96,7 +97,13 @@ pub fn compute<'t>(
                     if let Some(bounds) = item.child_by_field_name("bounds") {
                         for bound in named_children(bounds) {
                             if let Some(target) = emit.type_head(&generics, None, bound) {
-                                emit.add(&decls[own].id, &decls[target].id, EdgeKind::Extends);
+                                let line = line_of(head_path(bound));
+                                emit.add(
+                                    &decls[own].id,
+                                    &decls[target].id,
+                                    EdgeKind::Extends,
+                                    line,
+                                );
                                 site.no_edge.insert(head_path(bound).id());
                             }
                         }
@@ -130,8 +137,11 @@ pub fn compute<'t>(
                     let trait_node = item.child_by_field_name("trait");
                     let self_decl = self_node.and_then(|n| emit.type_head(&generics, None, n));
                     let trait_decl = trait_node.and_then(|n| emit.type_head(&generics, None, n));
-                    if let (Some(own), Some(tr)) = (self_decl, trait_decl) {
-                        emit.add(&decls[own].id, &decls[tr].id, EdgeKind::Implements);
+                    if let (Some(own), Some(tr), Some(trait_node)) =
+                        (self_decl, trait_decl, trait_node)
+                    {
+                        let line = line_of(head_path(trait_node));
+                        emit.add(&decls[own].id, &decls[tr].id, EdgeKind::Implements, line);
                     }
                     let from = match (self_decl, trait_decl) {
                         (Some(d), _) | (None, Some(d)) => decls[d].id.clone(),
@@ -217,18 +227,16 @@ struct Emitter<'e, 'w, 't> {
     decls: &'e [Decl<'t>],
     module: usize,
     source: &'t str,
-    edges: &'e mut BTreeSet<Edge>,
+    /// The file that `source` is the text of.
+    file: &'t str,
+    edges: &'e mut EdgeSet,
     report: &'e mut PathReport,
 }
 
 impl<'t> Emitter<'_, '_, 't> {
-    fn add(&mut self, from: &str, to: &str, kind: EdgeKind) {
-        self.edges.insert(Edge {
-            from: from.to_string(),
-            to: to.to_string(),
-            kind,
-            change: None,
-        });
+    /// An edge whose reference stands on `line` of the file that is being read.
+    fn add(&mut self, from: &str, to: &str, kind: EdgeKind, line: u32) {
+        self.edges.add(from, to, kind, self.file, line);
     }
 
     /// The type declaration that a type as written names, if it is in the repository.
@@ -262,9 +270,9 @@ impl<'t> Emitter<'_, '_, 't> {
         walker.walk(node);
         let (found, counted) = (walker.found, walker.report);
         self.report.add(counted);
-        for target in found {
+        for (target, line) in found {
             let to = self.decls[target].id.clone();
-            self.add(site.from, &to, EdgeKind::TypeRef);
+            self.add(site.from, &to, EdgeKind::TypeRef, line);
         }
     }
 }
@@ -276,7 +284,8 @@ struct Walker<'c, 'w, 't> {
     skip: HashSet<usize>,
     /// Name nodes that are counted but give no `type_ref`: the edge has another kind.
     no_edge: HashSet<usize>,
-    found: Vec<usize>,
+    /// The types that were named, with the line of the name.
+    found: Vec<(usize, u32)>,
     report: PathReport,
 }
 
@@ -289,10 +298,10 @@ impl<'t> Walker<'_, '_, 't> {
             "macro_invocation" => self.macro_arguments(node),
             kind if SILENT.contains(&kind) => {}
             "visibility_modifier" => {}
-            "type_identifier" => self.reference(&[text(node, self.source)], node.id()),
+            "type_identifier" => self.reference(&[text(node, self.source)], node),
             "scoped_type_identifier" | "scoped_identifier" => match path_of(node, self.source) {
                 Some(path) => {
-                    self.reference(&path, node.id());
+                    self.reference(&path, node);
                     self.walk_arguments(node);
                 }
                 None => self.descend(node),
@@ -308,7 +317,7 @@ impl<'t> Walker<'_, '_, 't> {
                     if child.kind() == "identifier"
                         && node.child_by_field_name(field) == Some(child)
                     {
-                        self.constructor(text(child, self.source), child.id());
+                        self.constructor(text(child, self.source), child);
                     } else {
                         self.walk(child);
                     }
@@ -336,28 +345,28 @@ impl<'t> Walker<'_, '_, 't> {
                     .next()
                     .is_some_and(|c| c.is_alphabetic() || c == '_')
             };
-            let preceded = at > 0 && matches!(tokens[at - 1], "::" | "." | "$");
-            if preceded || !is_word(tokens[at]) {
+            let preceded = at > 0 && matches!(tokens[at - 1].0, "::" | "." | "$");
+            if preceded || !is_word(tokens[at].0) {
                 at += 1;
                 continue;
             }
-            let mut path = vec![tokens[at]];
+            let mut path = vec![tokens[at].0];
             let mut end = at + 1;
-            while end + 1 < tokens.len() && tokens[end] == "::" && is_word(tokens[end + 1]) {
-                path.push(tokens[end + 1]);
+            while end + 1 < tokens.len() && tokens[end].0 == "::" && is_word(tokens[end + 1].0) {
+                path.push(tokens[end + 1].0);
                 end += 2;
             }
             let capital = path[0].chars().next().is_some_and(char::is_uppercase);
             if path.len() > 1 || capital {
-                self.silent_reference(&path);
+                self.silent_reference(&path, tokens[at].1);
             }
             at = end;
         }
     }
 
-    fn silent_reference(&mut self, path: &[&str]) {
+    fn silent_reference(&mut self, path: &[&str], line: u32) {
         if let Res::Item(Entity::Type(target), _) = self.world.resolve(&self.ctx, path) {
-            self.found.push(target);
+            self.found.push((target, line));
         }
     }
 
@@ -390,30 +399,30 @@ impl<'t> Walker<'_, '_, 't> {
 
     /// A name that starts with a capital letter in the place of a function: the
     /// constructor of a tuple struct.
-    fn constructor(&mut self, name: &str, node: usize) {
+    fn constructor(&mut self, name: &str, node: Ts) {
         if name.chars().next().is_some_and(char::is_uppercase) {
             self.reference(&[name], node);
         }
     }
 
-    fn reference(&mut self, path: &[&str], node: usize) {
+    fn reference(&mut self, path: &[&str], node: Ts) {
         if path == ["_"] {
             return;
         }
         let resolution = self.world.resolve(&self.ctx, path);
         self.report.count(resolution);
         if let Res::Item(Entity::Type(target), _) = resolution
-            && !self.no_edge.contains(&node)
+            && !self.no_edge.contains(&node.id())
         {
-            self.found.push(target);
+            self.found.push((target, line_of(node)));
         }
     }
 }
 
-/// The leaf tokens of a token tree, in the order of the source.
-fn flatten<'a>(node: Ts, source: &'a str, tokens: &mut Vec<&'a str>) {
+/// The leaf tokens of a token tree with their lines, in the order of the source.
+fn flatten<'a>(node: Ts, source: &'a str, tokens: &mut Vec<(&'a str, u32)>) {
     if node.child_count() == 0 {
-        tokens.push(text(node, source));
+        tokens.push((text(node, source), line_of(node)));
     }
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
@@ -457,7 +466,7 @@ pub fn type_head(world: &World, ctx: &Ctx, node: Ts, source: &str) -> Option<usi
 /// An edge between a node and itself, its ancestor or its descendant says nothing: the
 /// tree already holds that relation.
 pub fn drop_edges_to_ancestors(
-    edges: &mut BTreeSet<Edge>,
+    edges: &mut EdgeSet,
     decls: &[Decl],
     mods: &[ModInfo],
     packages: &[(&str, &str)],
@@ -484,5 +493,5 @@ pub fn drop_edges_to_ancestors(
         }
         false
     };
-    edges.retain(|edge| !ancestor(&edge.to, &edge.from) && !ancestor(&edge.from, &edge.to));
+    edges.retain(|from, to| !ancestor(to, from) && !ancestor(from, to));
 }

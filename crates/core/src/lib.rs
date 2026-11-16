@@ -1,10 +1,12 @@
 //! Language-neutral model of a code base: a tree of containers with edges
 //! between its nodes. No I/O, so the crate builds for native and wasm32.
 
+mod edges;
 mod input;
 mod packages;
 mod report;
 
+pub use edges::EdgeSet;
 pub use input::{SourceFile, holds_no_sources, outside_excluded_directories, text_hash};
 pub use packages::{ClassTable, PackageHolds, PackageNode, marked_package_nodes, package_nodes};
 pub use report::CallReport;
@@ -78,7 +80,17 @@ pub enum EdgeKind {
     ValueRef,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+/// The lines of one file where the source makes an edge (ADR 0032): 1-based.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileSites {
+    /// Path as `Node::file`. `None`: the file of the `from` node of the edge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    /// Ascending, each line once.
+    pub lines: Vec<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Edge {
     pub from: String,
     pub to: String,
@@ -86,6 +98,10 @@ pub struct Edge {
     /// What a commit did to the edge. Only set in a diff graph.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub change: Option<Change>,
+    /// Where the source makes the edge: one entry per file, the entry without `file` first,
+    /// then by path. Not part of the identity of the edge, which is `(from, to, kind)`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sites: Vec<FileSites>,
 }
 
 /// The two revisions that a diff graph compares, as the user named them.
@@ -166,9 +182,14 @@ impl Graph {
     }
 
     pub fn has_edge(&self, from: &str, to: &str, kind: EdgeKind) -> bool {
+        self.edge(from, to, kind).is_some()
+    }
+
+    /// The edge with the identity `(from, to, kind)`.
+    pub fn edge(&self, from: &str, to: &str, kind: EdgeKind) -> Option<&Edge> {
         self.edges
             .iter()
-            .any(|e| e.from == from && e.to == to && e.kind == kind)
+            .find(|e| e.from == from && e.to == to && e.kind == kind)
     }
 
     /// The edges that a line from the box `from` to the box `to` stands for: each edge that
@@ -318,7 +339,7 @@ pub fn diff(before: &Graph, after: &Graph) -> Graph {
     use std::collections::HashMap;
 
     let old: HashMap<&str, &Node> = before.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
-    let new: std::collections::HashSet<&str> = after.nodes.iter().map(|n| n.id.as_str()).collect();
+    let new: HashMap<&str, &Node> = after.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
     let kept = after.nodes.iter().map(|node| {
         let change = match old.get(node.id.as_str()) {
             None => Some(Change::Added),
@@ -335,18 +356,22 @@ pub fn diff(before: &Graph, after: &Graph) -> Graph {
     let removed = before
         .nodes
         .iter()
-        .filter(|n| !new.contains(n.id.as_str()))
+        .filter(|n| !new.contains_key(n.id.as_str()))
         .map(|node| Node {
             change: Some(Change::Removed),
             ..node.clone()
         });
     // Identity of an edge is (from, to, kind).
-    let key = |e: &Edge| (e.from.clone(), e.to.clone(), e.kind);
-    let mut edges: std::collections::BTreeMap<_, Edge> = before
+    fn key(e: &Edge) -> (&str, &str, EdgeKind) {
+        (e.from.as_str(), e.to.as_str(), e.kind)
+    }
+    let had: HashSet<_> = before.edges.iter().map(key).collect();
+    // An edge of `after` has the sites of `after`, whether `before` has the edge or not.
+    let mut edges: BTreeMap<_, Edge> = after
         .edges
         .iter()
         .map(|e| {
-            let change = Some(Change::Removed);
+            let change = (!had.contains(&key(e))).then_some(Change::Added);
             (
                 key(e),
                 Edge {
@@ -356,24 +381,41 @@ pub fn diff(before: &Graph, after: &Graph) -> Graph {
             )
         })
         .collect();
-    for e in &after.edges {
-        let change = match edges.get(&key(e)) {
-            Some(_) => None,
-            None => Some(Change::Added),
-        };
-        edges.insert(
-            key(e),
-            Edge {
-                change,
-                ..e.clone()
-            },
-        );
+    for e in &before.edges {
+        edges
+            .entry(key(e))
+            .or_insert_with(|| removed_edge(e, &old, &new));
     }
     Graph {
         nodes: kept.chain(removed).collect(),
         edges: edges.into_values().collect(),
         diff: None,
     }
+}
+
+/// An edge that only the graph `before` has, as the diff graph holds it. A node that both
+/// graphs have is the node of `after` there: when its file differs, the sites that leave
+/// the file out must name the file of `before`.
+fn removed_edge(edge: &Edge, before: &HashMap<&str, &Node>, after: &HashMap<&str, &Node>) -> Edge {
+    let mut removed = Edge {
+        change: Some(Change::Removed),
+        ..edge.clone()
+    };
+    let moved_from = before
+        .get(edge.from.as_str())
+        .and_then(|n| n.file.as_ref())
+        .filter(|file| {
+            after
+                .get(edge.from.as_str())
+                .is_some_and(|n| n.file.as_ref() != Some(*file))
+        });
+    if let Some(file) = moved_from {
+        for sites in removed.sites.iter_mut().filter(|s| s.file.is_none()) {
+            sites.file = Some(file.clone());
+        }
+        removed.sites.sort_by(|a, b| a.file.cmp(&b.file));
+    }
+    removed
 }
 
 /// What the viewer shows for one state of expanded containers.

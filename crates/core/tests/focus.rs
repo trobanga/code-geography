@@ -21,6 +21,7 @@ fn edge(from: &str, to: &str, kind: EdgeKind) -> Edge {
         to: to.into(),
         kind,
         change: None,
+        sites: Vec::new(),
     }
 }
 

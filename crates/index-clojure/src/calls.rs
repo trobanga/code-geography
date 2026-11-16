@@ -5,10 +5,10 @@
 //! and no two sources declare it.
 
 use crate::declare::{def_form, extend_pairs, head};
-use crate::syntax::{flat_items, items, keyword, plain_symbol, private, symbol};
+use crate::syntax::{flat_items, items, keyword, line_of, plain_symbol, private, symbol};
 use crate::{Report, locals};
-use cg_core::{ClassTable, Edge, EdgeKind};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use cg_core::{ClassTable, EdgeKind, EdgeSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use tree_sitter::{Node as Ts, Tree};
 
 /// What a name in a namespace stands for.
@@ -151,6 +151,8 @@ pub fn vars(forms: &[Ts], source: &str, namespace: &str) -> Vars {
 pub struct File<'s> {
     /// The declarations whose nodes `late::place` makes once all files are read.
     pub late: Vec<crate::late::Late>,
+    /// The path of the source file: the file of the sites of its edges.
+    pub path: &'s str,
     pub source: &'s str,
     pub tree: Tree,
     /// The `ns` form, as `Node::id`.
@@ -169,8 +171,9 @@ pub struct File<'s> {
     /// the classes of its own `defrecord`, `deftype` and `definterface`. Short name to
     /// class name.
     pub imports: HashMap<String, String>,
-    /// The classes of the `:import` clauses: short name and class name, in source order.
-    pub explicit_imports: Vec<(String, String)>,
+    /// The classes of the `:import` clauses: short name, class name and the line of the
+    /// class symbol, in source order.
+    pub explicit_imports: Vec<(String, String, u32)>,
 }
 
 /// What a name means in one file.
@@ -381,14 +384,15 @@ impl<'a> Scope<'a> {
     }
 }
 
-/// The edges that the code of `files` names. `vars` holds the namespaces of the repository.
+/// Adds the edges that the code of `files` names to `edges`. `vars` holds the namespaces of
+/// the repository.
 pub fn read(
     files: &[File],
     vars: &HashMap<String, Vars>,
     classes: &ClassTable,
     report: &mut Report,
-) -> BTreeSet<Edge> {
-    let mut edges = BTreeSet::new();
+    edges: &mut EdgeSet,
+) {
     for file in files {
         for form in flat_items(file.tree.root_node()) {
             if form.id() == file.ns_form {
@@ -403,39 +407,29 @@ pub fn read(
             if matches!(form_head.as_deref(), Some("defrecord" | "deftype"))
                 && let Some(from) = file.owned.get(&form.id())
             {
-                implemented(form, from, scope, &mut edges);
+                implemented(form, from, scope, edges);
             }
             match form_head.as_deref() {
                 Some("defmethod") => {
-                    if let (Some(from), Some(multi)) = (
+                    let named = flat_items(form).get(1).copied();
+                    if let (Some(from), Some(named), Some(multi)) = (
                         file.owned.get(&form.id()),
-                        flat_items(form)
-                            .get(1)
-                            .and_then(|m| crate::declare::qualified_text(*m, file.source)),
+                        named,
+                        named.and_then(|m| crate::declare::qualified_text(m, file.source)),
                     ) && let Some(to) = scope.multi_node(&multi)
                     {
-                        edges.insert(Edge {
-                            from: from.clone(),
-                            to: to.to_string(),
-                            kind: EdgeKind::Implements,
-                            change: None,
-                        });
+                        edges.add(from, to, EdgeKind::Implements, file.path, line_of(named));
                     }
                 }
                 Some(kind @ ("extend-protocol" | "extend-type")) => {
                     let items = flat_items(form);
-                    for (ty, protocol) in
+                    for (ty, protocol, line) in
                         extend_pairs(&items, kind == "extend-protocol", file.source)
                     {
                         if let (Some(ty), Some(protocol)) =
                             (scope.type_node(&ty), scope.protocol_node(&protocol))
                         {
-                            edges.insert(Edge {
-                                from: ty.to_string(),
-                                to: protocol.to_string(),
-                                kind: EdgeKind::Implements,
-                                change: None,
-                            });
+                            edges.add(ty, protocol, EdgeKind::Implements, file.path, line);
                         }
                     }
                 }
@@ -491,7 +485,7 @@ pub fn read(
                     locals: &locals,
                     // The expansion of a macro calls what its syntax-quoted forms name.
                     in_macro: form_head.as_deref() == Some("defmacro"),
-                    edges: &mut edges,
+                    edges: &mut *edges,
                     report: &mut *report,
                 };
                 for item in code {
@@ -500,7 +494,6 @@ pub fn read(
             }
         }
     }
-    edges
 }
 
 struct Reader<'a> {
@@ -513,7 +506,7 @@ struct Reader<'a> {
     /// The names in the top-level form that a local could bind (see `locals`).
     locals: &'a HashSet<String>,
     in_macro: bool,
-    edges: &'a mut BTreeSet<Edge>,
+    edges: &'a mut EdgeSet,
     report: &'a mut Report,
 }
 
@@ -597,14 +590,14 @@ impl Reader<'_> {
             return;
         };
         let Some(namespace) = namespace else {
-            self.unqualified(name, at_head);
+            self.unqualified(form, name, at_head);
             return;
         };
         // A name that no alias and no namespace of the repository has can be a class.
         let file = self.scope.file;
         if !file.aliases.contains_key(namespace)
             && !self.scope.vars.contains_key(namespace)
-            && self.class_reference(namespace, false)
+            && self.class_reference(form, namespace, false)
         {
             return;
         }
@@ -654,25 +647,21 @@ impl Reader<'_> {
             }
         };
         let Some(from) = self.from else { return };
-        self.edges.insert(Edge {
-            from: from.to_string(),
-            to: to.clone(),
-            kind,
-            change: None,
-        });
+        self.edges
+            .add(from, to, kind, self.scope.file.path, line_of(form));
     }
 }
 
 impl Reader<'_> {
     /// A symbol without namespace part that no var names: a class by its short name, by its
     /// constructor form (`Foo.`) or by its full name.
-    fn class_symbol(&mut self, name: &str) {
+    fn class_symbol(&mut self, form: Ts, name: &str) {
         if name.starts_with('.') {
             // A member (`.method`) or the macro `..`.
         } else if let Some(class) = name.strip_suffix('.') {
-            self.class_reference(class, false);
+            self.class_reference(form, class, false);
         } else {
-            self.class_reference(name, !name.contains('.'));
+            self.class_reference(form, name, !name.contains('.'));
         }
     }
 
@@ -681,7 +670,7 @@ impl Reader<'_> {
     /// with dots that is no class of the repository is one only if its last segment starts
     /// with an upper-case letter, so that `clojure.string` is not counted as a class. This
     /// decides the count only, never an edge.
-    fn class_reference(&mut self, written: &str, hideable: bool) -> bool {
+    fn class_reference(&mut self, form: Ts, written: &str, hideable: bool) -> bool {
         let file = self.scope.file;
         let class = if let Some(class) = file.imports.get(written) {
             class
@@ -713,21 +702,22 @@ impl Reader<'_> {
         };
         self.report.classes.to_type += 1;
         self.report.calls.to_type += 1;
-        self.edges.insert(Edge {
-            from: from.to_string(),
-            to: to.clone(),
-            kind: EdgeKind::TypeRef,
-            change: None,
-        });
+        self.edges.add(
+            from,
+            to,
+            EdgeKind::TypeRef,
+            self.scope.file.path,
+            line_of(form),
+        );
         true
     }
 
     /// A symbol without namespace part: a function that the namespace of the file or a
     /// `:refer` names.
-    fn unqualified(&mut self, name: &str, at_head: bool) {
+    fn unqualified(&mut self, form: Ts, name: &str, at_head: bool) {
         let candidates = self.scope.candidates(name);
         if candidates.is_empty() {
-            self.class_symbol(name);
+            self.class_symbol(form, name);
             return;
         }
         // A var that has no node is not a site (the `def` of a constant is named everywhere).
@@ -792,19 +782,15 @@ impl Reader<'_> {
             }
             _ => return,
         };
-        self.edges.insert(Edge {
-            from: from.to_string(),
-            to: to.clone(),
-            kind,
-            change: None,
-        });
+        self.edges
+            .add(from, to, kind, self.scope.file.path, line_of(form));
     }
 }
 
 /// The `implements` edges of a `defrecord` or `deftype` form: each symbol at the top level
 /// of its body that names a protocol or interface of the repository. No local can stand
 /// there, so also a symbol without namespace part is resolved.
-fn implemented(form: Ts, from: &str, scope: Scope, edges: &mut BTreeSet<Edge>) {
+fn implemented(form: Ts, from: &str, scope: Scope, edges: &mut EdgeSet) {
     for item in flat_items(form).into_iter().skip(3) {
         let Some((namespace, name)) = symbol(item, scope.file.source) else {
             continue;
@@ -822,24 +808,26 @@ fn implemented(form: Ts, from: &str, scope: Scope, edges: &mut BTreeSet<Edge>) {
             ..
         }) = target
         {
-            edges.insert(Edge {
-                from: from.to_string(),
-                to: id.clone(),
-                kind: EdgeKind::Implements,
-                change: None,
-            });
+            edges.add(
+                from,
+                id,
+                EdgeKind::Implements,
+                scope.file.path,
+                line_of(item),
+            );
         } else if target.is_none() && namespace.is_none() {
             // A class of the `:import` clauses or by its full name. A record or type can
             // only name interfaces here, so a class of the repository is one.
             let class = scope.file.imports.get(name).map(String::as_str);
             let class = class.or(name.contains('.').then_some(name));
             if let Some(to) = class.and_then(|c| scope.classes.get(c)) {
-                edges.insert(Edge {
-                    from: from.to_string(),
-                    to: to.clone(),
-                    kind: EdgeKind::Implements,
-                    change: None,
-                });
+                edges.add(
+                    from,
+                    to,
+                    EdgeKind::Implements,
+                    scope.file.path,
+                    line_of(item),
+                );
             }
         }
     }

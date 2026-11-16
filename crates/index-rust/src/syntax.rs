@@ -11,6 +11,11 @@ pub fn text<'a>(node: Ts, source: &'a str) -> &'a str {
     &source[node.byte_range()]
 }
 
+/// The line on which `node` starts: 1-based.
+pub fn line_of(node: Ts) -> u32 {
+    node.start_position().row as u32 + 1
+}
+
 /// The `#[...]` items right above an item, nearest first. Comments between them do not
 /// interrupt the run.
 pub fn attribute_items(item: Ts) -> Vec<Ts> {

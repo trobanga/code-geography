@@ -2,7 +2,7 @@
 //! indexes them all. A repository can hold Java, Rust and Clojure; the graphs are joined.
 
 pub use cg_core::SourceFile;
-use cg_core::{Change, DiffInfo, Graph, Node, NodeKind, PackageHolds};
+use cg_core::{Change, DiffInfo, EdgeSet, Graph, Node, NodeKind, PackageHolds};
 use cg_index_java::CallReport;
 use serde::Serialize;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -73,20 +73,20 @@ pub fn index_sources(root_name: &str, files: &[SourceFile]) -> (Graph, Report) {
         }
         false
     };
-    let clojure_edges: Vec<_> = clojure
+    let clojure_edges = clojure
         .edges
         .into_iter()
-        .filter(|e| !inside(&e.from, &e.to) && !inside(&e.to, &e.from))
-        .collect();
-    let edges: BTreeSet<_> = java
+        .filter(|e| !inside(&e.from, &e.to) && !inside(&e.to, &e.from));
+    // The same edge of two front ends is one edge with the sites of both.
+    let edges: EdgeSet = java
         .edges
         .into_iter()
         .chain(rust.edges)
         .chain(clojure_edges)
         .collect();
     let graph = Graph {
+        edges: edges.into_edges(&nodes),
         nodes,
-        edges: edges.into_iter().collect(),
         diff: None,
     };
     let report = Report {

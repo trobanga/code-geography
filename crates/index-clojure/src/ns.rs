@@ -1,7 +1,7 @@
 //! The `ns` form: the name of the namespace and the namespaces that it loads.
 
 use crate::declare::head;
-use crate::syntax::{flat_items, keyword, plain_symbol, symbol};
+use crate::syntax::{flat_items, keyword, line_of, plain_symbol, symbol};
 use tree_sitter::Node as Ts;
 
 /// The first top-level `ns` form among `forms` and the name that it gives.
@@ -31,6 +31,9 @@ pub struct Spec {
     pub except: Vec<String>,
     /// `:as-alias`: the namespace is not loaded.
     pub as_alias: bool,
+    /// The line (1-based) of the symbol that names the namespace: of the element, not of
+    /// the prefix of a prefix list.
+    pub line: u32,
 }
 
 /// The specs of the `:require` and `:use` clauses of an `ns` form, in source order.
@@ -56,12 +59,12 @@ pub fn specs(ns_form: Ts, source: &str) -> Vec<Spec> {
 
 /// The namespaces that the `:require` and `:use` clauses of an `ns` form name, as written,
 /// in source order. `:as-alias` loads nothing and gives no name. A name that no namespace
-/// of the repository has is for the caller to drop.
-pub fn requires(ns_form: Ts, source: &str) -> Vec<String> {
+/// of the repository has is for the caller to drop. Each with its line.
+pub fn requires(ns_form: Ts, source: &str) -> Vec<(String, u32)> {
     specs(ns_form, source)
         .into_iter()
         .filter(|s| !s.as_alias)
-        .map(|s| s.name)
+        .map(|s| (s.name, s.line))
         .collect()
 }
 
@@ -83,6 +86,7 @@ fn collect(spec: Ts, prefix: &str, is_use: bool, source: &str, out: &mut Vec<Spe
             refer_all: is_use,
             except: Vec::new(),
             as_alias: false,
+            line: line_of(spec),
         })),
         "vec_lit" => {
             let parts = flat_items(spec);
@@ -143,6 +147,7 @@ fn collect(spec: Ts, prefix: &str, is_use: bool, source: &str, out: &mut Vec<Spe
                 as_alias: parts
                     .iter()
                     .any(|p| keyword(*p, source) == Some("as-alias")),
+                line: line_of(parts[0]),
             });
         }
         "list_lit" => {
@@ -162,8 +167,8 @@ fn collect(spec: Ts, prefix: &str, is_use: bool, source: &str, out: &mut Vec<Spe
 
 /// The classes that the `:import` clauses of an `ns` form name, as (simple name, full class
 /// name): `[a.b C D]` and `(a.b C D)` give `a.b.C` and `a.b.D`, a symbol `a.b.C` gives
-/// itself. In source order.
-pub fn class_imports(ns_form: Ts, source: &str) -> Vec<(String, String)> {
+/// itself. In source order. The third is the line of the symbol that names the class.
+pub fn class_imports(ns_form: Ts, source: &str) -> Vec<(String, String, u32)> {
     let mut found = Vec::new();
     for clause in flat_items(ns_form).into_iter().skip(2) {
         if clause.kind() != "list_lit" {
@@ -182,7 +187,7 @@ pub fn class_imports(ns_form: Ts, source: &str) -> Vec<(String, String)> {
                     if let Some(full) = plain_symbol(*spec, source)
                         && let Some((_, simple)) = full.rsplit_once('.')
                     {
-                        found.push((simple.to_string(), full.to_string()));
+                        found.push((simple.to_string(), full.to_string(), line_of(*spec)));
                     }
                 }
                 "vec_lit" | "list_lit" => {
@@ -193,8 +198,14 @@ pub fn class_imports(ns_form: Ts, source: &str) -> Vec<(String, String)> {
                     let Some(package) = plain_symbol(*package, source) else {
                         continue;
                     };
-                    for class in classes.iter().filter_map(|c| plain_symbol(*c, source)) {
-                        found.push((class.to_string(), format!("{package}.{class}")));
+                    for node in classes {
+                        if let Some(class) = plain_symbol(*node, source) {
+                            found.push((
+                                class.to_string(),
+                                format!("{package}.{class}"),
+                                line_of(*node),
+                            ));
+                        }
                     }
                 }
                 _ => {}

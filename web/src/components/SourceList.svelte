@@ -2,7 +2,7 @@
   import SourceCode from './SourceCode.svelte';
   import type { Tree } from '../lib/expansion';
   import { CHANGE_SIGN, changeColor, KIND_LETTER, kindColor } from '../lib/kinds';
-  import { hasLines, PAGE, qualifier, type LineGroup, type ReadSource } from '../lib/source';
+  import { openable, PAGE, qualifier, type LineGroup, type ReadSource } from '../lib/source';
 
   let {
     tree,
@@ -25,7 +25,7 @@
 
 {#each rows.slice(0, limit) as row (row.from)}
   {@const n = tree.byId.get(row.from)}
-  {@const lines = read !== null && n !== undefined && hasLines(n) ? { node: n, read } : null}
+  {@const lines = openable(read, n, row.edges)}
   <div class="border-b border-[var(--line)]" data-source-row={row.from}>
     <button
       class="flex w-full flex-wrap items-baseline gap-x-1 px-3 py-0.5 text-left {lines ? 'hover:bg-[var(--bg)]' : 'cursor-default'}"
@@ -54,7 +54,7 @@
     </button>
     {#if lines && open === row.from}
       <div class="overflow-x-auto border-t border-[var(--line)] bg-[var(--bg)]">
-        <SourceCode node={lines.node} read={lines.read} />
+        <SourceCode node={lines.node} read={lines.read} edges={row.edges} {nameOf} />
       </div>
     {/if}
   </div>
