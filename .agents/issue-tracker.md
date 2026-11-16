@@ -2,7 +2,7 @@
 
 - **TRACKER**: Exponential, the self-hosted workspace at `https://exponential.trobanga.de`.
   Team `CG` (Code Geography). Issues have identifiers such as `CG-1`.
-- **FORGE**: `none`. The repository has no remote.
+- **FORGE**: GitHub, `https://github.com/trobanga/code-geography` (public). Issues stay in Exponential.
 - **Branch format**: `{id}--{slug}`. The id is the number of the identifier: `CG-7` → `7`.
 
 ## Operations
