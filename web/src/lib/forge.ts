@@ -29,6 +29,45 @@ export interface Commit {
   date: string;
 }
 
+/** The commit of a forge's answer, with the full message; the parents may be absent (null). */
+export function toCommitText(c: {
+  sha: string;
+  parents: { sha: string }[] | null;
+  commit: { message: string; author: { name: string; date: string } | null };
+}): CommitText {
+  return {
+    sha: c.sha,
+    parents: (c.parents ?? []).map((p) => p.sha),
+    title: c.commit.message.split('\n', 1)[0],
+    author: c.commit.author?.name ?? '',
+    date: c.commit.author?.date ?? '',
+    message: c.commit.message,
+  };
+}
+
+/** A commit with its full message. */
+export interface CommitText extends Commit {
+  message: string;
+}
+
+export type PullState = 'open' | 'closed' | 'merged';
+
+export interface PullRequest {
+  number: number;
+  title: string;
+  state: PullState;
+  url: string;
+  body: string;
+}
+
+/** What the commit context needs of a forge (CG-1). */
+export interface CommitSource {
+  /** The commits of `base..head` (reachable from head, not from base), newest first, with full messages; one call. `base` null: the head alone. `total`: how many the range holds; `commits` may hold fewer. */
+  between(repo: Repo, base: string | null, head: string): Promise<{ commits: CommitText[]; total: number }>;
+  /** The pull requests the forge links to the commit; [] for none. One call. */
+  pullsOf(repo: Repo, sha: string): Promise<PullRequest[]>;
+}
+
 export interface Entry {
   path: string;
   blobSha: string;

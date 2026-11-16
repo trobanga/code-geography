@@ -1,7 +1,8 @@
 // GitHub as a `Forge` (ADR 0020): the only place that knows GitHub URLs and answers.
 // The tree comes from the API (one call), the texts from the raw host (no API limit).
-import type { Branch, Commit, Entry, Fetch, Forge, Repo } from './forge';
+import { toCommitText, type Branch, type Commit, type CommitSource, type CommitText, type Entry, type Fetch, type Forge, type PullRequest, type Repo } from './forge';
 import type { Parsed } from './forgeDiff';
+import { authorized } from './tokenStore';
 
 const OWNER = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/;
 const NAME = /^[A-Za-z0-9._-]+$/;
@@ -74,7 +75,9 @@ const API = 'https://api.github.com';
 const RAW = 'https://raw.githubusercontent.com';
 
 /** GitHub with the given network. */
-export function github(net: Net): Forge {
+export function github(net: Net): Forge & CommitSource {
+  // Every request of the commit context goes through `authorized` (ADR 0022).
+  const send = { ...net, fetch: authorized(net.fetch, API, undefined) };
   return {
     host: 'github.com',
     name: 'GitHub',
@@ -105,25 +108,30 @@ export function github(net: Net): Forge {
 
     /** One API call. */
     async commits(repo, sha, n, page = 1) {
-      const url = `${API}/repos/${repo.owner}/${repo.name}/commits?sha=${encodeURIComponent(sha)}&per_page=${n}${page > 1 ? `&page=${page}` : ''}`;
-      // GitHub answers 404 for a repository that it does not show and for a sha that it does not know.
-      const r = await get(net, url, { ...repo, ref: sha }).catch((e) => {
-        throw e instanceof NotFound ? new Error(`${repo.owner}/${repo.name}: no branch, tag or commit "${sha}", or the repository is not found or private`) : e;
-      });
-      const body = (await r.json()) as {
-        sha: string;
-        parents: { sha: string }[];
-        commit: { message: string; author: { name: string; date: string } | null };
-      }[];
-      return body.map(
-        (c): Commit => ({
-          sha: c.sha,
-          parents: c.parents.map((p) => p.sha),
-          title: c.commit.message.split('\n', 1)[0],
-          author: c.commit.author?.name ?? '',
-          date: c.commit.author?.date ?? '',
-        }),
-      );
+      return (await commitList(net, repo, sha, n, page)).map(({ message: _, ...c }): Commit => c);
+    },
+
+    /**
+     * One API call for up to 100 commits. The compare lists the commits oldest first in pages
+     * of equal size, so the newest are on the last page: for a longer range a second call asks
+     * for the last page of the page size whose last page is fullest (50 to 100 commits).
+     */
+    async between(repo, base, head) {
+      if (base === null) {
+        const commits = await commitList(send, repo, head, 1, 1);
+        return { commits, total: commits.length };
+      }
+      const range = `${encodeURIComponent(base)}...${encodeURIComponent(head)}`;
+      const url = `${API}/repos/${repo.owner}/${repo.name}/compare/${range}?per_page=100`;
+      type Body = { total_commits: number; commits: Parameters<typeof toCommitText>[0][] };
+      let body = (await (await get(send, url, repo)).json()) as Body;
+      const total = body.total_commits;
+      if (total > 100) {
+        const size = lastPageSize(total);
+        const page = Math.ceil(total / size);
+        body = (await (await get(send, `${API}/repos/${repo.owner}/${repo.name}/compare/${range}?per_page=${size}&page=${page}`, repo)).json()) as Body;
+      }
+      return { commits: body.commits.map(toCommitText).reverse(), total };
     },
 
     /** One API call. */
@@ -145,6 +153,28 @@ export function github(net: Net): Forge {
       return { base: await mergeBase(net, repo, body.base.sha, body.head.sha), head: body.head.sha };
     },
 
+    /** One API call. */
+    async pullsOf(repo, sha) {
+      const url = `${API}/repos/${repo.owner}/${repo.name}/commits/${encodeURIComponent(sha)}/pulls`;
+      const body = (await (await get(send, url, repo)).json()) as {
+        number: number;
+        title: string;
+        state: 'open' | 'closed';
+        merged_at: string | null;
+        html_url: string;
+        body: string | null;
+      }[];
+      return body.map(
+        (p): PullRequest => ({
+          number: p.number,
+          title: p.title,
+          state: p.merged_at !== null ? 'merged' : p.state,
+          url: p.html_url,
+          body: p.body ?? '',
+        }),
+      );
+    },
+
     /** One API call per 100 branches: pages until one is not full. */
     async branches(repo) {
       const out: Branch[] = [];
@@ -156,6 +186,15 @@ export function github(net: Net): Forge {
       }
     },
   };
+}
+
+async function commitList(net: Net, repo: Repo, sha: string, n: number, page: number): Promise<CommitText[]> {
+  const url = `${API}/repos/${repo.owner}/${repo.name}/commits?sha=${encodeURIComponent(sha)}&per_page=${n}${page > 1 ? `&page=${page}` : ''}`;
+  // GitHub answers 404 for a repository that it does not show and for a sha that it does not know.
+  const r = await get(net, url, { ...repo, ref: sha }).catch((e) => {
+    throw e instanceof NotFound ? new Error(`${repo.owner}/${repo.name}: no branch, tag or commit "${sha}", or the repository is not found or private`) : e;
+  });
+  return ((await r.json()) as Parameters<typeof toCommitText>[0][]).map(toCommitText);
 }
 
 async function mergeBase(net: Net, repo: Repo, a: string, b: string): Promise<string> {
@@ -170,6 +209,13 @@ async function mergeBase(net: Net, repo: Repo, a: string, b: string): Promise<st
     throw e;
   }
   return ((await r.json()) as { merge_base_commit: { sha: string } }).merge_base_commit.sha;
+}
+
+/** The page size up to 100 whose last page of `total` items holds the most; the larger on a tie. */
+function lastPageSize(total: number): number {
+  let best = 100;
+  for (let p = 99; p >= 1; p--) if (((total - 1) % p) + 1 > ((total - 1) % best) + 1) best = p;
+  return best;
 }
 
 /** A 404 answer, which some callers explain better than `httpError` can. */

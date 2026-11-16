@@ -2,7 +2,9 @@
   import { onMount, tick, untrack } from 'svelte';
   import CommitList from './components/CommitList.svelte';
   import BranchList from './components/BranchList.svelte';
+  import CommitContext from './components/CommitContext.svelte';
   import CommitStrip from './components/CommitStrip.svelte';
+  import { contextCache } from './lib/commitContext';
   import DetailPanel from './components/DetailPanel.svelte';
   import Diagram from './components/Diagram.svelte';
   import EdgeBar from './components/EdgeBar.svelte';
@@ -33,7 +35,7 @@
   } from './lib/expansion';
   import { depthKey } from './lib/keys';
   import { decodeHash, encodeHash, freshHash, type Source } from './lib/hash';
-  import { openCache, type TextCache } from './lib/forge';
+  import { openCache, type Repo, type TextCache } from './lib/forge';
   import { commitRows } from './lib/forgeDiff';
   import { forgeSession, NO_FORGE, shownBase, type ForgeState } from './lib/forgeSession';
   import { forgeFor, parseSource } from './lib/forges';
@@ -63,9 +65,11 @@
     () => globalThis.localStorage,
   );
   const net = { fetch: (url: string, i?: Parameters<typeof fetch>[1]) => fetch(url, i) };
+  // A new forge per call, with the token of its origin as stored now (ADR 0022).
+  const forgeOf = (repo: Repo) => (repo.origin && repo.kind ? forgeFor(repo.kind, repo.origin, net, tokens.get(repo.origin)) : forgeFor('github', 'https://github.com', net));
+  const contexts = contextCache();
   const forge = forgeSession({
-    // A new forge per open, with the token of its origin as stored now (ADR 0022).
-    forge: (repo) => (repo.origin && repo.kind ? forgeFor(repo.kind, repo.origin, net, tokens.get(repo.origin)) : forgeFor('github', 'https://github.com', net)),
+    forge: forgeOf,
     parse: parseSource,
     cache: () => (forgeCache ??= openCache()),
     isInput,
@@ -663,6 +667,11 @@
       }}
       label={!fs.at}
     />
+  {/if}
+  {#if fs.at && fs.mode === 'commit' && fs.overlay && fs.repo}
+    {#key `${fs.at}:${fs.overlay.range.base}`}
+      <CommitContext source={forgeOf(fs.repo)} repo={fs.repo} range={fs.overlay.range} cache={contexts} />
+    {/key}
   {/if}
   <EdgeBar {opts} onchange={(patch) => Object.assign(opts, patch)} drawn={paintedCount} total={drawn?.total ?? 0} dropped={drawn?.dropped ?? 0}
     hideImplied={drawn?.hideImplied ?? false}

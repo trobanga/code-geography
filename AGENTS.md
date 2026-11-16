@@ -23,6 +23,7 @@ model. Record each new decision of that weight as a new ADR.
 | implied line | A line A→C of a view for which the drawn lines hold a path from A to C through another box. The viewer can hide these (`hide implied`, ADR 0026); the graph keeps the edge. |
 | changes together | A viewer option on top of `changes only`: the layout gets the changed lines only and puts the active boxes of each container together, in `layout:` boxes that only the ELK input knows (ADR 0028). Off: the layout stays, the other boxes are dimmed. |
 | selection | The boxes that the developer selected: a click selects one, Shift+click adds or removes one. Lines between two selected boxes are full, lines to the outside weak (dim with `between selected`); `open all` / `close all` works on all of them (ADR 0029). |
+| commit context | For an overlay of a forge repository, on demand: the full message of each commit of the overlay, its pull requests and the issue references (`#12`, `owner/repo#12`) read from the message and the pull request bodies, as links. A reference is a guess (ADR 0030). |
 | front end | The part that turns the sources of one language into a graph (Java, Rust, Clojure). `cg-index` runs all of them. |
 | test code | Code in a source set other than `src/main`; for Clojure, code in a directory that only an alias of `deps.edn` names (ADR 0023). Hidden by default. |
 
@@ -55,6 +56,8 @@ web/src/lib/forge.ts   opens a repository of a forge: pool, cache by blob sha, p
                    github.ts and forgejo.ts are the Forges (URLs, answers, errors, URL forms);
 web/src/lib/forges.ts  kind of forge (github, forgejo, later gitlab): kindOf(host), forgeFor(kind, ...),
                    parseSource; hash gh=owner/repo@sha, forge=kind:host/owner/repo@sha (ADR 0022)
+web/src/lib/commitContext.ts  the commit context (ADR 0030): issue references, the list of a range,
+                   pull requests by sha; CommitContext.svelte shows it under the commit strip
 web/src/lib/tokenStore.ts  tokens by origin (session/local storage) and authorized(): the only
                    place that adds a token, refuses any other origin (ADR 0022)
 docs/adr/          architecture decision records (0016: how Rust maps onto the graph, 0023: Clojure)
@@ -138,5 +141,12 @@ pnpm dev                                     # http://localhost:5173/
   Java and Rust make no value nodes. No `.cljs`, no Leiningen.
   Duplicate namespace names: the first file wins.
   The grammar crate is pinned to 0.2.5 (0.2.9 does not build for wasm32).
+- Commit context (ADR 0030): forge repositories only, not a local `diff.json`. Forgejo
+  `commits/{sha}/pull` finds only the pull request whose merge commit is the sha; a commit
+  inside a merged branch shows none. GitHub lists the newest 50 to 100 commits of a
+  longer range (two calls), Forgejo what one compare answer holds. Issue references are read from the text, not checked; issues that a pull
+  request links only on the forge do not show. Kept in memory only: a reload asks again.
+  Both endpoints were checked against github.com and codeberg.org on 2026-11-16; Forgejo
+  with a token was not.
 - Local classes and members of anonymous classes get no node.
 - A rename of a type or method looks like one removal and one addition.

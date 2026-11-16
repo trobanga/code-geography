@@ -1,6 +1,6 @@
 // Forgejo (and Gitea) as a `Forge` (ADR 0022): the only place that knows their URLs and answers.
 // Every URL is built from the origin and a path; no URL of an answer is ever followed (T-2).
-import type { Branch, Commit, Entry, Fetch, Forge, Repo } from './forge';
+import { toCommitText, type Branch, type Commit, type CommitSource, type CommitText, type Entry, type Fetch, type Forge, type Repo } from './forge';
 import type { Parsed } from './forgeDiff';
 import { withRange } from './github';
 import { authorized, ForeignOrigin } from './tokenStore';
@@ -14,7 +14,7 @@ interface TreePage {
 }
 
 /** A Forgejo host at `origin` (`https://codeberg.org`), with the token of that origin, if any. */
-export function forgejo(net: { fetch: Fetch }, origin: string, token?: string): Forge {
+export function forgejo(net: { fetch: Fetch }, origin: string, token?: string): Forge & CommitSource {
   const send = authorized(net.fetch, origin, token === undefined ? undefined : { Authorization: `token ${token}` });
   const api = (repo: Repo, path: string) => `${origin}/api/v1/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}${path}`;
   const host = new URL(origin).host;
@@ -38,10 +38,16 @@ export function forgejo(net: { fetch: Fetch }, origin: string, token?: string): 
       throw new Error(token ? `${host}: the token may not read ${id}; it needs the scope read:repository (HTTP 403)` : `${host} refused to read ${id} (HTTP 403)`);
     if (r.status === 404) {
       const what = ref ? `no branch, tag or commit "${ref}", or the repository is not found` : 'not found';
-      throw new Error(`${id}: ${what}${token ? `, or the token of ${host} has no access to it` : ' or private: give a token'}`);
+      throw new NotFound(`${id}: ${what}${token ? `, or the token of ${host} has no access to it` : ' or private: give a token'}`);
     }
     if (r.status === 429) throw new Error(`${host}: too many requests (HTTP 429); try again in a few minutes`);
     throw new Error(`${id}: HTTP ${r.status}`);
+  }
+  /** One API call: the commits from `sha` on, newest first, with full messages. */
+  async function commitList(repo: Repo, sha: string, n: number, page: number): Promise<CommitText[]> {
+    const more = page > 1 ? `&page=${page}` : '';
+    const r = await get(api(repo, `/commits?sha=${encodeURIComponent(sha)}&limit=${n}&${LEAN}${more}`), repo, sha);
+    return ((await r.json()) as Parameters<typeof toCommitText>[0][]).map(toCommitText);
   }
   /** One API call; none for a full sha. */
   async function resolve(repo: Repo): Promise<{ sha: string }> {
@@ -85,21 +91,32 @@ export function forgejo(net: { fetch: Fetch }, origin: string, token?: string): 
     },
     /** One API call. */
     async commits(repo, sha, n, page = 1) {
-      const more = page > 1 ? `&page=${page}` : '';
-      const body = (await (await get(api(repo, `/commits?sha=${encodeURIComponent(sha)}&limit=${n}&${LEAN}${more}`), repo, sha)).json()) as {
-        sha: string;
-        parents: { sha: string }[] | null;
-        commit: { message: string; author: { name: string; date: string } | null };
-      }[];
-      return body.map(
-        (c): Commit => ({
-          sha: c.sha,
-          parents: (c.parents ?? []).map((p) => p.sha),
-          title: c.commit.message.split('\n', 1)[0],
-          author: c.commit.author?.name ?? '',
-          date: c.commit.author?.date ?? '',
-        }),
-      );
+      return (await commitList(repo, sha, n, page)).map(({ message: _, ...c }): Commit => c);
+    },
+
+    /** One API call: the compare lists the newest commits first; a long range may come short (`total`). */
+    async between(repo, base, head) {
+      if (base === null) {
+        const commits = await commitList(repo, head, 1, 1);
+        return { commits, total: commits.length };
+      }
+      const url = api(repo, `/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}?files=false&verification=false`);
+      const body = (await (await get(url, repo, `${base}...${head}`)).json()) as { total_commits: number; commits: Parameters<typeof toCommitText>[0][] | null };
+      const commits = (body.commits ?? []).map(toCommitText);
+      return { commits, total: body.total_commits };
+    },
+
+    /** One API call. Forgejo knows only the pull request whose merge commit this is; 404 for any other commit. */
+    async pullsOf(repo, sha) {
+      let r: Response;
+      try {
+        r = await get(api(repo, `/commits/${encodeURIComponent(sha)}/pull`), repo);
+      } catch (e) {
+        if (e instanceof NotFound) return [];
+        throw e;
+      }
+      const p = (await r.json()) as { number: number; title: string; state: 'open' | 'closed'; merged: boolean; html_url: string; body: string | null };
+      return [{ number: p.number, title: p.title, state: p.merged ? 'merged' : p.state, url: p.html_url, body: p.body ?? '' }];
     },
 
     /**
@@ -142,6 +159,9 @@ export function forgejo(net: { fetch: Fetch }, origin: string, token?: string): 
     },
   };
 }
+
+/** A 404 answer: for some requests it is an answer, not a failure. */
+class NotFound extends Error {}
 
 // Forgejo user and organization names: letters, digits, `-`, `_`, `.`; one segment.
 export const FORGEJO_OWNER = /^[A-Za-z0-9_.-]+$/;

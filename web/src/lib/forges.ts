@@ -1,6 +1,6 @@
 // The kinds of forge (ADR 0022): which kind a host is, the `Forge` of a kind, and the parse of
 // the input field and of the hash. The only place that maps a host or a kind to a provider.
-import type { Fetch, Forge, ForgeKind } from './forge';
+import type { CommitSource, Fetch, Forge, ForgeKind } from './forge';
 import type { Parsed } from './forgeDiff';
 import { FORGEJO_FORMS, FORGEJO_OWNER, forgejo, forgejoUrlPath } from './forgejo';
 import { github, parseRepo, withRange } from './github';
@@ -23,7 +23,7 @@ export function kindOf(host: string): ForgeKind {
 const GITLAB = 'GitLab is not supported yet';
 
 /** The forge of a kind at `origin`, with the token of that origin; the provider decides how it sends the token. */
-export function forgeFor(kind: ForgeKind, origin: string, net: { fetch: Fetch }, token?: string): Forge {
+export function forgeFor(kind: ForgeKind, origin: string, net: { fetch: Fetch }, token?: string): Forge & CommitSource {
   if (kind === 'github') return github(net);
   if (kind === 'forgejo') return forgejo(net, origin, token);
   throw new Error(GITLAB);
