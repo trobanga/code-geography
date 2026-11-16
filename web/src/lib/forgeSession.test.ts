@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { memoryCache, type Entry, type Forge, type Repo } from './forge';
-import { forgeSession, NO_FORGE, type ForgeState, type SessionDeps } from './forgeSession';
+import { forgeSession, NO_FORGE, shaOf, type ForgeState, type SessionDeps } from './forgeSession';
 import { parseSource } from './forges';
 
 const HEAD = 'a'.repeat(40);
@@ -630,5 +630,13 @@ describe('a choice of the user while an open is pending (F93)', () => {
     expect(t.state()).toEqual(NO_FORGE);
     expect(t.shown).toHaveLength(1);
     expect(t.phases.at(-1)).toBeNull();
+  });
+});
+
+describe('shaOf', () => {
+  it('is the commit sha of a repository shown, on GitHub and on another forge', () => {
+    const sha = '0123456789abcdef0123456789abcdef01234567';
+    expect(shaOf(`o/r@${sha}`)).toBe(sha);
+    expect(shaOf(`forgejo:codeberg.org/o/r@${sha}`)).toBe(sha);
   });
 });

@@ -56,6 +56,11 @@ export function shownBase(s: ForgeState): string | null | undefined {
   return s.at && s.mode === 'commit' && s.overlay ? s.overlay.range.base : undefined;
 }
 
+/** The commit sha of `ForgeState.at`, which ends in `@<sha>`. */
+export function shaOf(at: string): string {
+  return at.slice(at.lastIndexOf('@') + 1);
+}
+
 /** The length of the commit list. */
 const COMMITS = 30;
 
@@ -254,7 +259,7 @@ export function forgeSession(d: SessionDeps) {
   async function loadCommits() {
     if (!s.repo || !s.at || s.commits) return;
     const repo = s.repo;
-    const anchor = s.at.slice(s.at.lastIndexOf('@') + 1);
+    const anchor = shaOf(s.at);
     set({ listStatus: `listing the last ${COMMITS} commits` });
     try {
       const { list, next } = await listedCommits(d.forge(repo), repo, anchor, COMMITS, await d.cache());

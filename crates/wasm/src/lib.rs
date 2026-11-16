@@ -43,6 +43,19 @@ impl Explorer {
         serde_json::to_string(&graph.cut(&expanded)).expect("a view serializes to JSON")
     }
 
+    /// The JSON list of the edges behind a line from the box `from` to the box `to`, in the
+    /// variant that `view_json` cuts. See `cg_core::Graph::edges_between`.
+    pub fn edges_between_json(
+        &self,
+        from: &str,
+        to: &str,
+        include_tests: bool,
+        merge_imports: bool,
+    ) -> String {
+        let graph = &self.variants[variant(include_tests, merge_imports)];
+        serde_json::to_string(&graph.edges_between(from, to)).expect("edges serialize to JSON")
+    }
+
     /// Like `view_json`, but the expanded containers fold the children that the
     /// focus does not name. See `cg_core::Graph::cut_focused`.
     #[allow(clippy::too_many_arguments)]
@@ -188,6 +201,18 @@ impl JsExplorer {
 
     pub fn view(&self, expanded: Vec<String>, include_tests: bool, merge_imports: bool) -> String {
         self.0.view_json(&expanded, include_tests, merge_imports)
+    }
+
+    #[wasm_bindgen(js_name = edgesBetween)]
+    pub fn edges_between(
+        &self,
+        from: &str,
+        to: &str,
+        include_tests: bool,
+        merge_imports: bool,
+    ) -> String {
+        self.0
+            .edges_between_json(from, to, include_tests, merge_imports)
     }
 
     #[wasm_bindgen(js_name = focusView)]

@@ -171,6 +171,33 @@ impl Graph {
             .any(|e| e.from == from && e.to == to && e.kind == kind)
     }
 
+    /// The edges that a line from the box `from` to the box `to` stands for: each edge that
+    /// starts at `from` or below it and ends at `to` or below it, in the order of the graph.
+    /// Empty when both are the same node, when one contains the other (the cut draws no line
+    /// between such boxes), or when the graph has no such node.
+    pub fn edges_between(&self, from: &str, to: &str) -> Vec<&Edge> {
+        let parents: HashMap<&str, Option<&str>> = self
+            .nodes
+            .iter()
+            .map(|n| (n.id.as_str(), n.parent.as_deref()))
+            .collect();
+        let at_or_below = |id: &str, top: &str| {
+            std::iter::successors(Some(id), |id| parents.get(id).copied().flatten())
+                .any(|ancestor| ancestor == top)
+        };
+        if !parents.contains_key(from)
+            || !parents.contains_key(to)
+            || at_or_below(from, to)
+            || at_or_below(to, from)
+        {
+            return Vec::new();
+        }
+        self.edges
+            .iter()
+            .filter(|e| at_or_below(&e.from, from) && at_or_below(&e.to, to))
+            .collect()
+    }
+
     /// The graph without the `Imports` edges that say nothing new: an import from
     /// `F` to `X` is dropped when `F` or a descendant of `F` has an edge of another
     /// kind to `X` or to a descendant of `X`.

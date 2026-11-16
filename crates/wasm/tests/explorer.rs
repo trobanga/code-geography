@@ -66,6 +66,73 @@ fn the_view_json_is_the_cut_of_the_graph_with_or_without_the_tests() {
     assert_eq!(without.expandable, ["M", "p"]);
 }
 
+fn edges_between(
+    explorer: &Explorer,
+    from: &str,
+    to: &str,
+    include_tests: bool,
+    merge_imports: bool,
+) -> Vec<Edge> {
+    serde_json::from_str(&explorer.edges_between_json(from, to, include_tests, merge_imports))
+        .unwrap()
+}
+
+#[test]
+fn the_edges_between_two_boxes_are_cut_in_the_variant_with_or_without_the_tests() {
+    let explorer = Explorer::from_json(&graph_json()).unwrap();
+
+    let with = edges_between(&explorer, "TT", "T", true, false);
+    assert_eq!(
+        with.iter().map(|e| e.kind).collect::<Vec<_>>(),
+        [EdgeKind::Imports, EdgeKind::TypeRef]
+    );
+
+    assert!(edges_between(&explorer, "TT", "T", false, false).is_empty());
+}
+
+#[test]
+fn merge_imports_leaves_an_import_that_a_use_covers_out_of_the_edges_between() {
+    let explorer = Explorer::from_json(&graph_json()).unwrap();
+
+    let merged = edges_between(&explorer, "TT", "T", true, true);
+
+    assert_eq!(
+        merged.iter().map(|e| e.kind).collect::<Vec<_>>(),
+        [EdgeKind::TypeRef]
+    );
+}
+
+#[test]
+fn the_edges_between_carry_the_marks_of_a_diff_graph() {
+    let graph = Graph {
+        nodes: vec![
+            node("T", None, NodeKind::Type, false),
+            node("U", None, NodeKind::Type, false),
+        ],
+        edges: vec![
+            Edge {
+                from: "T".into(),
+                to: "U".into(),
+                kind: EdgeKind::Calls,
+                change: Some(Change::Added),
+            },
+            Edge {
+                from: "T".into(),
+                to: "U".into(),
+                kind: EdgeKind::TypeRef,
+                change: None,
+            },
+        ],
+        ..Graph::default()
+    };
+    let explorer = Explorer::from_json(&serde_json::to_string(&graph).unwrap()).unwrap();
+
+    assert_eq!(
+        explorer.edges_between_json("T", "U", false, true),
+        r#"[{"from":"T","to":"U","kind":"calls","change":"added"},{"from":"T","to":"U","kind":"type_ref"}]"#
+    );
+}
+
 #[test]
 fn invalid_json_gives_an_error_message() {
     let Err(message) = Explorer::from_json("{not json") else {

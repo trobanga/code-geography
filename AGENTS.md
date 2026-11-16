@@ -24,6 +24,7 @@ model. Record each new decision of that weight as a new ADR.
 | changes together | A viewer option on top of `changes only`: the layout gets the changed lines only and puts the active boxes of each container together, in `layout:` boxes that only the ELK input knows (ADR 0028). Off: the layout stays, the other boxes are dimmed. |
 | selection | The boxes that the developer selected: a click selects one, Shift+click adds or removes one. Lines between two selected boxes are full, lines to the outside weak (dim with `between selected`); `open all` / `close all` works on all of them (ADR 0029). |
 | commit context | For an overlay of a forge repository, on demand: the full message of each commit of the overlay, its pull requests and the issue references (`#12`, `owner/repo#12`) read from the message and the pull request bodies, as links. A reference is a guess (ADR 0030). |
+| source view | The panel below the diagram for one or two selected boxes (ADR 0031). One box: its lines (`file`, `span`), or for a module or package the list of its declarations (the topmost nodes with a span below it). Two boxes: the declarations whose edges make their line, each with its targets, from `Explorer.edgesBetween`. Forge repositories only; a commit marks its added and removed lines. |
 | front end | The part that turns the sources of one language into a graph (Java, Rust, Clojure). `cg-index` runs all of them. |
 | test code | Code in a source set other than `src/main`; for Clojure, code in a directory that only an alias of `deps.edn` names (ADR 0023). Hidden by default. |
 
@@ -47,8 +48,8 @@ crates/index       cg-index: is_input, index_sources, index(root) over all front
                    diff_sources(root_name, base, head, DiffSpec): the overlay of two source sets
                    (CLI and WASM share it)
 crates/cli         cg index <repo> -o graph.json; cg diff <repo> <rev|A..B> -o diff.json
-crates/wasm        wasm-bindgen binding of core and the indexers: class Explorer,
-                   indexSources(paths, texts, rootName), diffSources(...), isInput(path)
+crates/wasm        wasm-bindgen binding of core and the indexers: class Explorer (view, focusView,
+                   edgesBetween), indexSources(paths, texts, rootName), diffSources(...), isInput(path)
 scripts/build-wasm.sh   builds crates/wasm into web/src/lib/wasm (generated, committed);
                         sets the C include path for the tree-sitter grammars (needs cargo, jq)
 web/               viewer: Svelte 5, Tailwind 4, ELK layout in a web worker, plain SVG
@@ -58,6 +59,10 @@ web/src/lib/forges.ts  kind of forge (github, forgejo, later gitlab): kindOf(hos
                    parseSource; hash gh=owner/repo@sha, forge=kind:host/owner/repo@sha (ADR 0022)
 web/src/lib/commitContext.ts  the commit context (ADR 0030): issue references, the list of a range,
                    pull requests by sha; CommitContext.svelte shows it under the commit strip
+web/src/lib/source.ts  the source view (ADR 0031): sourceView (what a selection shows), lineGroups,
+                   declarations, sourceReader (texts by blob sha from the cache, else the forge),
+                   overlayLines (marks of a commit, from lineDiff.ts), readInto (the state of one read);
+                   SourcePanel.svelte, SourceList.svelte and SourceCode.svelte show it
 web/src/lib/tokenStore.ts  tokens by origin (session/local storage) and authorized(): the only
                    place that adds a token, refuses any other origin (ADR 0022)
 docs/adr/          architecture decision records (0016: how Rust maps onto the graph, 0023: Clojure)
@@ -148,5 +153,11 @@ pnpm dev                                     # http://localhost:5173/
   request links only on the forge do not show. Kept in memory only: a reload asks again.
   Both endpoints were checked against github.com and codeberg.org on 2026-11-16; Forgejo
   with a token was not.
+- Source view (ADR 0031): no lines for a local graph, a local directory or `/commit.json`
+  (lists only). The place of a reference inside a declaration is not marked (sites on
+  edges, CG-3). No syntax highlighting. Under an active focus the list of a line can hold
+  more edges than the count on the line. The marks of a commit follow a line diff of the
+  file: moved code is removed and added lines; above 1000 changed lines in a file the part
+  between the first and the last change counts as replaced. A span is rendered whole.
 - Local classes and members of anonymous classes get no node.
 - A rename of a type or method looks like one removal and one addition.

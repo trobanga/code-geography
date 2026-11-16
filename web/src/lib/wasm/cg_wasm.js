@@ -15,6 +15,29 @@ export class Explorer {
         wasm.__wbg_explorer_free(ptr, 0);
     }
     /**
+     * @param {string} from
+     * @param {string} to
+     * @param {boolean} include_tests
+     * @param {boolean} merge_imports
+     * @returns {string}
+     */
+    edgesBetween(from, to, include_tests, merge_imports) {
+        let deferred3_0;
+        let deferred3_1;
+        try {
+            const ptr0 = passStringToWasm0(from, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(to, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len1 = WASM_VECTOR_LEN;
+            const ret = wasm.explorer_edgesBetween(this.__wbg_ptr, ptr0, len0, ptr1, len1, include_tests, merge_imports);
+            deferred3_0 = ret[0];
+            deferred3_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+        }
+    }
+    /**
      * @param {string[]} expanded
      * @param {boolean} include_tests
      * @param {boolean} merge_imports

@@ -41,6 +41,20 @@ export function reveal(box: Box, viewport: Size, t: Transform, margin: number): 
       y: viewport.height / 2 - (box.y + box.height / 2) * fit.k,
     };
   }
+  return panTo(box, viewport, t, margin);
+}
+
+/**
+ * Like `reveal`, but never changes the scale: `t` itself also when the box does not fit into
+ * the viewport. For a viewport that changed its size.
+ */
+export function keepInView(box: Box, viewport: Size, t: Transform, margin: number): Transform {
+  const fits = (size: number, room: number) => size * t.k <= room - 2 * margin;
+  return fits(box.width, viewport.width) && fits(box.height, viewport.height) ? panTo(box, viewport, t, margin) : t;
+}
+
+/** The least pan that brings a box that fits into the viewport inside its margins. */
+function panTo(box: Box, viewport: Size, t: Transform, margin: number): Transform {
   const left = box.x * t.k + t.x;
   const top = box.y * t.k + t.y;
   const dx = shift(left, left + box.width * t.k, viewport.width, margin);

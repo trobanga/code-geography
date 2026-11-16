@@ -12,7 +12,8 @@
   import { orthoRoutes } from '../lib/ortho';
   import { lineStrength, type Strength } from '../lib/selection';
   import { impliedSegments } from '../lib/implied';
-  import { fitTransform, labelAnchor, reveal as revealBox, zoomAt, type Transform } from '../lib/viewport';
+  import { untrack } from 'svelte';
+  import { fitTransform, keepInView, labelAnchor, reveal as revealBox, zoomAt, type Transform } from '../lib/viewport';
 
   let {
     tree,
@@ -78,13 +79,28 @@
 
   /** Pans, and zooms out if needed, so that the box of `id` is in view; no change when it is. */
   export function reveal(id: string) {
-    const r = rects.get(id);
-    if (r && vw > 0 && vh > 0) t = revealBox({ x: r.x, y: r.y, width: r.w, height: r.h }, { width: vw, height: vh }, t, 16);
+    const box = boxOf(id);
+    if (box) t = revealBox(box, { width: vw, height: vh }, t, 16);
+  }
+
+  /** The box of a node in world coordinates; null without such a box or before the viewport has a size. */
+  function boxOf(id: string | undefined) {
+    const r = id === undefined ? undefined : rects.get(id);
+    return r && vw > 0 && vh > 0 ? { x: r.x, y: r.y, width: r.w, height: r.h } : null;
   }
 
   const expandable = $derived(new Set(view.expandable));
   const placed = $derived(placeNodes(layout.nodes, offsets));
   const rects = $derived(new Map<string, Rect>(placed.nodes.map((n) => [n.id, n])));
+
+  // The viewport changed its size (the source view opened below): the box selected last stays in view.
+  $effect(() => {
+    const viewport = { width: vw, height: vh };
+    untrack(() => {
+      const box = boxOf(selected[selected.length - 1]);
+      if (box) t = keepInView(box, viewport, t, 16);
+    });
+  });
   const containers = $derived(placed.nodes.filter((n) => n.container).sort((a, b) => a.depth - b.depth));
   const leaves = $derived(placed.nodes.filter((n) => !n.container));
   const ZERO = { dx: 0, dy: 0 };

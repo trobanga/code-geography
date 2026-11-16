@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fitTransform, labelAnchor, polylineMidpoint, reveal, zoomAt } from './viewport';
+import { fitTransform, keepInView, labelAnchor, polylineMidpoint, reveal, zoomAt } from './viewport';
 
 describe('fitTransform', () => {
   it('scales the content into the viewport with a margin and centers it', () => {
@@ -80,5 +80,29 @@ describe('reveal', () => {
     const t = { x: 5, y: 0, k: 1 };
     expect(reveal(box, vp, t, 0)).toBe(t);
     expect(reveal(box, vp, t, 16)).toEqual({ x: 16, y: 0, k: 1 });
+  });
+});
+
+describe('keepInView', () => {
+  const vp = { width: 1000, height: 600 };
+  it('pans the least so that a box below the viewport comes in, at the same scale', () => {
+    // Screen bottom = 200 * 0.5 + 560 = 660: 76 pixels past the margin.
+    expect(keepInView({ x: 100, y: 100, width: 200, height: 100 }, vp, { x: 10, y: 560, k: 0.5 }, 16)).toEqual({ x: 10, y: 484, k: 0.5 });
+  });
+  it('keeps the transform when the box does not fit into the viewport at this scale', () => {
+    // 1936 wide at k = 1: `reveal` would scale down.
+    const t = { x: 0, y: 0, k: 1 };
+    expect(keepInView({ x: 100, y: 100, width: 1936, height: 400 }, vp, t, 16)).toBe(t);
+    expect(keepInView({ x: 100, y: 100, width: 400, height: 700 }, vp, t, 16)).toBe(t);
+  });
+  it('pans a box that just fits between the margins, and keeps the transform for a box in view', () => {
+    // 968 wide at k = 1: exactly 1000 less two margins of 16.
+    expect(keepInView({ x: 100, y: 100, width: 968, height: 100 }, vp, { x: 0, y: 0, k: 1 }, 16)).toEqual({ x: -84, y: 0, k: 1 });
+    const t = { x: 10, y: 20, k: 0.5 };
+    expect(keepInView({ x: 100, y: 100, width: 200, height: 100 }, vp, t, 16)).toBe(t);
+  });
+  it('pans also at a scale above the one that fit gives', () => {
+    // Screen bottom = 300 * 2 + 100 = 700: 116 pixels past the margin.
+    expect(keepInView({ x: 100, y: 200, width: 100, height: 100 }, vp, { x: 0, y: 100, k: 2 }, 16)).toEqual({ x: 0, y: -16, k: 2 });
   });
 });

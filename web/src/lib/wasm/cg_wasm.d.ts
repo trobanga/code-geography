@@ -7,6 +7,7 @@
 export class Explorer {
     free(): void;
     [Symbol.dispose](): void;
+    edgesBetween(from: string, to: string, include_tests: boolean, merge_imports: boolean): string;
     focusView(expanded: string[], include_tests: boolean, merge_imports: boolean, focus_nodes: string[], focus_changes: boolean, neighbors: boolean, unfolded: string[], fold_mixed: boolean): string;
     constructor(graph_json: string);
     view(expanded: string[], include_tests: boolean, merge_imports: boolean): string;
@@ -38,6 +39,7 @@ export interface InitOutput {
     readonly memcmp: (a: number, b: number, c: number) => number;
     readonly __wbg_explorer_free: (a: number, b: number) => void;
     readonly diffSources: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number) => [number, number, number, number];
+    readonly explorer_edgesBetween: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
     readonly explorer_focusView: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number];
     readonly explorer_new: (a: number, b: number) => [number, number, number];
     readonly explorer_view: (a: number, b: number, c: number, d: number, e: number) => [number, number];

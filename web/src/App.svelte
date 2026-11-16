@@ -10,6 +10,7 @@
   import EdgeBar from './components/EdgeBar.svelte';
   import FocusBar from './components/FocusBar.svelte';
   import OpenButtons from './components/OpenButtons.svelte';
+  import SourcePanel from './components/SourcePanel.svelte';
   import Survey from './components/Survey.svelte';
   import Toolbar from './components/Toolbar.svelte';
   import type { Offset } from './lib/drag';
@@ -37,14 +38,15 @@
   import { decodeHash, encodeHash, freshHash, type Source } from './lib/hash';
   import { openCache, type Repo, type TextCache } from './lib/forge';
   import { commitRows } from './lib/forgeDiff';
-  import { forgeSession, NO_FORGE, shownBase, type ForgeState } from './lib/forgeSession';
+  import { forgeSession, NO_FORGE, shaOf, shownBase, type ForgeState } from './lib/forgeSession';
   import { forgeFor, parseSource } from './lib/forges';
   import { tokenStore, type TokenField } from './lib/tokenStore';
   import { diffInWorker, indexInWorker } from './lib/indexProject';
   import { inputError, summarize, type Summary } from './lib/project';
   import { collectDir, fromEntry, type Collect, type DirEntry } from './lib/walk';
   import { runLayout, type Layout } from './lib/layout';
-  import type { Graph, Level, View } from './lib/types';
+  import { sourceReader } from './lib/source';
+  import type { Graph, GraphEdge, Level, View } from './lib/types';
   import init, { Explorer, isInput } from './lib/wasm/cg_wasm.js';
 
   // An import that a use covers is a duplicate, so the view never counts it (ADR 13).
@@ -205,6 +207,26 @@
         ).length
       : 0,
   );
+
+  // The source view (ADR 0031). Three values, so that another change of `fs` makes no new reader.
+  const sourceAt = $derived(fs.at);
+  const sourceRepo = $derived(fs.repo);
+  const sourceBase = $derived(shownBase(fs));
+  /** Reads the lines of a node of the repository shown; null: the graph has no texts. */
+  const readSource = $derived(
+    sourceAt && sourceRepo
+      ? sourceReader({
+          forge: () => forgeOf(sourceRepo),
+          repo: sourceRepo,
+          cache: () => (forgeCache ??= openCache()),
+          head: shaOf(sourceAt),
+          base: sourceBase,
+        })
+      : null,
+  );
+  /** The edges behind the line from one box to another, from the cut in WASM. */
+  const between = (from: string, to: string) =>
+    explorer ? (JSON.parse(explorer.edgesBetween(from, to, tests, MERGE_IMPORTS)) as GraphEdge[]) : [];
 
   async function load(text: string, hash = location.hash) {
     try {
@@ -609,7 +631,7 @@
           data-list-toggle
         >
           <span class="text-[var(--muted)]">commit</span>
-          <span>{diff ? `${diff.base} → ${diff.head}` : fs.at.slice(fs.at.lastIndexOf('@') + 1, fs.at.lastIndexOf('@') + 8)}</span>
+          <span>{diff ? `${diff.base} → ${diff.head}` : shaOf(fs.at).slice(0, 7)}</span>
           <span class="text-[var(--muted)]" aria-hidden="true">▾</span>
         </button>
       {/if}
@@ -624,7 +646,7 @@
           branches={fs.branches}
           status={fs.branchStatus}
           current={fs.branch}
-          head={fs.at.slice(fs.at.lastIndexOf('@') + 1)}
+          head={shaOf(fs.at)}
           onpick={forge.pickBranch}
         />
       </div>
@@ -698,28 +720,31 @@
       </div>
     {/if}
     {#if tree && view && laid}
-      <Diagram
-        bind:this={diagram}
-        bind:hoverNode
-        {tree}
-        {view}
-        layout={laid.layout}
-        drawn={laid.drawn}
-        onSelection={opts.onSelection}
-        betweenOnly={opts.betweenOnly}
-        commit={diff !== null}
-        {changesOnly}
-        {offsets}
-        {expanded}
-        {selected}
-        {fileCounts}
-        onselect={(id, add) => (selected = pick(selected, id, add))}
-        onunfold={unfold}
-        {shown}
-        focused={focusActive(focus)}
-        ontoggle={toggle}
-        onoffset={(id, o) => (offsets = new Map(offsets).set(id, o))}
-      />
+      <div class="flex min-h-0 min-w-0 flex-1 flex-col">
+        <Diagram
+          bind:this={diagram}
+          bind:hoverNode
+          {tree}
+          {view}
+          layout={laid.layout}
+          drawn={laid.drawn}
+          onSelection={opts.onSelection}
+          betweenOnly={opts.betweenOnly}
+          commit={diff !== null}
+          {changesOnly}
+          {offsets}
+          {expanded}
+          {selected}
+          {fileCounts}
+          onselect={(id, add) => (selected = pick(selected, id, add))}
+          onunfold={unfold}
+          {shown}
+          focused={focusActive(focus)}
+          ontoggle={toggle}
+          onoffset={(id, o) => (offsets = new Map(offsets).set(id, o))}
+        />
+        <SourcePanel {tree} selection={selected} {tests} kinds={opts.kinds} {between} read={readSource} />
+      </div>
       <DetailPanel
         {tree}
         {view}

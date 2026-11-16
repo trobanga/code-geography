@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { Explorer, diffSources, indexSources, initSync, isInput } from './wasm/cg_wasm.js';
-import type { Graph, View } from './types';
+import type { Graph, GraphEdge, View } from './types';
 import { runJob } from './workerJob';
 import { headOf } from './commit';
 
@@ -53,6 +53,20 @@ describe('the indexer in WASM', () => {
     expect(view.nodes).toContain('type:a.Foo');
     expect(view.nodes).toContain('pkg::b');
     expect(view.edges.length).toBeGreaterThan(0);
+  });
+
+  it('gives the edges behind the line between two boxes', () => {
+    const { graph } = run();
+
+    const explorer = new Explorer(JSON.stringify(graph));
+    const there = JSON.parse(explorer.edgesBetween('type:a.Foo', 'type:b.Bar', false, true)) as GraphEdge[];
+    const back = JSON.parse(explorer.edgesBetween('type:b.Bar', 'type:a.Foo', false, true)) as GraphEdge[];
+    explorer.free();
+
+    expect(there.length).toBeGreaterThan(0);
+    expect(there.map((e) => e.from)).toContain('fn:a.Foo#f()');
+    expect(there.every((e) => e.from === 'type:a.Foo' || e.from === 'fn:a.Foo#f()')).toBe(true);
+    expect(back).toEqual([]);
   });
 
   it('throws on paths and texts of different length', () => {
