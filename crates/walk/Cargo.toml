@@ -1,11 +1,11 @@
 [package]
 name = "cg-walk"
-version = "0.1.0"
-edition = "2024"
-license = "Apache-2.0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 
 [dependencies]
-cg-core = { version = "0.1.0", path = "../core" }
+cg-core = { path = "../core" }
 
 [dev-dependencies]
 tempfile = "3.27.0"

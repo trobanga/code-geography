@@ -63,6 +63,15 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v7
+      - name: Check that the tag is the version of Cargo.toml and web/package.json
+        run: |
+          cargo=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml)
+          web=$(jq -r .version web/package.json)
+          tag=${GITHUB_REF_NAME#v}
+          if [ "$tag" != "$cargo" ] || [ "$tag" != "$web" ]; then
+            echo "::error::tag $GITHUB_REF_NAME, Cargo.toml $cargo, web/package.json $web"
+            exit 1
+          fi
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown

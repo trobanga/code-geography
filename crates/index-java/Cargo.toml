@@ -1,12 +1,12 @@
 [package]
 name = "cg-index-java"
-version = "0.1.0"
-edition = "2024"
-license = "Apache-2.0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 
 [dependencies]
-cg-core = { version = "0.1.0", path = "../core" }
-cg-walk = { version = "0.1.0", path = "../walk" }
+cg-core = { path = "../core" }
+cg-walk = { path = "../walk" }
 serde = { version = "1.0.229", features = ["derive"] }
 tree-sitter = "0.27.2"
 tree-sitter-java = "0.23.5"

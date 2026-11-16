@@ -93,6 +93,10 @@ pnpm check && pnpm test && pnpm build
 pnpm dev                                     # http://localhost:5173/
 ```
 
+A release is a tag `vX.Y.Z` on `main`: CI builds the WASM and the viewer and makes a
+GitHub release. The tag must equal the version of `Cargo.toml` (`[workspace.package]`)
+and `web/package.json`. The skill `.agents/skills/cut-release` does the steps.
+
 ## Rules
 
 - Test first: one failing test, minimal code, repeat. Never several tests before the code.
