@@ -35,6 +35,7 @@
     type Tree,
   } from './lib/expansion';
   import { depthKey } from './lib/keys';
+  import { cover } from './lib/cover';
   import { decodeHash, encodeHash, freshHash, type Source } from './lib/hash';
   import { openCache, type Repo, type TextCache } from './lib/forge';
   import { commitRows } from './lib/forgeDiff';
@@ -131,6 +132,17 @@
   /** A layout together with the edge list it was computed for. */
   let laid = $state.raw<{ layout: Layout; drawn: Drawn } | null>(null);
   let busy = $state(false);
+  /** A step that replaces the whole picture is in progress: the diagram is covered from before its cut to its layout. */
+  let stepping = $state(false);
+  const stepCover = cover({
+    // The frame after the next one starts: the cover is on the screen then.
+    paint: () => new Promise<void>((r) => requestAnimationFrame(() => setTimeout(r))),
+    show: (on) => (stepping = on),
+  });
+  /** Runs a step behind the cover; `run` tells whether it changed the depth. */
+  function covered(run: () => boolean) {
+    stepCover.step(run).catch((e) => (error = `step failed: ${e instanceof Error ? e.message : String(e)}`));
+  }
   let fitNext = true;
   /** A container that the user opened or closed: its box is brought into view after the next layout. */
   let inViewNext: string | null = null;
@@ -392,32 +404,45 @@
     return true;
   }
 
+  // The three steps below run behind the cover: the cuts and the layout input block the main
+  // thread (0.5 s for the step to types on 200 000 lines), so the cover is painted first.
   function setLevel(l: Level) {
-    if (!tree) return;
-    const next = { expanded: levelExpanded(tree, l, shown), unfolded: levelUnfolded(tree, l, shown) };
-    if (!confirmed(l, next)) return;
-    expanded = next.expanded;
-    unfolded = next.unfolded;
-    fitNext = true;
+    covered(() => {
+      if (!tree) return false;
+      const next = { expanded: levelExpanded(tree, l, shown), unfolded: levelUnfolded(tree, l, shown) };
+      if (!confirmed(l, next)) return false;
+      expanded = next.expanded;
+      unfolded = next.unfolded;
+      fitNext = true;
+      return true;
+    });
   }
 
   function stepDeeper() {
     if (!canDeeper) return;
-    const next = deeperSet;
-    if (!confirmed('deeper', next)) return;
-    steps = stepForward(steps, depth, next);
-    expanded = new Set(next.expanded);
-    unfolded = new Set(next.unfolded);
-    fitNext = true;
+    covered(() => {
+      if (!canDeeper) return false;
+      const next = deeperSet;
+      if (!confirmed('deeper', next)) return false;
+      steps = stepForward(steps, depth, next);
+      expanded = new Set(next.expanded);
+      unfolded = new Set(next.unfolded);
+      fitNext = true;
+      return true;
+    });
   }
 
   function stepShallower() {
     if (!tree || expanded.size === 0) return;
-    const r = stepBack(tree, steps, depth, shown);
-    steps = r.steps;
-    expanded = new Set(r.depth.expanded);
-    unfolded = new Set(r.depth.unfolded);
-    fitNext = true;
+    covered(() => {
+      if (!tree || expanded.size === 0) return false;
+      const r = stepBack(tree, steps, depth, shown);
+      steps = r.steps;
+      expanded = new Set(r.depth.expanded);
+      unfolded = new Set(r.depth.unfolded);
+      fitNext = true;
+      return true;
+    });
   }
 
   function onKey(e: KeyboardEvent) {
@@ -487,6 +512,7 @@
         console.info(`layout ${v.nodes.length} nodes ${l.edges.length} edges ${Math.round(performance.now() - t0)} ms`);
         laid = { layout: l, drawn: d };
         busy = false;
+        stepCover.landed();
         const show = inViewNext;
         inViewNext = null;
         if (fitNext) {
@@ -501,6 +527,7 @@
       .catch((e) => {
         if (my !== seq) return;
         busy = false;
+        stepCover.landed();
         error = `layout failed: ${e instanceof Error ? e.message : String(e)}`;
       });
   });
@@ -714,9 +741,13 @@
     <div class="border-b border-[var(--line)] px-3 py-1 text-[var(--accent)]">{error}</div>
   {/if}
   <div class="relative flex min-h-0 flex-1">
-    {#if phase || (tree && !laid && busy)}
-      <!-- A load in progress covers the picture of the source before it; a failed load uncovers it again. -->
-      <div class="absolute inset-0 z-10 flex items-center justify-center bg-[var(--bg)]" data-loading>
+    {#if phase || (tree && !laid && busy) || stepping}
+      <!-- A load in progress covers the picture of the source before it; a failed load uncovers it again.
+           The cover of a step shows late, so that a short step does not flash. -->
+      <div
+        class="absolute inset-0 z-10 flex items-center justify-center bg-[var(--bg)] {phase || !laid ? '' : 'late'}"
+        data-loading
+      >
         <Survey label={phase ?? 'layout'} />
       </div>
     {/if}
@@ -788,3 +819,15 @@
     {/if}
   </div>
 </div>
+
+<style>
+  /* Opacity only: the browser can run it while the cut blocks the main thread. */
+  .late {
+    animation: late 0.15s 0.12s both;
+  }
+  @keyframes late {
+    from {
+      opacity: 0;
+    }
+  }
+</style>

@@ -71,6 +71,8 @@ web/src/lib/source.ts  the source view (ADR 0031): sourceView (what a selection 
                    withRefs (the sites of edges on shown lines), readDeclaration (the lines of a
                    declaration and the sites outside them), openable (whether a row opens), ADR 0032;
                    SourcePanel.svelte, SourceList.svelte and SourceCode.svelte show it
+web/src/lib/cover.ts  the cover of the diagram (the Survey picture) for a level button, "+" and "−": on the
+                   screen before the cut of the step, off when its layout is there
 web/src/lib/tokenStore.ts  tokens by origin (session/local storage) and authorized(): the only
                    place that adds a token, refuses any other origin (ADR 0022)
 docs/adr/          architecture decision records (0016: how Rust maps onto the graph, 0023: Clojure)
