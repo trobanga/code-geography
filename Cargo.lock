@@ -41,7 +41,7 @@ checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 
 [[package]]
 name = "cg"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cg-core",
  "cg-index",
@@ -52,7 +52,7 @@ dependencies = [
 
 [[package]]
 name = "cg-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -60,7 +60,7 @@ dependencies = [
 
 [[package]]
 name = "cg-index"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cg-core",
  "cg-index-clojure",
@@ -74,7 +74,7 @@ dependencies = [
 
 [[package]]
 name = "cg-index-clojure"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cg-core",
  "serde",
@@ -84,7 +84,7 @@ dependencies = [
 
 [[package]]
 name = "cg-index-java"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cg-core",
  "cg-walk",
@@ -96,7 +96,7 @@ dependencies = [
 
 [[package]]
 name = "cg-index-rust"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cg-core",
  "serde",
@@ -106,7 +106,7 @@ dependencies = [
 
 [[package]]
 name = "cg-walk"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cg-core",
  "tempfile",
@@ -114,7 +114,7 @@ dependencies = [
 
 [[package]]
 name = "cg-wasm"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cg-core",
  "cg-index",
