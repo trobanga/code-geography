@@ -94,7 +94,7 @@ pnpm dev                                     # http://localhost:5173/
 ```
 
 A release is a tag `vX.Y.Z` on `main`: CI builds the WASM and the viewer and makes a
-GitHub release. The tag must equal the version of `Cargo.toml` (`[workspace.package]`)
+GitHub release, and deploys the viewer to https://trobanga.github.io/code-geography/. The tag must equal the version of `Cargo.toml` (`[workspace.package]`)
 and `web/package.json`. The skill `.agents/skills/cut-release` does the steps.
 
 ## Rules

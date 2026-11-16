@@ -36,7 +36,7 @@
   } from './lib/expansion';
   import { depthKey } from './lib/keys';
   import { cover } from './lib/cover';
-  import { decodeHash, encodeHash, freshHash, type Source } from './lib/hash';
+  import { decodeHash, encodeHash, freshHash, sourceUrl, type Source } from './lib/hash';
   import { openCache, type Repo, type TextCache } from './lib/forge';
   import { commitRows } from './lib/forgeDiff';
   import { forgeSession, NO_FORGE, shaOf, shownBase, type ForgeState } from './lib/forgeSession';
@@ -272,7 +272,7 @@
 
   async function fetchSource(s: Source) {
     try {
-      const r = await fetch(`/${s}.json`);
+      const r = await fetch(sourceUrl(s));
       // The dev and preview servers answer a missing file with index.html.
       if (s === 'graph' && !tree && (r.status === 404 || !r.headers.get('content-type')?.includes('json'))) {
         missing = true;
@@ -566,7 +566,7 @@
     };
     window.addEventListener('hashchange', onHash);
     // The dev and preview servers answer unknown paths with index.html, so check the type.
-    fetch('/commit.json', { method: 'HEAD' })
+    fetch(sourceUrl('commit'), { method: 'HEAD' })
       .then((r) => (hasCommit = r.ok && !!r.headers.get('content-type')?.includes('json')))
       .catch(() => (hasCommit = false));
     const start = decodeHash(location.hash);

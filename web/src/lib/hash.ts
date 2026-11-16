@@ -6,6 +6,9 @@ export const SOURCES = ['graph', 'commit'] as const;
 /** Which file under public/ is loaded: graph.json or commit.json. */
 export type Source = (typeof SOURCES)[number];
 
+/** The URL of a source file, relative to the page: the viewer can stand under a sub-path (GitHub Pages). */
+export const sourceUrl = (s: Source): string => `${s}.json`;
+
 export interface HashState {
   src?: Source;
   /** A GitHub repository at a commit, `owner/repo@sha` (ADR 0020); instead of `src`. */

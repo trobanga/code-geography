@@ -32,22 +32,28 @@ viewer runs them in the browser, compiled to WebAssembly.
 
 You can use the viewer and the command-line tool `cg` separately.
 
+### Viewer, in the browser
+
+Open https://trobanga.github.io/code-geography/. This is the viewer of the latest
+release, and it needs no installation. The indexers run in your browser. A local
+directory that you open does not leave your machine. A forge repository is read
+directly from the API of its host.
+
 ### Viewer, from a release
+
+To run the viewer on your own host, for example with a `graph.json` that `cg` made:
 
 1. Download `code-geography-vX.Y.Z-viewer.tar.gz` from the
    [releases](https://github.com/trobanga/code-geography/releases).
 2. Extract it into an empty directory.
-3. Serve that directory at the root of a host. Any static server works:
+3. Serve that directory with a static server. A sub-path is correct (from v0.1.1):
 
    ```sh
-   mkdir viewer && tar -xzf code-geography-v0.1.0-viewer.tar.gz -C viewer
+   mkdir viewer && tar -xzf code-geography-v0.1.1-viewer.tar.gz -C viewer
    cd viewer && python3 -m http.server 8000
    ```
 
 4. Open http://localhost:8000/.
-
-The viewer loads `/graph.json` and `/commit.json` from the root. Thus it does not
-operate under a sub-path such as `https://host/tools/cg/`.
 
 ### Command-line tool `cg`
 
@@ -55,7 +61,7 @@ operate under a sub-path such as `https://host/tools/cg/`.
 tested with Rust 1.100. The crates use edition 2024, so Rust 1.85 is the minimum.
 
 ```sh
-cargo install --locked --git https://github.com/trobanga/code-geography --tag v0.1.0 cg
+cargo install --locked --git https://github.com/trobanga/code-geography --tag v0.1.1 cg
 ```
 
 ### From the sources

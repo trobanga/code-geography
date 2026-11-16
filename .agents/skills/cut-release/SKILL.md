@@ -7,8 +7,9 @@ description: Cut a release of code-geography — bump the version in Cargo.toml 
 
 Bump the project version, commit it, tag it, push it. One commit, one annotated tag,
 both on `origin/main`. The tag starts the `release` job of `.github/workflows/ci.yml`:
-it builds the WASM from the sources, builds the viewer on it, and makes a GitHub
-release with the two archives.
+it builds the WASM from the sources, tests the viewer on it, builds the viewer, and
+makes a GitHub release with the two archives. Then the `pages` job deploys that viewer
+to https://trobanga.github.io/code-geography/.
 
 `$ARGUMENTS` is optional. It holds an explicit version (`0.2.0`) or a bump level
 (`major`, `minor`, `patch`). If it is empty, propose a version at step 2.
@@ -110,6 +111,9 @@ Change the version with the Edit tool in both places:
 
 - `Cargo.toml`: the `version` line under `[workspace.package]`.
 - `web/package.json`: the `"version"` field.
+- `README.md`: the tag of the `cargo install` command and the name of the viewer
+  archive in the example. Find them with `rg -n 'v[0-9]+\.[0-9]+\.[0-9]+' README.md`.
+  Do not change a version that names when a behavior started ("from v0.1.1").
 
 Then update the lock file and confirm that only the 8 workspace crates changed:
 
@@ -118,11 +122,11 @@ cargo update --workspace --offline
 git diff --stat
 ```
 
-`git diff --stat` must show `Cargo.toml`, `Cargo.lock` and `web/package.json`, and
-`Cargo.lock` only the version lines of the `cg*` crates. Then commit:
+`git diff --stat` must show `Cargo.toml`, `Cargo.lock`, `web/package.json` and
+`README.md`, and `Cargo.lock` only the version lines of the `cg*` crates. Then commit:
 
 ```bash
-git add Cargo.toml Cargo.lock web/package.json
+git add Cargo.toml Cargo.lock web/package.json README.md
 git commit --signoff -m "Release <version>"
 ```
 
@@ -172,9 +176,22 @@ gh release view v<version> --json url,assets -q '.url, .assets[].name'
 ```
 
 The release must hold `code-geography-v<version>-wasm.tar.gz` and
-`code-geography-v<version>-viewer.tar.gz`.
+`code-geography-v<version>-viewer.tar.gz`. The `pages` job must have succeeded, and
+the page must serve the new build:
+
+```bash
+curl -s https://trobanga.github.io/code-geography/ | rg -o 'assets/index-[^"]+\.js'
+tar -xzOf code-geography-v<version>-viewer.tar.gz ./index.html | rg -o 'assets/index-[^"]+\.js'
+```
+
+The two names must be equal (download the archive with `gh release download`).
 
 If the run fails:
+
+- At `pages` with "not allowed to deploy to github-pages": the environment
+  `github-pages` lacks the tag rule `v*`. Add it with
+  `gh api -X POST repos/trobanga/code-geography/environments/github-pages/deployment-branch-policies -f name='v*' -f type=tag`,
+  then `gh run rerun <run id> --failed`.
 
 - At the version check: the tag and the files differ. Do not move the tag. Report it;
   the next version is necessary.
@@ -191,5 +208,5 @@ Give the user:
 - the version you chose and the one-line reason (which commit made a minor bump
   necessary, for example),
 - each item a gate showed but did not fail on,
-- the URL of the release and the names of its two archives, or the failed step and
-  its log.
+- the URL of the release and the names of its two archives, and whether the page
+  serves the new build, or the failed step and its log.

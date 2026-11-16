@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_EDGE_OPTIONS } from './edgeOptions';
-import { decodeHash, encodeHash, freshHash } from './hash';
+import { decodeHash, encodeHash, freshHash, sourceUrl } from './hash';
 import { NO_FOCUS } from './focus';
 
 describe('hash', () => {
@@ -154,5 +154,13 @@ describe('freshHash', () => {
       open: [],
       edges: { ...DEFAULT_EDGE_OPTIONS, kinds: { extends: false, implements: false, imports: false, type_ref: false, calls: true, value_ref: false } },
     });
+  });
+});
+
+describe('sourceUrl', () => {
+  it('is relative, so the viewer finds its files under a sub-path', () => {
+    const page = 'https://trobanga.github.io/code-geography/';
+    expect(new URL(sourceUrl('graph'), page).href).toBe('https://trobanga.github.io/code-geography/graph.json');
+    expect(new URL(sourceUrl('commit'), page).href).toBe('https://trobanga.github.io/code-geography/commit.json');
   });
 });
