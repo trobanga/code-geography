@@ -128,6 +128,18 @@ describe('hash', () => {
     expect(decodeHash(encodeHash(state))).toEqual(state);
   });
 
+  it('keeps the branch of a repository after the head and the base, a name with special characters too; no branch without a repository', () => {
+    const head = 'a/b@0123456789abcdef0123456789abcdef01234567';
+    const state = { gh: head, branch: 'main', level: 'modules' as const, tests: false, open: [], edges: DEFAULT_EDGE_OPTIONS };
+    expect(encodeHash(state)).toBe(`#gh=${head}&branch=main&level=modules&tests=0`);
+    expect(decodeHash(encodeHash(state))).toEqual(state);
+    expect(encodeHash({ ...state, base: null })).toBe(`#gh=${head}&base=none&branch=main&level=modules&tests=0`);
+    const odd = { ...state, branch: 'feature/x&y=1' };
+    expect(encodeHash(odd)).toContain('&branch=feature/x%26y%3D1&');
+    expect(decodeHash(encodeHash(odd))).toEqual(odd);
+    expect(encodeHash({ ...state, gh: undefined })).toBe('#level=modules&tests=0');
+  });
+
   it('accepts a hash with leading # and missing fields', () => {
     expect(decodeHash('#level=packages')).toEqual({ level: 'packages', tests: false, open: [], edges: DEFAULT_EDGE_OPTIONS });
   });

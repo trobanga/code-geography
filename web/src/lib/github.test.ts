@@ -246,6 +246,14 @@ describe('branches', () => {
   });
 });
 
+describe('defaultBranch', () => {
+  it('gives the default branch of the repository in one call', async () => {
+    const net = fakeFetch({ 'https://api.github.com/repos/a/b': json({ name: 'b', default_branch: 'develop' }) });
+    expect(await github({ fetch: net.fetch }).defaultBranch({ owner: 'a', name: 'b' })).toBe('develop');
+    expect(net.calls).toHaveLength(1);
+  });
+});
+
 const P2 = '2222222222222222222222222222222222222222';
 
 describe('mergeBase and pull', () => {

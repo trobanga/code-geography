@@ -32,7 +32,7 @@ export interface ForgeState {
   branches: Branch[] | null;
   branchStatus: string | null;
   branchOpen: boolean;
-  /** The branch picked from the branch menu; null when the commit shown came another way. */
+  /** The branch picked from the branch menu or named by the hash, else the default branch if it holds the commit (ADR 0033); null: none known. */
   branch: string | null;
 }
 
@@ -100,6 +100,8 @@ const bare = (repo: Repo): Repo => ({ owner: repo.owner, name: repo.name, ...(re
 export function forgeSession(d: SessionDeps) {
   let s = NO_FORGE;
   const set = (patch: Partial<ForgeState>) => d.onState((s = { ...s, ...patch }));
+  /** The name of the default branch of each repository asked for; kept until a reload. */
+  const defaults = new Map<string, string>();
   /** The branches listed for the repository shown, if `repo` is that one; else none. */
   const branchesFor = (repo: Repo) => (s.repo && atOf(s.repo, '') === atOf(repo, '') ? s.branches : null);
 
@@ -142,6 +144,7 @@ export function forgeSession(d: SessionDeps) {
         branches: branchesFor(repo),
       });
       await d.show(r.graphText, summary, hash);
+      if (!branch) void findBranch(repo, f.sha, repo.ref === undefined);
     } catch (e) {
       if (!current()) return;
       d.phase(null);
@@ -150,11 +153,30 @@ export function forgeSession(d: SessionDeps) {
   }
 
   /**
+   * The branch of a commit that came without one (ADR 0033): the default branch, if the forge
+   * says that it holds the commit. Two calls; one for `isHead`, the commit that the forge gave
+   * for no ref, which is the head of that branch. A failure leaves the commit without a branch.
+   */
+  async function findBranch(repo: Repo, sha: string, isHead = false) {
+    const at = atOf(repo, sha);
+    const key = atOf(repo, '');
+    try {
+      const forge = d.forge(repo);
+      const name = defaults.get(key) ?? (await forge.defaultBranch(repo));
+      defaults.set(key, name);
+      if (!isHead && (await forge.mergeBase(repo, name, sha)) !== sha) return;
+      if (s.at === at && s.branch === null) set({ branch: name });
+    } catch {
+      // The picture is complete without the name of a branch.
+    }
+  }
+
+  /**
    * Builds the commit overlay in this browser (ADR 0021): resolve the range (none for a range
    * of shas), two trees, the files that the cache lacks, `diffSources` in a job. A failed
    * overlay leaves the present picture (C6). `keepList`: picked from the commit list, which stays.
    */
-  async function overlay(repo: Repo, how: OverlaySpec | Range, hash?: string, note?: string, keepList = false) {
+  async function overlay(repo: Repo, how: OverlaySpec | Range, hash?: string, note?: string, keepList = false, branch?: string) {
     const current = d.begin();
     const id = `${repo.owner}/${repo.name}`;
     try {
@@ -194,7 +216,7 @@ export function forgeSession(d: SessionDeps) {
       summary.text += `, ${inputs.changed.length} changed files${note ? ` (${note})` : ''}`;
       set({
         // A commit of the list stays on the branch it was listed from.
-        ...(keepList ? {} : { commits: null, listOpen: false, branch: null }),
+        ...(keepList ? {} : { commits: null, listOpen: false, branch: branch ?? null }),
         branches: branchesFor(repo),
         at: atOf(repo, range.head),
         repo: bare(repo),
@@ -203,6 +225,7 @@ export function forgeSession(d: SessionDeps) {
         mode: 'commit',
       });
       await d.show(r.graphText, summary, hash);
+      if (s.branch === null) void findBranch(repo, range.head);
     } catch (e) {
       if (!current()) return;
       d.phase(null);
@@ -237,20 +260,20 @@ export function forgeSession(d: SessionDeps) {
    * holds (G5); with `base`, the same overlay (C5). False: the hash names what is shown, so
    * only its view applies.
    */
-  function followHash(spec: string, hash: string, base: string | null | undefined): boolean {
+  function followHash(spec: string, hash: string, base: string | null | undefined, branch?: string): boolean {
     if (spec === s.at && base === shownBase(s)) return false;
     const p = d.parse(spec);
     if (!p.ok) d.fail(p.error);
     else if (base === undefined) {
       if (s.at === spec && s.head) show('graph', hash);
-      else open(p.repo, undefined, hash);
+      else open(p.repo, undefined, hash, branch);
     } else {
       // The app writes full shas, which cost no call; a hand-written ref is resolved.
       const full = (x: string | null | undefined) => typeof x === 'string' && /^[0-9a-f]{40}$/i.test(x);
       const head = p.repo.ref;
-      if (full(head) && (base === null || full(base))) overlay(p.repo, { base: base?.toLowerCase() ?? null, head: head!.toLowerCase() }, hash);
-      else if (base === null) overlay(p.repo, { kind: 'commit' }, hash);
-      else overlay(p.repo, { kind: 'range', base, mergeBase: false }, hash);
+      if (full(head) && (base === null || full(base))) overlay(p.repo, { base: base?.toLowerCase() ?? null, head: head!.toLowerCase() }, hash, undefined, false, branch);
+      else if (base === null) overlay(p.repo, { kind: 'commit' }, hash, undefined, false, branch);
+      else overlay(p.repo, { kind: 'range', base, mergeBase: false }, hash, undefined, false, branch);
     }
     return true;
   }

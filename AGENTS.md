@@ -60,7 +60,8 @@ web/src/lib/forge.ts   opens a repository of a forge: pool, cache by blob sha, p
                    github.ts and forgejo.ts implement them (URLs, answers, errors, URL forms,
                    the web links of the commit context: no other file builds a host URL);
 web/src/lib/forges.ts  kind of forge (github, forgejo, later gitlab): kindOf(host), forgeFor(kind, ...), forgeOfRepo(repo),
-                   parseSource; hash gh=owner/repo@sha, forge=kind:host/owner/repo@sha (ADR 0022)
+                   parseSource; hash gh=owner/repo@sha, forge=kind:host/owner/repo@sha (ADR 0022);
+                   `branch=` beside them (ADR 0033)
 web/src/lib/commitContext.ts  the commit context (ADR 0030): issue references, the list of a range,
                    pull requests by sha, all links from the CommitSource; CommitContext.svelte
                    shows it under the commit strip
@@ -135,8 +136,11 @@ pnpm dev                                     # http://localhost:5173/
 - No AI grouping (deferred, ADR 0010). GitHub: public repositories only (no token yet,
   60 API calls per hour); the overlay from a forge compares trees by blob sha (ADR 0021).
   The branch menu lists all branches (one API call per 100, on each open of the menu), in
-  alphabetical order, not by age; the hash holds the sha only, so a
-  reload shows the same commit but no longer knows the branch name.
+  alphabetical order, not by age. The hash holds the sha and the branch as a hint
+  (`branch=`, ADR 0033): the name is not checked on a reload. A commit without a branch
+  shows the default branch if it holds the commit (two API calls), else no branch; the
+  viewer does not search the other branches. The commit list starts at the commit shown,
+  not at the head of the branch.
   The text field of the commit list filters the loaded commits only ("load more commits"
   gets the next 30); a pasted sha is resolved by the forge, also outside the branch shown.
 - Forgejo (ADR 0022): an unknown host is taken as Forgejo (`kindOf`); GitLab is

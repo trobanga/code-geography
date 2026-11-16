@@ -14,6 +14,8 @@ export interface HashState {
   forge?: string;
   /** With `gh` or `forge`: the overlay of the commit `base` to the head (ADR 0021); null for a root commit, compared with nothing. */
   base?: string | null;
+  /** With `gh` or `forge`: the branch that the developer works on (ADR 0033). A memory, not checked: the sha names the commit. */
+  branch?: string;
   level: Level;
   tests: boolean;
   open: string[];
@@ -36,6 +38,7 @@ export function encodeHash(s: HashState): string {
   const parts = [`level=${s.level}`, `tests=${s.tests ? 1 : 0}`];
   if (s.src) parts.unshift(`src=${s.src}`);
   const repo = s.gh ?? s.forge;
+  if (repo && s.branch) parts.unshift(`branch=${encodeURIComponent(s.branch).replace(/%2F/g, '/')}`);
   if (repo && s.base !== undefined) parts.unshift(`base=${s.base === null ? 'none' : encodeURIComponent(s.base)}`);
   if (repo) parts.unshift(`${s.gh ? 'gh' : 'forge'}=${encodeURIComponent(repo).replace(/%2F/g, '/').replace(/%40/g, '@').replace(/%3A/g, ':')}`);
   if (s.open.length > 0) parts.push(`open=${s.open.map(encodeURIComponent).join(',')}`);
@@ -75,6 +78,7 @@ export function decodeHash(hash: string): HashState {
     else if (key === 'gh' && value !== '') state.gh = decodeURIComponent(value);
     else if (key === 'forge' && value !== '') state.forge = decodeURIComponent(value);
     else if (key === 'base' && value !== '') state.base = value === 'none' ? null : decodeURIComponent(value);
+    else if (key === 'branch' && value !== '') state.branch = decodeURIComponent(value);
     else if (key === 'level' && (LEVELS as readonly string[]).includes(value)) state.level = value as Level;
     else if (key === 'tests') state.tests = value === '1';
     else if (key === 'open' && value !== '') state.open = value.split(',').map(decodeURIComponent);

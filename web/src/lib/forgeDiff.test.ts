@@ -41,7 +41,7 @@ function twoCommits(commits: Record<string, Record<string, string>>) {
 }
 
 /** The history part of a fake forge: HEAD has parent BASE, ROOT has none; refs resolve to `<ref>-sha`. */
-function history(calls: string[]): Pick<Forge, 'resolve' | 'commits' | 'mergeBase' | 'pull' | 'branches'> {
+function history(calls: string[]): Pick<Forge, 'resolve' | 'commits' | 'mergeBase' | 'pull' | 'branches' | 'defaultBranch'> {
   const commit = (sha: string, parents: string[]) => ({ sha, parents, title: `t ${sha[0]}`, author: 'A', date: '2026-11-01T00:00:00Z' });
   return {
     async resolve(repo) {
@@ -62,6 +62,7 @@ function history(calls: string[]): Pick<Forge, 'resolve' | 'commits' | 'mergeBas
       return { base: 'pull-base', head: 'pull-head' };
     },
     branches: async () => [],
+    defaultBranch: async () => 'main',
   };
 }
 

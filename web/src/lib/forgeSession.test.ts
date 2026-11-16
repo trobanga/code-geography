@@ -54,8 +54,15 @@ function setup() {
       if (page > 1 && repo.name !== 'updates') return [];
       return [commit(HEAD, [BASE]), commit(BASE, [])].filter((c) => c.sha === sha(s) || c.sha === BASE).slice(0, n);
     },
-    async mergeBase() {
-      throw new Error('unused');
+    // `main` holds HEAD and BASE; in the repository `side`, HEAD is on another branch.
+    async mergeBase(repo, a, b) {
+      calls.push(`mergeBase ${a} ${b[0]}`);
+      return repo.name === 'side' ? BASE : b;
+    },
+    async defaultBranch(repo) {
+      calls.push(`default ${repo.name}`);
+      if (repo.name === 'broken') throw new Error('o/broken: HTTP 500');
+      return 'main';
     },
     async pull() {
       throw new Error('unused');
@@ -159,6 +166,7 @@ describe('forgeSession', () => {
   it('a failed open reports the message of the forge and leaves the repository shown before', async () => {
     const t = setup();
     await t.session.open({ ...REPO, ref: 'main' });
+    await until(() => t.state().branch !== null);
     const before = t.state();
     await t.session.open({ ...REPO, ref: 'c'.repeat(40) });
     expect(t.errors).toEqual(['cannot open o/r: o/r: HTTP 500']);
@@ -352,7 +360,7 @@ describe('forgeSession', () => {
     expect(t.calls.filter((c) => c.startsWith('commits'))).toEqual(['commits a 30']);
   });
 
-  it('a pasted sha that the list does not hold: one call resolves it, then its overlay; the list and the branch go, since the commit can be on another branch', async () => {
+  it('a pasted sha that the list does not hold: one call resolves it, then its overlay; the list and the branch go, since the commit can be on another branch; the default branch comes, as it holds the commit', async () => {
     const t = setup();
     await t.session.open({ ...REPO, ref: 'main' });
     t.session.toggleBranches();
@@ -366,7 +374,10 @@ describe('forgeSession', () => {
     await picked;
     expect(t.calls.filter((c) => c.startsWith('commits'))).toEqual(['commits b 30', 'commits a 1']);
     expect(t.state().overlay!.range).toMatchObject({ base: BASE, head: HEAD, commit: { sha: HEAD } });
-    expect(t.state()).toMatchObject({ at: `o/r@${HEAD}`, commits: null, branch: null });
+    expect(t.state()).toMatchObject({ at: `o/r@${HEAD}`, commits: null });
+    expect(t.state().branch).not.toBe('old');
+    await until(() => t.state().branch !== null);
+    expect(t.state().branch).toBe('main');
   });
 
   it('a pasted sha that the forge does not know: its message; the picture, the list and the branch stay', async () => {
@@ -519,25 +530,27 @@ describe('the branch menu', () => {
     expect(t.calls).toHaveLength(fetched);
   });
 
-  it('a pick from the commit list keeps the branch; any other open or overlay resets it', async () => {
+  it('a pick from the commit list keeps the branch; any other open or overlay drops it for the default branch', async () => {
     const t = setup();
     const onBranch = async () => {
       t.session.toggleBranches();
       await until(() => t.state().branchStatus === null);
-      await t.session.pickBranch('main');
-      expect(t.state().branch).toBe('main');
+      await t.session.pickBranch('old');
+      expect(t.state().branch).toBe('old');
     };
     await t.session.open({ ...REPO, ref: 'main' });
     await onBranch();
     t.session.toggleList();
     await until(() => t.state().commits !== null);
-    await t.session.pick(HEAD);
-    expect(t.state()).toMatchObject({ mode: 'commit', branch: 'main' });
-    await t.session.open({ ...REPO, ref: 'main' });
-    expect(t.state().branch).toBeNull();
+    await t.session.pick(BASE);
+    expect(t.state()).toMatchObject({ mode: 'commit', branch: 'old' });
+    await t.session.open({ ...REPO, ref: BASE });
+    await until(() => t.state().branch !== null);
+    expect(t.state().branch).toBe('main');
     await onBranch();
     await t.session.overlay({ ...REPO, ref: HEAD }, { base: BASE, head: HEAD });
-    expect(t.state().branch).toBeNull();
+    await until(() => t.state().branch !== null);
+    expect(t.state().branch).toBe('main');
   });
 
   it('the branch menu and the commit list close each other when one opens', async () => {
@@ -631,6 +644,70 @@ describe('a choice of the user while an open is pending (F93)', () => {
     expect(t.state()).toEqual(NO_FORGE);
     expect(t.shown).toHaveLength(1);
     expect(t.phases.at(-1)).toBeNull();
+  });
+});
+
+describe('the branch after a reload (ADR 0033)', () => {
+  it('a hash with a branch: the same commit on that branch, with no call for the branch', async () => {
+    const t = setup();
+    t.session.followHash(`o/r@${BASE}`, '#h', undefined, 'old');
+    await until(() => t.shown.length > 0);
+    expect(t.state()).toMatchObject({ at: `o/r@${BASE}`, branch: 'old' });
+    expect(t.calls.filter((c) => c.startsWith('default') || c.startsWith('mergeBase'))).toEqual([]);
+  });
+
+  it('a hash with a base and a branch: the same overlay on that branch', async () => {
+    const t = setup();
+    t.session.followHash(`o/r@${HEAD}`, '#h', BASE, 'main');
+    await until(() => t.shown.length > 0);
+    expect(t.state()).toMatchObject({ mode: 'commit', branch: 'main' });
+    expect(t.calls.filter((c) => c.startsWith('default') || c.startsWith('mergeBase'))).toEqual([]);
+  });
+
+  it('a hash without a branch: the default branch, when the forge says that it holds the commit; two calls', async () => {
+    const t = setup();
+    t.session.followHash(`o/r@${BASE}`, '#h', undefined);
+    await until(() => t.state().branch !== null);
+    expect(t.state()).toMatchObject({ at: `o/r@${BASE}`, branch: 'main' });
+    expect(t.calls.filter((c) => c.startsWith('default') || c.startsWith('mergeBase'))).toEqual(['default r', 'mergeBase main b']);
+  });
+
+  it('a hash with a base and without a branch: the default branch for the overlay too', async () => {
+    const t = setup();
+    t.session.followHash(`o/r@${HEAD}`, '#h', BASE);
+    await until(() => t.state().branch !== null);
+    expect(t.state()).toMatchObject({ mode: 'commit', branch: 'main' });
+    expect(t.calls).toContain('mergeBase main a');
+  });
+
+  it('asks for the name of the default branch once per repository; a failure of the forge is no error', async () => {
+    const t = setup();
+    t.session.followHash(`o/r@${BASE}`, '#h', undefined);
+    await until(() => t.state().branch !== null);
+    t.session.followHash(`o/r@${HEAD}`, '#h', undefined);
+    await until(() => t.state().at === `o/r@${HEAD}` && t.state().branch !== null);
+    expect(t.calls.filter((c) => c.startsWith('default') || c.startsWith('mergeBase'))).toEqual(['default r', 'mergeBase main b', 'mergeBase main a']);
+    t.session.followHash(`o/broken@${HEAD}`, '#h', undefined);
+    await until(() => t.calls.includes('default broken'));
+    await until(() => false);
+    expect(t.state()).toMatchObject({ at: `o/broken@${HEAD}`, branch: null });
+    expect(t.errors).toEqual([]);
+  });
+
+  it('a commit that the default branch does not hold stays without a branch', async () => {
+    const t = setup();
+    t.session.followHash(`o/side@${HEAD}`, '#h', undefined);
+    await until(() => t.calls.includes('mergeBase main a'));
+    await until(() => false);
+    expect(t.state()).toMatchObject({ at: `o/side@${HEAD}`, branch: null });
+  });
+
+  it('a repository opened without a ref is at the head of the default branch: one call for its name', async () => {
+    const t = setup();
+    expect(t.session.openInput('o/r')).toBeNull();
+    await until(() => t.state().branch !== null);
+    expect(t.state()).toMatchObject({ at: `o/r@${HEAD}`, branch: 'main' });
+    expect(t.calls.filter((c) => c.startsWith('default') || c.startsWith('mergeBase'))).toEqual(['default r']);
   });
 });
 

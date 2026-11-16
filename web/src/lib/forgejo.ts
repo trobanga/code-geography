@@ -156,6 +156,11 @@ export function forgejo(net: { fetch: Fetch }, origin: string, token?: string): 
       return { base: body.merge_base, head: body.head.sha };
     },
 
+    /** One API call. */
+    async defaultBranch(repo) {
+      return ((await (await get(api(repo, ''), repo)).json()) as { default_branch: string }).default_branch;
+    },
+
     /**
      * One API call per page, until the list holds the total that the host announces
      * (`X-Total-Count`), or a page is empty. The host can give smaller pages than asked for, so

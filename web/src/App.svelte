@@ -341,7 +341,7 @@
     const p = d.forge ? parseSource(d.forge) : null;
     hashOrigin = p?.ok ? (p.repo.origin ?? null) : null;
     if (again) error = null;
-    return forge.followHash(spec, hash, d.base);
+    return forge.followHash(spec, hash, d.base, d.branch);
   }
 
   /** The text of the repository field: a clear message for anything that is not a repository (G1). */
@@ -513,6 +513,7 @@
       gh: fs.repo && !fs.repo.origin ? (fs.at ?? undefined) : undefined,
       forge: fs.repo?.origin ? (fs.at ?? undefined) : undefined,
       base: shownBase(fs),
+      branch: fs.branch ?? undefined,
       level: hashState.level,
       tests,
       open: hashState.open,

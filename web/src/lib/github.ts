@@ -179,6 +179,12 @@ export function github(net: Net): Forge & CommitSource {
 
     links,
 
+    /** One API call. */
+    async defaultBranch(repo) {
+      const body = (await (await get(net, `${API}/repos/${repo.owner}/${repo.name}`, repo)).json()) as { default_branch: string };
+      return body.default_branch;
+    },
+
     /** One API call per 100 branches: pages until one is not full. */
     async branches(repo) {
       const out: Branch[] = [];

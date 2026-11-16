@@ -175,6 +175,14 @@ describe('forgejo branches', () => {
   });
 });
 
+describe('forgejo defaultBranch', () => {
+  it('gives the default branch of the repository in one call, with the token of the origin', async () => {
+    const net = fakeFetch({ [API]: () => json({ name: 'mergiraf', default_branch: 'trunk' }) });
+    expect(await forgejo(net, ORIGIN, 'secret').defaultBranch(repo)).toBe('trunk');
+    expect(net.calls).toEqual([{ url: API, headers: { Authorization: 'token secret' } }]);
+  });
+});
+
 describe('forgejo mergeBase', () => {
   const MB = '1e848e491951b94e233c9ca52102b7b7e63bde39';
   const c = (sha: string, ...parents: string[]) => ({ sha, parents: parents.map((p) => ({ sha: p })) });
