@@ -56,11 +56,14 @@ scripts/build-wasm.sh   builds crates/wasm into web/src/lib/wasm (generated, com
                         sets the C include path for the tree-sitter grammars (needs cargo, jq)
 web/               viewer: Svelte 5, Tailwind 4, ELK layout in a web worker, plain SVG
 web/src/lib/forge.ts   opens a repository of a forge: pool, cache by blob sha, progress (ADR 0020);
-                   github.ts and forgejo.ts are the Forges (URLs, answers, errors, URL forms);
-web/src/lib/forges.ts  kind of forge (github, forgejo, later gitlab): kindOf(host), forgeFor(kind, ...),
+                   the interfaces Forge, CommitSource (between, pullsOf, links) and WebLinks;
+                   github.ts and forgejo.ts implement them (URLs, answers, errors, URL forms,
+                   the web links of the commit context: no other file builds a host URL);
+web/src/lib/forges.ts  kind of forge (github, forgejo, later gitlab): kindOf(host), forgeFor(kind, ...), forgeOfRepo(repo),
                    parseSource; hash gh=owner/repo@sha, forge=kind:host/owner/repo@sha (ADR 0022)
 web/src/lib/commitContext.ts  the commit context (ADR 0030): issue references, the list of a range,
-                   pull requests by sha; CommitContext.svelte shows it under the commit strip
+                   pull requests by sha, all links from the CommitSource; CommitContext.svelte
+                   shows it under the commit strip
 web/src/lib/source.ts  the source view (ADR 0031): sourceView (what a selection shows), lineGroups,
                    declarations, sourceReader (texts by blob sha from the cache, else the forge),
                    overlayLines (marks of a commit, from lineDiff.ts), readInto (the state of one read);
@@ -153,7 +156,10 @@ pnpm dev                                     # http://localhost:5173/
 - Commit context (ADR 0030): forge repositories only, not a local `diff.json`. Forgejo
   `commits/{sha}/pull` finds only the pull request whose merge commit is the sha; a commit
   inside a merged branch shows none. GitHub lists the newest 50 to 100 commits of a
-  longer range (two calls), Forgejo what one compare answer holds. Issue references are read from the text, not checked; issues that a pull
+  longer range (two calls), Forgejo what one compare answer holds. After a reload the
+  context of a commit costs one compare call, as the hash does not hold the commit; a
+  commit list cached before CG-4 has no messages, so its commits cost that call too.
+  Issue references are read from the text, not checked; issues that a pull
   request links only on the forge do not show. Kept in memory only: a reload asks again.
   Both endpoints were checked against github.com and codeberg.org on 2026-11-16; Forgejo
   with a token was not.

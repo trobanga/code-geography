@@ -1,6 +1,6 @@
 // Forgejo (and Gitea) as a `Forge` (ADR 0022): the only place that knows their URLs and answers.
 // Every URL is built from the origin and a path; no URL of an answer is ever followed (T-2).
-import { toCommitText, type Branch, type Commit, type CommitSource, type CommitText, type Entry, type Fetch, type Forge, type Repo } from './forge';
+import type { Branch, CommitSource, CommitText, Entry, Fetch, Forge, Repo, WebLinks } from './forge';
 import type { Parsed } from './forgeDiff';
 import { withRange } from './github';
 import { authorized, ForeignOrigin } from './tokenStore';
@@ -18,6 +18,19 @@ export function forgejo(net: { fetch: Fetch }, origin: string, token?: string): 
   const send = authorized(net.fetch, origin, token === undefined ? undefined : { Authorization: `token ${token}` });
   const api = (repo: Repo, path: string) => `${origin}/api/v1/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}${path}`;
   const host = new URL(origin).host;
+  /** The web pages of a repository on this host. */
+  const links = (repo: Repo): WebLinks => {
+    const at = `${origin}/${repo.owner}/${repo.name}`;
+    return {
+      commit: (sha) => `${at}/commit/${sha}`,
+      pull: (n) => `${at}/pulls/${n}`,
+      issue: (owner, name, n) => `${origin}/${owner}/${name}/issues/${n}`,
+      reference: (url) => {
+        const m = url.startsWith(`${origin}/`) ? /^([\w.-]+)\/([\w.-]+)\/(?:issues|pulls)\/(\d+)(?:\/.*)?$/.exec(url.slice(origin.length + 1)) : null;
+        return m && { owner: m[1], name: m[2], n: Number(m[3]) };
+      },
+    };
+  };
   /** One request; a failed one rejects with a message for the user that never holds the answer, which may echo the token. */
   async function get(url: string, repo: Repo, ref?: string): Promise<Response> {
     let r: Response;
@@ -47,7 +60,7 @@ export function forgejo(net: { fetch: Fetch }, origin: string, token?: string): 
   async function commitList(repo: Repo, sha: string, n: number, page: number): Promise<CommitText[]> {
     const more = page > 1 ? `&page=${page}` : '';
     const r = await get(api(repo, `/commits?sha=${encodeURIComponent(sha)}&limit=${n}&${LEAN}${more}`), repo, sha);
-    return ((await r.json()) as Parameters<typeof toCommitText>[0][]).map(toCommitText);
+    return ((await r.json()) as AnswerCommit[]).map(toCommitText);
   }
   /** One API call; none for a full sha. */
   async function resolve(repo: Repo): Promise<{ sha: string }> {
@@ -91,7 +104,7 @@ export function forgejo(net: { fetch: Fetch }, origin: string, token?: string): 
     },
     /** One API call. */
     async commits(repo, sha, n, page = 1) {
-      return (await commitList(repo, sha, n, page)).map(({ message: _, ...c }): Commit => c);
+      return commitList(repo, sha, n, page);
     },
 
     /** One API call: the compare lists the newest commits first; a long range may come short (`total`). */
@@ -101,7 +114,7 @@ export function forgejo(net: { fetch: Fetch }, origin: string, token?: string): 
         return { commits, total: commits.length };
       }
       const url = api(repo, `/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}?files=false&verification=false`);
-      const body = (await (await get(url, repo, `${base}...${head}`)).json()) as { total_commits: number; commits: Parameters<typeof toCommitText>[0][] | null };
+      const body = (await (await get(url, repo, `${base}...${head}`)).json()) as { total_commits: number; commits: AnswerCommit[] | null };
       const commits = (body.commits ?? []).map(toCommitText);
       return { commits, total: body.total_commits };
     },
@@ -115,9 +128,11 @@ export function forgejo(net: { fetch: Fetch }, origin: string, token?: string): 
         if (e instanceof NotFound) return [];
         throw e;
       }
-      const p = (await r.json()) as { number: number; title: string; state: 'open' | 'closed'; merged: boolean; html_url: string; body: string | null };
-      return [{ number: p.number, title: p.title, state: p.merged ? 'merged' : p.state, url: p.html_url, body: p.body ?? '' }];
+      const p = (await r.json()) as { number: number; title: string; state: 'open' | 'closed'; merged: boolean; body: string | null };
+      return [{ number: p.number, title: p.title, state: p.merged ? 'merged' : p.state, url: links(repo).pull(p.number), body: p.body ?? '' }];
     },
+
+    links,
 
     /**
      * One API call, plus one per further candidate. Forgejo's compare `a...b` lists the commits
@@ -196,4 +211,23 @@ export function forgejoUrlPath(path: string): Parsed | null {
     return rest.length > 2 ? { ...p, note: `took "${ref}" as the whole ${rest[0]} name; a path inside it is not supported` } : p;
   }
   return null;
+}
+
+/** A commit of an answer of Forgejo, with its full message. */
+function toCommitText(c: AnswerCommit): CommitText {
+  return {
+    sha: c.sha,
+    parents: (c.parents ?? []).map((p) => p.sha),
+    title: c.commit.message.split('\n', 1)[0],
+    author: c.commit.author?.name ?? '',
+    date: c.commit.author?.date ?? '',
+    message: c.commit.message,
+  };
+}
+
+/** A commit as Forgejo gives it in a list or a compare; a root commit has no parents (null). */
+interface AnswerCommit {
+  sha: string;
+  parents: { sha: string }[] | null;
+  commit: { message: string; author: { name: string; date: string } | null };
 }

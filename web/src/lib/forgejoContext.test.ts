@@ -80,4 +80,25 @@ describe('forgejo pullsOf', () => {
     const net = fakeFetch({ [URL]: json({}, 403) });
     await expect(forgejo(net, ORIGIN).pullsOf(repo, SHA)).rejects.toThrow('refused to read mergiraf/mergiraf (HTTP 403)');
   });
+
+  it('links the pull request to its page built from the number, not to the URL of the answer', async () => {
+    const net = fakeFetch({ [URL]: json({ number: 13, title: 'T', state: 'open', merged: false, html_url: 'javascript:alert(1)', body: null }) });
+    expect((await forgejo(net, ORIGIN).pullsOf(repo, SHA))[0].url).toBe(`${ORIGIN}/mergiraf/mergiraf/pulls/13`);
+  });
+});
+
+describe('forgejo links', () => {
+  it('builds the pages of a commit, a pull request and an issue of another repository on the same host', () => {
+    const l = forgejo(fakeFetch({}), ORIGIN).links(repo);
+    expect([l.commit(SHA), l.pull(7), l.issue('x', 'y', 3)]).toEqual([`${ORIGIN}/mergiraf/mergiraf/commit/${SHA}`, `${ORIGIN}/mergiraf/mergiraf/pulls/7`, `${ORIGIN}/x/y/issues/3`]);
+  });
+
+  it('reads the issue and pull request URLs of its own host, and no other', () => {
+    const l = forgejo(fakeFetch({}), ORIGIN).links(repo);
+    expect(l.reference(`${ORIGIN}/x/y/issues/3`)).toEqual({ owner: 'x', name: 'y', n: 3 });
+    expect(l.reference(`${ORIGIN}/a/b/pulls/12`)).toEqual({ owner: 'a', name: 'b', n: 12 });
+    expect(l.reference(`${ORIGIN}/a/b/pull/12`)).toBeNull();
+    expect(l.reference('https://github.com/a/b/issues/3')).toBeNull();
+    expect(l.reference('https://codeberg.org.evil.example/a/b/issues/3')).toBeNull();
+  });
 });

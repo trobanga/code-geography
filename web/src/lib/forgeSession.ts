@@ -2,7 +2,7 @@
 // switch between both, the commit list, restore from the hash. No Svelte and no DOM: the app
 // passes the forge, the cache, the index jobs and what to do with the results.
 import { fetchRepo, type Branch, type Commit, type Forge, type Repo, type TextCache } from './forge';
-import { fetchOverlay, listedCommits, overlayNames, resolveRange, type OverlaySpec, type Parsed, type Range } from './forgeDiff';
+import { fetchOverlay, listedCommits, overlayNames, rangeOfCommit, resolveRange, type OverlaySpec, type Parsed, type Range } from './forgeDiff';
 import { headOf } from './commit';
 import type { DiffRequest, IndexRequest } from './indexProject';
 import { summarize, type CallReport, type Summary } from './project';
@@ -341,7 +341,7 @@ export function forgeSession(d: SessionDeps) {
     const c = s.commits?.list.find((x) => x.sha === sha);
     if (!c || !s.repo) return;
     set({ listOpen: false });
-    await overlay({ ...s.repo, ref: c.sha }, { base: c.parents[0] ?? null, head: c.sha }, undefined, undefined, true);
+    await overlay({ ...s.repo, ref: c.sha }, rangeOfCommit(c), undefined, undefined, true);
   }
 
   /**

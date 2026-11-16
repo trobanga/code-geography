@@ -98,4 +98,25 @@ describe('github pullsOf', () => {
     const net = fakeFetch({ [URL]: () => new Response('', { status: 403, headers: { 'x-ratelimit-remaining': '0' } }) });
     await expect(github(net).pullsOf(repo, SHA)).rejects.toThrow('GitHub rate limit reached');
   });
+
+  it('links a pull request to its page built from the number, not to the URL of the answer', async () => {
+    const net = fakeFetch({ [URL]: json([{ number: 7, title: 'x', state: 'open', merged_at: null, html_url: 'javascript:alert(1)', body: null }]) });
+    expect((await github(net).pullsOf(repo, SHA))[0].url).toBe('https://github.com/a/b/pull/7');
+  });
+});
+
+describe('github links', () => {
+  it('builds the pages of a commit, a pull request and an issue of another repository', () => {
+    const l = github(fakeFetch({})).links(repo);
+    expect([l.commit(SHA), l.pull(7), l.issue('x', 'y', 3)]).toEqual([`https://github.com/a/b/commit/${SHA}`, 'https://github.com/a/b/pull/7', 'https://github.com/x/y/issues/3']);
+  });
+
+  it('reads the issue and pull request URLs of github.com, and no other', () => {
+    const l = github(fakeFetch({})).links(repo);
+    expect(l.reference('https://github.com/x/y/issues/3')).toEqual({ owner: 'x', name: 'y', n: 3 });
+    expect(l.reference('https://github.com/a/b/pull/12')).toEqual({ owner: 'a', name: 'b', n: 12 });
+    expect(l.reference('https://github.com/a/b/pulls/12')).toBeNull();
+    expect(l.reference('https://codeberg.org/a/b/issues/3')).toBeNull();
+    expect(l.reference('https://github.com/a/b/issues/3a')).toBeNull();
+  });
 });

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { forgeFor, kindOf, parseSource } from './forges';
+import { forgeFor, forgeOfRepo, kindOf, parseSource } from './forges';
+import type { ForgeKind } from './forge';
 
 const SHA = 'c38402e9e663c7e38b21f0082fd1fdcc4d97af59';
 const ORIGIN = 'https://codeberg.org';
@@ -57,6 +58,10 @@ describe('kinds of forge', () => {
     expect(() => forgeFor('gitlab', 'https://gitlab.com', { fetch: async () => new Response() })).toThrow('GitLab is not supported yet');
   });
 
+  it('refuses a kind it does not know, rather than give the links of another forge', () => {
+    expect(() => forgeFor('gitea' as ForgeKind, 'https://git.example.org', { fetch: async () => new Response() })).toThrow('no forge of the kind "gitea"');
+  });
+
   it('splits the path of the host form at its last /, so the kind decides how many segments an owner may have', () => {
     // Forgejo owners have one segment; the parse itself does not count them.
     expect(parseSource(`forgejo:codeberg.org/a/b/c@${SHA}`)).toMatchObject({ ok: false });
@@ -67,5 +72,12 @@ describe('kinds of forge', () => {
     const net = { fetch: async () => new Response() };
     expect(forgeFor('github', 'https://github.com', net).host).toBe('github.com');
     expect(forgeFor('forgejo', 'https://codeberg.org', net, 't').name).toBe('codeberg.org');
+  });
+
+  it('gives the forge of a repository: GitHub without origin and kind, an error for one without the other', () => {
+    const net = { fetch: async () => new Response() };
+    expect(forgeOfRepo({ owner: 'a', name: 'b' }, net).host).toBe('github.com');
+    expect(forgeOfRepo({ owner: 'a', name: 'b', origin: 'https://codeberg.org', kind: 'forgejo' }, net).host).toBe('codeberg.org');
+    expect(() => forgeOfRepo({ owner: 'a', name: 'b', origin: 'https://codeberg.org' }, net)).toThrow('no kind of forge');
   });
 });

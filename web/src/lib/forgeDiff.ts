@@ -57,6 +57,13 @@ export interface OverlayInputs {
 export interface Range {
   base: string | null;
   head: string;
+  /** The head commit, when the overlay is that commit against its first parent and an answer gave it. */
+  commit?: Commit;
+}
+
+/** The overlay of a commit against its first parent; it keeps the commit, so that its message costs no call. */
+export function rangeOfCommit(c: Commit): Range {
+  return { base: c.parents[0] ?? null, head: c.sha, commit: c };
 }
 
 /**
@@ -94,7 +101,7 @@ export async function resolveRange(forge: Forge, repo: Repo, spec: OverlaySpec):
   if (spec.kind === 'commit') {
     // One call gives the sha and the parents, also for a short sha.
     const [c] = await forge.commits(repo, repo.ref ?? 'HEAD', 1);
-    return { base: c.parents[0] ?? null, head: c.sha };
+    return rangeOfCommit(c);
   }
   if (spec.kind === 'range') {
     // The head first: an unknown head is reported as such. A full sha costs no call.

@@ -333,7 +333,8 @@ describe('forgeSession', () => {
     const picked = t.session.pick(HEAD);
     expect(t.state().listOpen).toBe(false);
     await picked;
-    expect(t.state().overlay!.range).toEqual({ base: BASE, head: HEAD });
+    // The listed commit goes along, so that its message costs no further call.
+    expect(t.state().overlay!.range).toMatchObject({ base: BASE, head: HEAD, commit: { sha: HEAD } });
     expect(t.state()).toMatchObject({ listOpen: false, commits: { anchor: HEAD } });
     expect(t.shown).toHaveLength(2);
   });
@@ -346,7 +347,7 @@ describe('forgeSession', () => {
     const picked = t.session.pickSha('bbbbbbb');
     expect(t.state().listOpen).toBe(false);
     await picked;
-    expect(t.state().overlay!.range).toEqual({ base: null, head: BASE });
+    expect(t.state().overlay!.range).toMatchObject({ base: null, head: BASE, commit: { sha: BASE } });
     expect(t.state()).toMatchObject({ commits: { anchor: HEAD } });
     expect(t.calls.filter((c) => c.startsWith('commits'))).toEqual(['commits a 30']);
   });
@@ -364,7 +365,7 @@ describe('forgeSession', () => {
     expect(t.state().listOpen).toBe(false);
     await picked;
     expect(t.calls.filter((c) => c.startsWith('commits'))).toEqual(['commits b 30', 'commits a 1']);
-    expect(t.state().overlay!.range).toEqual({ base: BASE, head: HEAD });
+    expect(t.state().overlay!.range).toMatchObject({ base: BASE, head: HEAD, commit: { sha: HEAD } });
     expect(t.state()).toMatchObject({ at: `o/r@${HEAD}`, commits: null, branch: null });
   });
 

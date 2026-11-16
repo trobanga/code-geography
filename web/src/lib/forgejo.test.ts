@@ -109,8 +109,8 @@ describe('forgejo commits and pull', () => {
     });
     const net = fakeFetch({ [`${API}/commits?sha=${SHA}&limit=2&${LEAN}`]: () => json([c(SHA, PARENT, 'chore: switch\n\nbody'), c(PARENT, 'p0', 'cargo-update (#857)')]) });
     expect(await forgejo(net, ORIGIN).commits(repo, SHA, 2)).toEqual([
-      { sha: SHA, parents: [PARENT], title: 'chore: switch', author: 'Ben Boeckel', date: '2026-11-04T16:35:06+01:00' },
-      { sha: PARENT, parents: ['p0'], title: 'cargo-update (#857)', author: 'Ben Boeckel', date: '2026-11-04T16:35:06+01:00' },
+      { sha: SHA, parents: [PARENT], title: 'chore: switch', author: 'Ben Boeckel', date: '2026-11-04T16:35:06+01:00', message: 'chore: switch\n\nbody' },
+      { sha: PARENT, parents: ['p0'], title: 'cargo-update (#857)', author: 'Ben Boeckel', date: '2026-11-04T16:35:06+01:00', message: 'cargo-update (#857)' },
     ]);
   });
 

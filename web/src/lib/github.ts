@@ -1,6 +1,6 @@
 // GitHub as a `Forge` (ADR 0020): the only place that knows GitHub URLs and answers.
 // The tree comes from the API (one call), the texts from the raw host (no API limit).
-import { toCommitText, type Branch, type Commit, type CommitSource, type CommitText, type Entry, type Fetch, type Forge, type PullRequest, type Repo } from './forge';
+import type { Branch, CommitSource, CommitText, Entry, Fetch, Forge, PullRequest, Repo, WebLinks } from './forge';
 import type { Parsed } from './forgeDiff';
 import { authorized } from './tokenStore';
 
@@ -73,6 +73,8 @@ export interface Net {
 
 const API = 'https://api.github.com';
 const RAW = 'https://raw.githubusercontent.com';
+/** The web pages; links are built from it, never taken from an answer (ADR 0022, T-2). */
+const WEB = 'https://github.com';
 
 /** GitHub with the given network. */
 export function github(net: Net): Forge & CommitSource {
@@ -108,7 +110,7 @@ export function github(net: Net): Forge & CommitSource {
 
     /** One API call. */
     async commits(repo, sha, n, page = 1) {
-      return (await commitList(net, repo, sha, n, page)).map(({ message: _, ...c }): Commit => c);
+      return commitList(net, repo, sha, n, page);
     },
 
     /**
@@ -123,7 +125,7 @@ export function github(net: Net): Forge & CommitSource {
       }
       const range = `${encodeURIComponent(base)}...${encodeURIComponent(head)}`;
       const url = `${API}/repos/${repo.owner}/${repo.name}/compare/${range}?per_page=100`;
-      type Body = { total_commits: number; commits: Parameters<typeof toCommitText>[0][] };
+      type Body = { total_commits: number; commits: AnswerCommit[] };
       let body = (await (await get(send, url, repo)).json()) as Body;
       const total = body.total_commits;
       if (total > 100) {
@@ -161,19 +163,21 @@ export function github(net: Net): Forge & CommitSource {
         title: string;
         state: 'open' | 'closed';
         merged_at: string | null;
-        html_url: string;
         body: string | null;
       }[];
+      const web = links(repo);
       return body.map(
         (p): PullRequest => ({
           number: p.number,
           title: p.title,
           state: p.merged_at !== null ? 'merged' : p.state,
-          url: p.html_url,
+          url: web.pull(p.number),
           body: p.body ?? '',
         }),
       );
     },
+
+    links,
 
     /** One API call per 100 branches: pages until one is not full. */
     async branches(repo) {
@@ -194,7 +198,7 @@ async function commitList(net: Net, repo: Repo, sha: string, n: number, page: nu
   const r = await get(net, url, { ...repo, ref: sha }).catch((e) => {
     throw e instanceof NotFound ? new Error(`${repo.owner}/${repo.name}: no branch, tag or commit "${sha}", or the repository is not found or private`) : e;
   });
-  return ((await r.json()) as Parameters<typeof toCommitText>[0][]).map(toCommitText);
+  return ((await r.json()) as AnswerCommit[]).map(toCommitText);
 }
 
 async function mergeBase(net: Net, repo: Repo, a: string, b: string): Promise<string> {
@@ -209,6 +213,20 @@ async function mergeBase(net: Net, repo: Repo, a: string, b: string): Promise<st
     throw e;
   }
   return ((await r.json()) as { merge_base_commit: { sha: string } }).merge_base_commit.sha;
+}
+
+/** The web pages of a repository on github.com. */
+function links(repo: Repo): WebLinks {
+  const at = `${WEB}/${repo.owner}/${repo.name}`;
+  return {
+    commit: (sha) => `${at}/commit/${sha}`,
+    pull: (n) => `${at}/pull/${n}`,
+    issue: (owner, name, n) => `${WEB}/${owner}/${name}/issues/${n}`,
+    reference: (url) => {
+      const m = /^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:issues|pull)\/(\d+)(?:\/.*)?$/i.exec(url);
+      return m && { owner: m[1], name: m[2], n: Number(m[3]) };
+    },
+  };
 }
 
 /** The page size up to 100 whose last page of `total` items holds the most; the larger on a tie. */
@@ -245,4 +263,23 @@ export function httpError(r: Response, repo: Repo): string {
   }
   if (r.status === 422 && repo.ref) return `${id}: no branch, tag or commit "${repo.ref}"`;
   return `${id}: HTTP ${r.status}`;
+}
+
+/** A commit of an answer of GitHub, with its full message. */
+function toCommitText(c: AnswerCommit): CommitText {
+  return {
+    sha: c.sha,
+    parents: (c.parents ?? []).map((p) => p.sha),
+    title: c.commit.message.split('\n', 1)[0],
+    author: c.commit.author?.name ?? '',
+    date: c.commit.author?.date ?? '',
+    message: c.commit.message,
+  };
+}
+
+/** A commit as GitHub gives it in a list or a compare. */
+interface AnswerCommit {
+  sha: string;
+  parents: { sha: string }[];
+  commit: { message: string; author: { name: string; date: string } | null };
 }

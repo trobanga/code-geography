@@ -39,7 +39,7 @@
   import { openCache, type Repo, type TextCache } from './lib/forge';
   import { commitRows } from './lib/forgeDiff';
   import { forgeSession, NO_FORGE, shaOf, shownBase, type ForgeState } from './lib/forgeSession';
-  import { forgeFor, parseSource } from './lib/forges';
+  import { forgeOfRepo, parseSource } from './lib/forges';
   import { tokenStore, type TokenField } from './lib/tokenStore';
   import { diffInWorker, indexInWorker } from './lib/indexProject';
   import { inputError, summarize, type Summary } from './lib/project';
@@ -68,7 +68,7 @@
   );
   const net = { fetch: (url: string, i?: Parameters<typeof fetch>[1]) => fetch(url, i) };
   // A new forge per call, with the token of its origin as stored now (ADR 0022).
-  const forgeOf = (repo: Repo) => (repo.origin && repo.kind ? forgeFor(repo.kind, repo.origin, net, tokens.get(repo.origin)) : forgeFor('github', 'https://github.com', net));
+  const forgeOf = (repo: Repo) => forgeOfRepo(repo, net, repo.origin === undefined ? undefined : tokens.get(repo.origin));
   const contexts = contextCache();
   const forge = forgeSession({
     forge: forgeOf,

@@ -27,22 +27,8 @@ export interface Commit {
   author: string;
   /** ISO 8601, as the forge gives it. */
   date: string;
-}
-
-/** The commit of a forge's answer, with the full message; the parents may be absent (null). */
-export function toCommitText(c: {
-  sha: string;
-  parents: { sha: string }[] | null;
-  commit: { message: string; author: { name: string; date: string } | null };
-}): CommitText {
-  return {
-    sha: c.sha,
-    parents: (c.parents ?? []).map((p) => p.sha),
-    title: c.commit.message.split('\n', 1)[0],
-    author: c.commit.author?.name ?? '',
-    date: c.commit.author?.date ?? '',
-    message: c.commit.message,
-  };
+  /** The full message, when the answer held it; a list cached before CG-4 lacks it. */
+  message?: string;
 }
 
 /** A commit with its full message. */
@@ -64,8 +50,23 @@ export interface PullRequest {
 export interface CommitSource {
   /** The commits of `base..head` (reachable from head, not from base), newest first, with full messages; one call. `base` null: the head alone. `total`: how many the range holds; `commits` may hold fewer. */
   between(repo: Repo, base: string | null, head: string): Promise<{ commits: CommitText[]; total: number }>;
-  /** The pull requests the forge links to the commit; [] for none. One call. */
+  /** The pull requests the forge links to the commit; [] for none. One call. Their `url` is built by the forge, not taken from the answer. */
   pullsOf(repo: Repo, sha: string): Promise<PullRequest[]>;
+  /** The web pages of the repository on its host; no call. */
+  links(repo: Repo): WebLinks;
+}
+
+/**
+ * The web pages of one repository, built from the origin, the names and the numbers; never
+ * taken from an answer (ADR 0022, T-2). Only a forge knows its URL forms (ADR 0020).
+ */
+export interface WebLinks {
+  commit(sha: string): string;
+  pull(n: number): string;
+  /** An issue of `owner/name` on the same host. */
+  issue(owner: string, name: string, n: number): string;
+  /** The issue or pull request that a URL of this host names, as a text may hold it; null for any other URL. */
+  reference(url: string): { owner: string; name: string; n: number } | null;
 }
 
 export interface Entry {

@@ -107,9 +107,15 @@ describe('resolveRange', () => {
   it('takes a commit and its first parent from one history call; a root commit has no base', async () => {
     const calls: string[] = [];
     const forge = { host: 'h', name: 'h', tree: async () => [], text: async () => '', ...history(calls) };
-    expect(await resolveRange(forge, { ...REPO, ref: 'abc1234' }, { kind: 'commit' })).toEqual({ base: BASE, head: HEAD });
-    expect(await resolveRange(forge, { ...REPO, ref: 'root' }, { kind: 'commit' })).toEqual({ base: null, head: 'r'.repeat(40) });
+    expect(await resolveRange(forge, { ...REPO, ref: 'abc1234' }, { kind: 'commit' })).toMatchObject({ base: BASE, head: HEAD });
+    expect(await resolveRange(forge, { ...REPO, ref: 'root' }, { kind: 'commit' })).toMatchObject({ base: null, head: 'r'.repeat(40) });
     expect(calls).toEqual(['commits abc1234 1', 'commits root 1']);
+  });
+
+  it('keeps the commit of the answer, so that its message costs no further call', async () => {
+    const forge = { host: 'h', name: 'h', tree: async () => [], text: async () => '', ...history([]) };
+    const r = await resolveRange(forge, { ...REPO, ref: 'abc1234' }, { kind: 'commit' });
+    expect(r.commit).toMatchObject({ sha: HEAD, parents: [BASE, 'other'] });
   });
 
   it('resolves both ends of A..B; for A...B the head, then the merge base of A and it', async () => {

@@ -185,7 +185,7 @@ describe('fetchRepo from GitHub', () => {
 const P1 = '1111111111111111111111111111111111111111';
 
 describe('commits', () => {
-  it('lists the last n commits reachable from a sha in one call: sha, parents, first line, author, date', async () => {
+  it('lists the last n commits reachable from a sha in one call: sha, parents, first line, author, date, message', async () => {
     const net = fakeFetch({
       [`https://api.github.com/repos/a/b/commits?sha=${SHA}&per_page=2`]: json([
         { sha: SHA, parents: [{ sha: P1 }, { sha: 'x' }], commit: { message: 'Merge it\n\nbody', author: { name: 'Ann', date: '2026-11-01T10:00:00Z' } } },
@@ -193,8 +193,8 @@ describe('commits', () => {
       ]),
     });
     expect(await github({ fetch: net.fetch }).commits({ owner: 'a', name: 'b' }, SHA, 2)).toEqual([
-      { sha: SHA, parents: [P1, 'x'], title: 'Merge it', author: 'Ann', date: '2026-11-01T10:00:00Z' },
-      { sha: P1, parents: [], title: 'First', author: 'Bo', date: '2026-10-01T10:00:00Z' },
+      { sha: SHA, parents: [P1, 'x'], title: 'Merge it', author: 'Ann', date: '2026-11-01T10:00:00Z', message: 'Merge it\n\nbody' },
+      { sha: P1, parents: [], title: 'First', author: 'Bo', date: '2026-10-01T10:00:00Z', message: 'First' },
     ]);
     expect(net.calls).toHaveLength(1);
   });

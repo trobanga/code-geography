@@ -1,13 +1,8 @@
 // The commit context (ADR 0030): the full message of the commits of an overlay, their pull
 // requests and the issue references that the texts name, on demand. Pure but for the
 // `CommitSource` that a caller passes in.
-import type { CommitSource, CommitText, PullRequest, Repo } from './forge';
+import type { CommitSource, CommitText, PullRequest, Repo, WebLinks } from './forge';
 import type { Range } from './forgeDiff';
-
-/** https://github.com/o/r, or {repo.origin}/o/r */
-export function webBase(repo: Repo): string {
-  return `${repo.origin ?? 'https://github.com'}/${repo.owner}/${repo.name}`;
-}
 
 export interface IssueRef {
   owner: string;
@@ -18,34 +13,30 @@ export interface IssueRef {
   url: string;
 }
 
-const ORIGIN_GITHUB = 'https://github.com';
+/** A URL in a text, any scheme with `//`; the characters that commonly close a sentence or a bracket end it. */
+const URL_OR_REF = /(?<url>[a-z][a-z0-9+.-]*:\/\/[^\s<>()[\]"'`]+)|(?<![\w/&.])(?:(?<ro>[\w.-]+)\/(?<rr>[\w.-]+))?#(?<rn>\d+)(?!\w)/gi;
+
+/** What the forge reads from a URL without its query, fragment and closing punctuation. */
+const referenceIn = (url: string, links: WebLinks) => links.reference(url.replace(/[?#].*$/, '').replace(/[.,;:!?]+$/, ''));
 
 /**
- * References `#12` and `owner/repo#12` in the text, and URLs of an issue or pull request of the
- * same host, in order of first appearance, without duplicates. A reference is a guess: it is
- * read from the text, not checked (ADR 0030).
+ * References `#12` and `owner/repo#12` in the text, and the URLs of an issue or pull request
+ * that the forge reads as its own, in order of first appearance, without duplicates. The forge
+ * builds the links. A reference is a guess: it is read from the text, not checked (ADR 0030).
  */
-export function issueRefs(text: string, repo: Repo): IssueRef[] {
-  const origin = repo.origin ?? ORIGIN_GITHUB;
-  const pull = repo.origin === undefined ? 'pull' : 'pulls';
-  const esc = origin.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const re = new RegExp(
-    `${esc}/(?<uo>[\\w.-]+)/(?<ur>[\\w.-]+)/(?:issues|${pull})/(?<un>\\d+)(?!\\w)` +
-      `|(?<![\\w/&.])(?:(?<ro>[\\w.-]+)/(?<rr>[\\w.-]+))?#(?<rn>\\d+)(?!\\w)`,
-    'gi',
-  );
+export function issueRefs(text: string, repo: Repo, links: WebLinks): IssueRef[] {
   const out: IssueRef[] = [];
   const seen = new Set<string>();
-  for (const m of text.matchAll(re)) {
+  for (const m of text.matchAll(URL_OR_REF)) {
     const g = m.groups!;
-    const owner = g.uo ?? g.ro ?? repo.owner;
-    const name = g.ur ?? g.rr ?? repo.name;
-    const n = Number(g.un ?? g.rn);
+    const found = g.url !== undefined ? referenceIn(g.url, links) : { owner: g.ro ?? repo.owner, name: g.rr ?? repo.name, n: Number(g.rn) };
+    if (!found) continue;
+    const { owner, name, n } = found;
     const key = `${owner}/${name}#${n}`.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
     const same = owner.toLowerCase() === repo.owner.toLowerCase() && name.toLowerCase() === repo.name.toLowerCase();
-    out.push({ owner, name, n, label: same ? `#${n}` : `${owner}/${name}#${n}`, url: `${origin}/${owner}/${name}/issues/${n}` });
+    out.push({ owner, name, n, label: same ? `#${n}` : `${owner}/${name}#${n}`, url: links.issue(owner, name, n) });
   }
   return out;
 }
@@ -55,16 +46,19 @@ export interface CommitView {
   short: string;
   title: string;
   body: string;
-  /** webBase/commit/sha */
+  /** The page of the commit on its host. */
   url: string;
   pulls: (PullRequest & { label: string })[];
   refs: IssueRef[];
 }
 
-/** The parts of a commit for display. refs: from the message and all PR bodies, minus those that name a listed PR of the same repository. */
-export function commitView(repo: Repo, c: CommitText, pulls: PullRequest[]): CommitView {
+/**
+ * The parts of a commit for display, the links from the forge. refs: from the message and all
+ * PR bodies, minus those that name a listed PR of the same repository.
+ */
+export function commitView(links: WebLinks, repo: Repo, c: CommitText, pulls: PullRequest[]): CommitView {
   const listed = new Set(pulls.map((p) => p.number));
-  const refs = issueRefs([c.message, ...pulls.map((p) => p.body)].join('\n'), repo).filter(
+  const refs = issueRefs([c.message, ...pulls.map((p) => p.body)].join('\n'), repo, links).filter(
     (r) => !(r.label === `#${r.n}` && listed.has(r.n)),
   );
   return {
@@ -72,9 +66,8 @@ export function commitView(repo: Repo, c: CommitText, pulls: PullRequest[]): Com
     short: c.sha.slice(0, 7),
     title: c.title,
     body: commitBody(c.message),
-    url: `${webBase(repo)}/commit/${c.sha}`,
-    // Built here: no URL of an answer is followed (ADR 0022, T-2).
-    pulls: pulls.map((p) => ({ ...p, label: `#${p.number}`, url: `${webBase(repo)}/${repo.origin ? 'pulls' : 'pull'}/${p.number}` })),
+    url: links.commit(c.sha),
+    pulls: pulls.map((p) => ({ ...p, label: `#${p.number}` })),
     refs,
   };
 }
@@ -102,12 +95,16 @@ export interface ContextState {
   total: number;
   /** Loading or failure line of the list; null: none. */
   status: string | null;
+  /** The list failed: `status` holds why. */
+  failed: boolean;
   /** The sha of the open commit; null: none. */
   current: string | null;
   /** PRs of the current commit; null while loading or after a failure. */
   pulls: PullRequest[] | null;
   /** Loading or failure line of the PRs. */
   pullStatus: string | null;
+  /** The pull requests failed: `pullStatus` holds why. */
+  pullFailed: boolean;
 }
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -124,8 +121,10 @@ export function commitContext(d: {
   cache: ContextCache;
   onState: (s: ContextState) => void;
 }): { toggle(): Promise<void>; openCommit(sha: string): Promise<void> } {
-  const rangeKey = `${webBase(d.repo)}@${d.range.base}..${d.range.head}`;
-  let s: ContextState = { open: false, commits: null, total: 0, status: null, current: null, pulls: null, pullStatus: null };
+  // The repository by its names and host, so that two hosts never share an answer.
+  const at = JSON.stringify([d.repo.origin ?? null, d.repo.owner, d.repo.name]);
+  const rangeKey = `${at}@${d.range.base}..${d.range.head}`;
+  let s: ContextState = { open: false, commits: null, total: 0, status: null, failed: false, current: null, pulls: null, pullStatus: null, pullFailed: false };
   const set = (p: Partial<ContextState>) => {
     s = { ...s, ...p };
     d.onState(s);
@@ -137,22 +136,30 @@ export function commitContext(d: {
   async function load(): Promise<void> {
     const kept = d.cache.ranges.get(rangeKey);
     if (kept) return set({ commits: kept.commits, total: kept.total, status: null });
-    set({ status: 'loading the commits …' });
+    // The commit list or the resolve of the overlay gave the commit with its message: no call.
+    const known = d.range.commit;
+    if (known?.message !== undefined && known.sha === d.range.head && (known.parents[0] ?? null) === d.range.base)
+      return set({ commits: [{ ...known, message: known.message }], total: 1, status: null });
+    set({ status: 'loading the commits …', failed: false });
     try {
-      const r = await d.source.between(d.repo, d.range.base, d.range.head);
+      const listed = await d.source.between(d.repo, d.range.base, d.range.head);
+      // A base that is the first parent of the head: the overlay is that one commit, also when
+      // it is a merge, whose range lists the side branch too.
+      const head = listed.commits.find((c) => c.sha === d.range.head);
+      const r = head && (head.parents[0] ?? null) === d.range.base ? { commits: [head], total: 1 } : listed;
       d.cache.ranges.set(rangeKey, r);
       set({ commits: r.commits, total: r.total, status: null });
     } catch (e) {
-      set({ status: `cannot list the commits: ${message(e)}` });
+      set({ status: `cannot list the commits: ${message(e)}`, failed: true });
     }
   }
 
   async function openCommit(sha: string): Promise<void> {
-    if (s.current === sha) return set({ current: null, pulls: null, pullStatus: null });
-    const key = `${webBase(d.repo)}@${sha}`;
+    if (s.current === sha) return set({ current: null, pulls: null, pullStatus: null, pullFailed: false });
+    const key = `${at}@${sha}`;
     const kept = d.cache.pulls.get(key);
-    if (kept) return set({ current: sha, pulls: kept, pullStatus: null });
-    set({ current: sha, pulls: null, pullStatus: 'loading the pull requests …' });
+    if (kept) return set({ current: sha, pulls: kept, pullStatus: null, pullFailed: false });
+    set({ current: sha, pulls: null, pullStatus: 'loading the pull requests …', pullFailed: false });
     try {
       // A request still pending for this sha is reused: each call counts against the limit.
       let asked = pending.get(key);
@@ -165,7 +172,7 @@ export function commitContext(d: {
       // The user may have opened another commit meanwhile.
       if (s.current === sha) set({ pulls, pullStatus: null });
     } catch (e) {
-      if (s.current === sha) set({ pullStatus: `cannot list the pull requests: ${message(e)}` });
+      if (s.current === sha) set({ pullStatus: `cannot list the pull requests: ${message(e)}`, pullFailed: true });
     }
   }
 

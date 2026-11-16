@@ -1,6 +1,6 @@
 // The kinds of forge (ADR 0022): which kind a host is, the `Forge` of a kind, and the parse of
 // the input field and of the hash. The only place that maps a host or a kind to a provider.
-import type { CommitSource, Fetch, Forge, ForgeKind } from './forge';
+import type { CommitSource, Fetch, Forge, ForgeKind, Repo } from './forge';
 import type { Parsed } from './forgeDiff';
 import { FORGEJO_FORMS, FORGEJO_OWNER, forgejo, forgejoUrlPath } from './forgejo';
 import { github, parseRepo, withRange } from './github';
@@ -26,7 +26,15 @@ const GITLAB = 'GitLab is not supported yet';
 export function forgeFor(kind: ForgeKind, origin: string, net: { fetch: Fetch }, token?: string): Forge & CommitSource {
   if (kind === 'github') return github(net);
   if (kind === 'forgejo') return forgejo(net, origin, token);
-  throw new Error(GITLAB);
+  if (kind === 'gitlab') throw new Error(GITLAB);
+  throw new Error(`no forge of the kind "${kind}"`);
+}
+
+/** The forge of a repository: GitHub when it has neither origin nor kind (ADR 0022), else the forge of its kind at its origin. */
+export function forgeOfRepo(repo: Repo, net: { fetch: Fetch }, token?: string): Forge & CommitSource {
+  if (repo.origin === undefined && repo.kind === undefined) return github(net);
+  if (repo.origin === undefined || repo.kind === undefined) throw new Error(`${repo.owner}/${repo.name}: no kind of forge for origin ${repo.origin ?? '(none)'}`);
+  return forgeFor(repo.kind, repo.origin, net, token);
 }
 
 const LOCAL = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i;

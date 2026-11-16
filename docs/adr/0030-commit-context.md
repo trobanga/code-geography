@@ -9,9 +9,15 @@ a token, so each extra call must be one the developer asked for.
 
 ## Decision
 - Forge repositories only. A local `diff.json` has no message.
-- A forge gives two more calls (`CommitSource`): `between(base, head)`, the commits of
-  `base..head` with their full messages, newest first, and `pullsOf(sha)`, the pull
-  requests that the forge links to one commit.
+- A forge gives two more calls and its links (`CommitSource`): `between(base, head)`, the
+  commits of `base..head` with their full messages, newest first; `pullsOf(sha)`, the pull
+  requests that the forge links to one commit; and `links(repo)` (`WebLinks`), the pages of
+  a commit, a pull request and an issue, and which URLs of a text name an issue or pull
+  request of the host. Only `github.ts` and `forgejo.ts` know URL forms and answers
+  (ADR 0020); `commitContext.ts` gets every link from the forge. The forge builds each link
+  from its origin, the names and the numbers, never from a URL of an answer (ADR 0022,
+  T-2). `forgeFor` refuses a kind it does not know, and `forgeOfRepo` a repository with an
+  origin but no kind (or the reverse), so no host gets the links of another kind (CG-4).
   - GitHub: `compare/{base}...{head}?per_page=100` and `commits/{sha}/pulls`. The compare
     lists the commits oldest first, in pages of equal size (`per_page`, `page`; checked on
     api.github.com 2026-11-16 with 300 and 101 commits, beyond the old limit of 250). Up to
@@ -26,6 +32,14 @@ a token, so each extra call must be one the developer asked for.
 - Nothing is asked before the developer opens the context ("message"). Then one call for
   the commits of the overlay, and one call for the pull requests of each commit opened.
   A single commit opens at once; a range shows its list, one commit open at a time.
+- An overlay whose base is the first parent of its head is that one commit, also when the
+  head is a merge (CG-4). The commit list and the resolve of a pasted sha return the full
+  message, and the overlay keeps that commit (`Range.commit`): its context costs no call
+  for the commits. Else (a reload, a range) one compare call; if the head is in it with
+  the base as first parent, the context shows the head alone, not the side branch that
+  `between(parent, merge)` lists (verified on github.com, rust-lang/cargo, and on
+  codeberg.org, forgejo/forgejo, 2026-11-16: the compare lists the merge and its side
+  branch; the pull requests of the merge commit name the merged pull request).
 - Answers are kept in memory for the session, by `base..head` and by commit sha, not in
   IndexedDB: a pull request can be opened after the commit.
 - Issues need a token on both forges to list. The viewer reads references from the text
@@ -34,7 +48,8 @@ a token, so each extra call must be one the developer asked for.
   request, or a number in prose); the viewer shows it as a link and does not call it
   "closes". A reference to a pull request that the list shows already is dropped.
 - New GitHub requests go through `authorized()` (ADR 0022) with no credentials.
-- A failed call shows a line in the context; the overlay stays.
+- A failed call shows a line in the context; the overlay stays. The state says that it
+  failed (`failed`, `pullFailed`); the view does not read it from the text.
 
 ## Consequences
 - On Forgejo a commit merged by a merge commit or a squash shows its pull request; a

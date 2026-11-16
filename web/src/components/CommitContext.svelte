@@ -5,16 +5,17 @@
 
   let { source, repo, range, cache }: { source: CommitSource; repo: Repo; range: Range; cache: ContextCache } = $props();
 
-  let st = $state.raw<ContextState>({ open: false, commits: null, total: 0, status: null, current: null, pulls: null, pullStatus: null });
+  let st = $state.raw<ContextState>({ open: false, commits: null, total: 0, status: null, failed: false, current: null, pulls: null, pullStatus: null, pullFailed: false });
   // One context per strip; App.svelte keys the strip by the commit, so the props are read once.
   // svelte-ignore state_referenced_locally
   const ctx = commitContext({ source, repo, range, cache, onState: (s) => (st = s) });
+  // svelte-ignore state_referenced_locally
+  const links = source.links(repo);
 
   const view = $derived.by(() => {
     const c = st.commits?.find((x) => x.sha === st.current);
-    return c ? commitView(repo, c, st.pulls ?? []) : null;
+    return c ? commitView(links, repo, c, st.pulls ?? []) : null;
   });
-  const failed = (line: string) => line.startsWith('cannot');
   const link = 'underline decoration-[var(--line)] hover:decoration-[var(--muted)]';
 </script>
 
@@ -30,7 +31,7 @@
   {#if st.open}
     <div class="mt-1 max-h-[40vh] overflow-auto">
       {#if st.status}
-        <div class={failed(st.status) ? 'text-[var(--accent)]' : 'text-[var(--muted)]'}>{st.status}</div>
+        <div class={st.failed ? 'text-[var(--accent)]' : 'text-[var(--muted)]'}>{st.status}</div>
       {/if}
       {#if st.commits && st.commits.length > 1}
         <ul>
@@ -56,7 +57,7 @@
           <pre class="whitespace-pre-wrap font-[inherit]">{view.body}</pre>
         {/if}
         {#if st.pullStatus}
-          <div class={failed(st.pullStatus) ? 'text-[var(--accent)]' : 'text-[var(--muted)]'}>{st.pullStatus}</div>
+          <div class={st.pullFailed ? 'text-[var(--accent)]' : 'text-[var(--muted)]'}>{st.pullStatus}</div>
         {/if}
         {#if view.pulls.length > 0}
           <div class="mt-1 text-[var(--muted)]">pull requests</div>
