@@ -51,7 +51,7 @@ To run the viewer on your own host, for example with a `graph.json` that `cg` ma
 3. Serve that directory with a static server. A sub-path is correct (from v0.1.1):
 
    ```sh
-   mkdir viewer && tar -xzf code-geography-v0.1.1-viewer.tar.gz -C viewer
+   mkdir viewer && tar -xzf code-geography-v0.2.0-viewer.tar.gz -C viewer
    cd viewer && python3 -m http.server 8000
    ```
 
@@ -63,7 +63,7 @@ To run the viewer on your own host, for example with a `graph.json` that `cg` ma
 tested with Rust 1.100. The crates use edition 2024, so Rust 1.85 is the minimum.
 
 ```sh
-cargo install --locked --git https://github.com/trobanga/code-geography --tag v0.1.1 cg
+cargo install --locked --git https://github.com/trobanga/code-geography --tag v0.2.0 cg
 ```
 
 ### From the sources
