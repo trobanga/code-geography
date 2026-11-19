@@ -296,6 +296,41 @@ fn the_typescript_calls_are_added_to_the_calls_of_the_report_and_stay_visible() 
     assert_eq!(json["calls"]["to_function"], 3);
 }
 
+#[test]
+fn the_elixir_calls_are_added_to_the_calls_of_the_report_and_stay_visible() {
+    let files = [
+        source("pom.xml", ""),
+        source(
+            "src/main/java/a/Foo.java",
+            "package a;\nclass Foo {\n    void one() {}\n    void two() { one(); }\n}\n",
+        ),
+        source("mix.exs", "def project, do: [app: :demo]\n"),
+        source(
+            "lib/a.ex",
+            "defmodule A do\n  def f, do: {g(), Enum.to_list([]), nobody()}\n  def g, do: 1\nend\n",
+        ),
+    ];
+
+    let (graph, report) = index_sources("repo", &files);
+
+    assert_eq!(report.elixir.calls.to_function, 1);
+    assert_eq!(report.elixir.calls.external, 1);
+    assert_eq!(report.elixir.calls.unresolved, 1);
+    assert_eq!(report.elixir.unresolved_calls.local_unknown, 1);
+    assert_eq!(report.calls.to_function, 2);
+    assert_eq!(report.calls.external, 1);
+    assert_eq!(report.calls.unresolved, 1);
+    assert!(
+        graph
+            .edge("fn:A.f/0", "fn:A.g/0", cg_core::EdgeKind::Calls)
+            .is_some()
+    );
+    let json = serde_json::to_value(&report).unwrap();
+    assert_eq!(json["elixir"]["calls"]["to_function"], 1);
+    assert_eq!(json["elixir"]["unresolved_calls"]["local_unknown"], 1);
+    assert_eq!(json["elixir"]["behind_outside_use"], 0);
+}
+
 const FOO: &str = "package a.b;\npublic class Foo {}\n";
 
 #[test]

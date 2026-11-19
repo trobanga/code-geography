@@ -230,6 +230,27 @@ fn print_elixir(elixir: &cg_index_elixir::Report) {
         eprintln!("elixir references: {}", by_kind.join(", "));
     }
     print_top("elixir unresolved", &elixir.unresolved_names, 10);
+    eprintln!(
+        "elixir calls: {} to function ({} as a value), {} to type, {} external, {} unresolved ({} a use could alias, {} ambiguous, {} dynamic, {} local unknown, {} below a declared module, {} in a macro argument of a module body); {} edges behind a use of a dependency, {} outside a module",
+        elixir.calls.to_function,
+        elixir.function_values,
+        elixir.calls.to_type,
+        elixir.calls.external,
+        elixir.calls.unresolved,
+        elixir.unresolved_calls.use_alias,
+        elixir.unresolved_calls.ambiguous,
+        elixir.unresolved_calls.dynamic,
+        elixir.unresolved_calls.local_unknown,
+        elixir.unresolved_calls.below_declared,
+        elixir.unresolved_calls.macro_argument,
+        elixir.behind_outside_use,
+        elixir.calls_outside_module
+    );
+    print_top(
+        "elixir calls to functions without a node",
+        &elixir.undeclared_functions,
+        10,
+    );
     print_top(
         "elixir forms without a node",
         &elixir.forms_without_node,

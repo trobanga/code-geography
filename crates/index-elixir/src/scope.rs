@@ -2,6 +2,7 @@
 //! into a full name. Free of anything about edges or reports.
 
 use crate::syntax::text;
+use std::rc::Rc;
 use tree_sitter::Node as Ts;
 
 /// What a written module name stands for.
@@ -15,29 +16,141 @@ pub enum Name {
     Dynamic,
 }
 
-/// The aliases that hold at one place, short name and full name, in the order in which
-/// they were made: a later one hides an earlier one of the same name.
-#[derive(Debug, Default)]
-pub struct Aliases(Vec<(String, String)>);
+/// Which functions of a module an `import` brings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Filter {
+    /// No `only:` and no `except:`.
+    All,
+    /// `only: [f: 1]`.
+    Only(Vec<(String, usize)>),
+    /// `only: :functions` or `only: :macros`.
+    OnlyKind { macros: bool },
+    /// `except: [f: 1]`.
+    Except(Vec<(String, usize)>),
+    /// A filter that is not a literal: it can bring any function.
+    Unknown,
+}
+
+impl Filter {
+    /// Whether the import brings the function `name` that a call with `arity` arguments
+    /// reaches; `macro_` for a macro.
+    pub fn brings(&self, name: &str, arity: usize, macro_: bool) -> Option<bool> {
+        let listed = |list: &[(String, usize)]| list.iter().any(|(n, a)| n == name && *a == arity);
+        match self {
+            Filter::All => Some(true),
+            Filter::Only(list) => Some(listed(list)),
+            Filter::OnlyKind { macros } => Some(*macros == macro_),
+            Filter::Except(list) => Some(!listed(list)),
+            Filter::Unknown => None,
+        }
+    }
+}
+
+/// An `import` of a module.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Import {
+    /// The full name of the module.
+    pub module: String,
+    pub filter: Filter,
+}
+
+/// A `use` of a module.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Use {
+    pub module: Name,
+    /// The last segments of the module names that its arguments write (`use Lib, repo:
+    /// MyApp.Repo` writes `Repo`), not counting the module itself.
+    pub written: Vec<String>,
+}
+
+/// One thing that a directive made at the place: the entries keep their order, a later one
+/// hides an earlier one of the same alias.
+#[derive(Debug, Clone)]
+enum Entry {
+    Alias(String, String),
+    Import(Rc<Import>),
+    Use(Rc<Use>),
+}
+
+/// The aliases and imports that hold at one place, in the order in which they were made.
+#[derive(Debug, Default, Clone)]
+pub struct Aliases(Vec<Entry>);
 
 impl Aliases {
     pub fn insert(&mut self, short: &str, full: &str) {
-        self.0.push((short.to_string(), full.to_string()));
+        self.0
+            .push(Entry::Alias(short.to_string(), full.to_string()));
     }
 
-    /// The start of a block: what `end_block` needs to end the aliases made in it.
+    /// Adds an `import` of the module `full`.
+    pub fn insert_import(&mut self, full: &str, filter: Filter) {
+        self.0.push(Entry::Import(Rc::new(Import {
+            module: full.to_string(),
+            filter,
+        })));
+    }
+
+    /// Adds a `use`.
+    pub fn insert_use(&mut self, module: Name, written: Vec<String>) {
+        self.0.push(Entry::Use(Rc::new(Use { module, written })));
+    }
+
+    /// The `use`s that can have made an alias of the first segment of the module name
+    /// `written`: those after the alias that expands it, all of them if no alias does, none
+    /// for a name that starts with `Elixir.`. Whether an alias expands the first segment.
+    pub fn uses_after(&self, written: &str) -> (bool, Vec<Rc<Use>>) {
+        let first = written.split('.').next().unwrap_or(written);
+        if first == "Elixir" {
+            return (false, Vec::new());
+        }
+        let alias = self
+            .0
+            .iter()
+            .rposition(|e| matches!(e, Entry::Alias(short, _) if short == first));
+        let after = alias.map_or(0, |index| index + 1);
+        let uses = self.0[after..]
+            .iter()
+            .filter_map(|e| match e {
+                Entry::Use(used) => Some(used.clone()),
+                _ => None,
+            })
+            .collect();
+        (alias.is_some(), uses)
+    }
+
+    /// The imports that hold at this place: a later `import` of a module replaces an
+    /// earlier one of the same module.
+    pub fn imports(&self) -> Vec<Rc<Import>> {
+        let mut seen: Vec<&str> = Vec::new();
+        let mut imports: Vec<Rc<Import>> = Vec::new();
+        for entry in self.0.iter().rev() {
+            if let Entry::Import(import) = entry
+                && !seen.contains(&import.module.as_str())
+            {
+                seen.push(&import.module);
+                imports.push(import.clone());
+            }
+        }
+        imports.reverse();
+        imports
+    }
+
+    /// The start of a block: what `end_block` needs to end the entries made in it.
     pub fn mark(&self) -> usize {
         self.0.len()
     }
 
-    /// Ends the aliases that were made after `mark`.
+    /// Ends the entries that were made after `mark`.
     pub fn end_block(&mut self, mark: usize) {
         self.0.truncate(mark);
     }
 
     fn get(&self, short: &str) -> Option<&str> {
-        let found = self.0.iter().rev().find(|(name, _)| name == short);
-        found.map(|(_, full)| full.as_str())
+        let found = self.0.iter().rev().find_map(|e| match e {
+            Entry::Alias(name, full) if name == short => Some(full),
+            _ => None,
+        });
+        found.map(String::as_str)
     }
 
     /// The full name of a name as written (`A.B`): `Elixir.` is dropped, else the first

@@ -1,9 +1,12 @@
 //! Elixir front end: turns the sources of Mix projects into a graph.
 
+mod calls;
 mod declare;
 mod edges;
 mod mix;
+mod quote;
 mod scope;
+mod sites;
 mod syntax;
 
 pub use cg_core::SourceFile;
@@ -33,6 +36,42 @@ pub struct Report {
     pub references: BTreeMap<String, ModuleRefs>,
     /// The unresolved module names, with how often.
     pub unresolved_names: BTreeMap<String, usize>,
+    /// How the call sites resolved (ADR 0037), counted per call site before the edges are
+    /// joined or dropped. `to_value` stays 0.
+    pub calls: cg_core::CallReport,
+    /// Of the calls to a function: those where the function is named, not called (`&f/1`).
+    pub function_values: usize,
+    /// Of the calls that give an edge: those of a module name that no alias expands, after a
+    /// `use` of a module outside the repository. They stand on the assumption that the
+    /// module makes no alias of the name (ADR 0037).
+    pub behind_outside_use: usize,
+    /// Call sites outside every module (the top level of a file): not in `calls`, and no
+    /// edge.
+    pub calls_outside_module: usize,
+    /// Of the unresolved calls: why.
+    pub unresolved_calls: UnresolvedCalls,
+    /// The calls that reach the package of a module because it has no public function of
+    /// that name and arity (`Mod.fun/n`), with how often.
+    pub undeclared_functions: BTreeMap<String, usize>,
+}
+
+/// Why call sites stayed unresolved (ADR 0037); the sum is `Report::calls.unresolved`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct UnresolvedCalls {
+    /// A `use` can make an alias of the first segment of the module name.
+    pub use_alias: usize,
+    /// Two imports, or an import that is not a literal list, can answer the name.
+    pub ambiguous: usize,
+    /// The module is not a written name: `mod.fun()`, `unquote(m).fun()`.
+    pub dynamic: usize,
+    /// A local call that nothing of the repository and no `Kernel` name answers.
+    pub local_unknown: usize,
+    /// The module is not declared, but a module above it is.
+    pub below_declared: usize,
+    /// A call in a module body, outside every function, of a name that the module of the
+    /// repository does not declare: the argument of a macro, which may be a type
+    /// (`field :b, B.t()`) or code that the macro does not run.
+    pub macro_argument: usize,
 }
 
 /// How the references of one kind resolved, counted per reference.
@@ -177,7 +216,7 @@ pub fn index_sources(root_name: &str, files: &[SourceFile]) -> (Graph, Report) {
         .map(|m| (m.name.as_str(), m.dir.as_str()))
         .collect();
     graph.nodes.extend(package_nodes(&declared.modules, &dirs));
-    for function in std::mem::take(&mut declared.functions) {
+    for function in &declared.functions {
         let parent = package_id(dirs[function.module.as_str()], &function.module);
         graph.nodes.push(Node {
             id: format!(
@@ -187,15 +226,15 @@ pub fn index_sources(root_name: &str, files: &[SourceFile]) -> (Graph, Report) {
             parent: Some(parent),
             kind: NodeKind::Function,
             name: format!("{}/{}", function.name, function.arity),
-            file: Some(function.file),
+            file: Some(function.file.clone()),
             span: Some(function.span),
             test: function.test,
-            hash: Some(function.hash),
+            hash: Some(function.hash.clone()),
             change: None,
         });
     }
     edges::count(&declared, &dirs, &mut report);
-    let edges = edges::edges(&graph, &declared, &dirs);
+    let edges = edges::edges(&graph, &declared, &dirs, &mut report);
     graph.edges = edges.into_edges(&graph.nodes);
     (graph, report)
 }

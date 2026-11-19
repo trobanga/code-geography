@@ -37,27 +37,57 @@ pub fn arguments(call: Ts) -> Vec<Ts> {
     arguments_node(call).map(forms).unwrap_or_default()
 }
 
+/// Whether `node` has the operator `op` (`a when b`, `&f`).
+pub fn is_operator(node: Ts, source: &str, op: &str) -> bool {
+    node.child_by_field_name("operator")
+        .is_some_and(|o| text(o, source) == op)
+}
+
+/// The head of a function form without its guards: `f(a)` of `f(a) when g(a)`. `None` if a
+/// guarded head has no left side.
+fn unguarded<'t>(mut head: Ts<'t>, source: &str) -> Option<Ts<'t>> {
+    while head.kind() == "binary_operator" && is_operator(head, source, "when") {
+        head = head.child_by_field_name("left")?;
+    }
+    Some(head)
+}
+
 /// The name and the arity that the head of a function form declares: the first argument
 /// of `def`, without its guards. `None` if the name is not written (`def unquote(n)(x)`).
 pub fn function_head<'a>(head: Ts, source: &'a str) -> Option<(&'a str, usize)> {
-    let mut head = head;
-    while head.kind() == "binary_operator"
-        && head
-            .child_by_field_name("operator")
-            .is_some_and(|op| text(op, source) == "when")
-    {
-        head = head.child_by_field_name("left")?;
-    }
-    let operator = || Some(text(head.child_by_field_name("operator")?, source));
+    let head = unguarded(head, source)?;
     match head.kind() {
         "identifier" => Some((text(head, source), 0)),
-        "binary_operator" => Some((operator()?, 2)),
-        "unary_operator" => Some((operator()?, 1)),
+        "binary_operator" | "unary_operator" => operator_head(head, source),
         _ => Some((
             call_head(head, source).filter(|n| *n != "unquote")?,
             arguments(head).len(),
         )),
     }
+}
+
+/// An operator defined as a function: `a + b` has the name `+` and the arity 2.
+fn operator_head<'a>(head: Ts, source: &'a str) -> Option<(&'a str, usize)> {
+    let arity = if head.kind() == "binary_operator" {
+        2
+    } else {
+        1
+    };
+    Some((text(head.child_by_field_name("operator")?, source), arity))
+}
+
+/// The number of parameters that the head of a function form gives a default (`b \\ 1`).
+pub fn default_count(head: Ts, source: &str) -> usize {
+    let Some(head) = unguarded(head, source) else {
+        return 0;
+    };
+    if head.kind() != "call" {
+        return 0;
+    }
+    arguments(head)
+        .into_iter()
+        .filter(|a| a.kind() == "binary_operator" && is_operator(*a, source, "\\\\"))
+        .count()
 }
 
 /// The content of a string literal without interpolation.

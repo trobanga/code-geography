@@ -9,7 +9,12 @@ use std::collections::{BTreeMap, HashMap};
 /// The edges that the references make, between the packages of the modules that the
 /// repository declares (`dirs`: the module name to the directory of its project). No edge
 /// joins a node with itself or with its ancestor or descendant.
-pub fn edges(graph: &Graph, declared: &Declared, dirs: &BTreeMap<&str, &str>) -> EdgeSet {
+pub fn edges(
+    graph: &Graph,
+    declared: &Declared,
+    dirs: &BTreeMap<&str, &str>,
+    report: &mut Report,
+) -> EdgeSet {
     let mut edges = EdgeSet::new();
     // A `defimpl` is an edge from its type to its protocol.
     for module in &declared.modules {
@@ -45,6 +50,7 @@ pub fn edges(graph: &Graph, declared: &Declared, dirs: &BTreeMap<&str, &str>) ->
             reference.line,
         );
     }
+    crate::calls::resolve(declared, dirs, &mut edges, report);
     let tree = NodeTree::new(graph);
     edges.retain(|from, to| !tree.related(from, to));
     edges
@@ -54,12 +60,6 @@ pub fn edges(graph: &Graph, declared: &Declared, dirs: &BTreeMap<&str, &str>) ->
 /// outside it, to a module that the repository does not declare below one that it declares,
 /// or to no written name. The counts are per reference, before edges are joined or dropped.
 pub fn count(declared: &Declared, dirs: &BTreeMap<&str, &str>, report: &mut Report) {
-    // A module below a module of the repository is one of the repository. A shared first
-    // segment says less: `Mix.Tasks.Mine` does not make `Mix.Task` a module to declare.
-    let below_declared = |name: &str| {
-        name.match_indices('.')
-            .any(|(end, _)| dirs.contains_key(&name[..end]))
-    };
     for reference in &declared.references {
         let counts = report
             .references
@@ -67,7 +67,7 @@ pub fn count(declared: &Declared, dirs: &BTreeMap<&str, &str>, report: &mut Repo
             .or_default();
         match &reference.name {
             Name::Module(name) if dirs.contains_key(name.as_str()) => counts.resolved += 1,
-            Name::Module(name) if below_declared(name) => {
+            Name::Module(name) if below_declared(dirs, name) => {
                 counts.unresolved += 1;
                 *report.unresolved_names.entry(name.clone()).or_default() += 1;
             }
@@ -75,6 +75,14 @@ pub fn count(declared: &Declared, dirs: &BTreeMap<&str, &str>, report: &mut Repo
             Name::Dynamic => counts.dynamic += 1,
         }
     }
+}
+
+/// Whether `name` is below a module of the repository (`dirs`): one of the repository that
+/// it does not declare. A shared first segment says less: `Mix.Tasks.Mine` does not make
+/// `Mix.Task` a module to declare.
+pub fn below_declared(dirs: &BTreeMap<&str, &str>, name: &str) -> bool {
+    name.match_indices('.')
+        .any(|(end, _)| dirs.contains_key(&name[..end]))
 }
 
 /// The parent links of a graph.

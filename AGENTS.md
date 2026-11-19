@@ -44,8 +44,10 @@ crates/index-clojure  Clojure front end on tree-sitter: index_sources(root_name,
                    changed files of an overlay
 crates/index-elixir  Elixir front end on tree-sitter: index_sources(root_name, files) -> Graph + Report
                    (Mix projects as modules, defmodule/defprotocol/defimpl as packages, def as
-                   function `name/arity`, imports and implements edges, no call edges yet, ADR 0035);
-                   scope.rs: the aliases of a lexical scope; Layout::test_code(path) as for Clojure
+                   function `name/arity`, imports and implements edges, ADR 0035; call edges,
+                   ADR 0037: sites.rs reads a call site, calls.rs resolves it, quote.rs what
+                   aliases a `use` can make); scope.rs: the aliases, imports and uses of a
+                   lexical scope; Layout::test_code(path) as for Clojure
 crates/index-typescript  TypeScript front end on tree-sitter: index_sources(root_name, files) -> Graph + Report
                    (package.json modules, files and directories as packages, imports, extends and
                    implements edges, ADR 0034; call edges, ADR 0036: calls.rs walks the files,
@@ -87,7 +89,7 @@ web/src/lib/cover.ts  the cover of the diagram (the Survey picture) for a level 
                    screen before the cut of the step, off when its layout is there
 web/src/lib/tokenStore.ts  tokens by origin (session/local storage) and authorized(): the only
                    place that adds a token, refuses any other origin (ADR 0022)
-docs/adr/          architecture decision records (0016: how Rust maps onto the graph, 0023: Clojure, 0034: TypeScript, 0035: Elixir)
+docs/adr/          architecture decision records (0016: how Rust maps onto the graph, 0023: Clojure, 0034: TypeScript, 0035: Elixir, 0037: Elixir calls)
 ```
 
 ## Commands
@@ -177,10 +179,26 @@ and `web/package.json`. The skill `.agents/skills/cut-release` does the steps.
   Java, Rust and TypeScript make no value nodes. No `.cljs`, no Leiningen.
   Duplicate namespace names: the first file wins.
   The grammar crate is pinned to 0.2.5 (0.2.9 does not build for wasm32).
-- Elixir (ADR 0035): no call edges yet (CG-10), so a module that writes the names of
-  other modules in full at the call shows no edge. What a `use` adds to a module is not
+- Elixir call edges (ADR 0037): `Mod.fun` with the aliases of the scope, a local call
+  of a function of the module or of one that an `import` of a repository module brings
+  (one answer only). On elixir-ls 25.1 % of the call sites give an edge, 30.3 % are
+  external, 44.5 % unresolved; on ecto 36.5 %, 22.5 %, 41.0 % (mostly local calls of macros of
+  dependencies: `test`, `assert`, `field`, `Ecto.Query`). A call to a module of the
+  repository whose function a macro made goes to its package, in a module body (a
+  `test` block, `field :x, M.t()`) it gives no edge. A `use` of the repository whose
+  `quote` (or `using` block) can alias the first segment hides the call; a `use` of a
+  dependency is trusted except for the modules its arguments name (the report counts
+  the sites behind one: `behind_outside_use`). A call in the argument of a macro that
+  rewrites it is read as a call, which is a second way to a wrong edge, with no count
+  (`select: count(p.id)` of `Ecto.Query.from` in a module with a `count/1`). Main code does not reach modules of test
+  code; test code reaches a mock of an Elixir module (elixir-ls: `String`). No edge for
+  operators, `apply`, a variable module, code at the top level of a file, a `__using__`
+  whose `quote` is in another module. The `imports` edges of directives do not apply
+  the `use` rule.
+- Elixir (ADR 0035): What a `use` adds to a module is not
   known: its functions, imports, `@behaviour` and aliases. An alias that a `use` adds can
-  hide a module of the repository: this is the one way to a wrong edge. No node for
+  hide a module of the repository in a directive: this is the one way to a wrong
+  `imports` edge. No node for
   `defstruct`, `@type`, `@callback`, or for what a macro declares (`schema`, `test`); the
   body of a module has no hash. Definitions are read at the top level, in a module body
   and in `if`/`unless` blocks there, not in other blocks (`for`). A project is a
