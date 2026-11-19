@@ -71,14 +71,14 @@ export function summarize(
   return { name, sources, nodes: graph.nodes.length, edges: graph.edges.length, resolved, unresolved: c.unresolved, text, tooltip };
 }
 
-/** A source file, as opposed to a build file (`pom.xml`, `Cargo.toml`, `deps.edn`, `mix.exs`). */
+/** A source file, as opposed to a build file (`pom.xml`, `Cargo.toml`, `deps.edn`, `mix.exs`, `package.json`, `tsconfig*.json`). */
 function isSourceFile(path: string): boolean {
   if (path === 'mix.exs' || path.endsWith('/mix.exs')) return false;
-  return ['.java', '.rs', '.clj', '.cljc', '.ex', '.exs'].some((ext) => path.endsWith(ext));
+  return ['.java', '.rs', '.clj', '.cljc', '.ex', '.exs', '.ts', '.tsx'].some((ext) => path.endsWith(ext));
 }
 
 /** Why the chosen files cannot be indexed, or null. */
 export function inputError(chosen: Chosen<unknown>): string | null {
   if (chosen.inputs.some((i) => isSourceFile(i.path))) return null;
-  return `no Java, Rust, Clojure or Elixir sources found in ${chosen.root || 'the directory'} (only these languages are supported now)`;
+  return `no Java, Rust, Clojure, Elixir or TypeScript sources found in ${chosen.root || 'the directory'} (only these languages are supported now)`;
 }

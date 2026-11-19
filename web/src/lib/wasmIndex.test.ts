@@ -1,4 +1,4 @@
-// Proof that the C parsers (tree-sitter-java, tree-sitter-rust, tree-sitter-clojure-orchard and tree-sitter-elixir) link and run inside the WASM module.
+// Proof that the C parsers (tree-sitter-java, tree-sitter-rust, tree-sitter-clojure-orchard, tree-sitter-elixir and tree-sitter-typescript) link and run inside the WASM module.
 // Loads the generated .wasm from disk, as the browser would load it over HTTP.
 // @ts-ignore The project has no @types/node; this test is the only file that reads from disk.
 import { readFileSync } from 'node:fs';
@@ -180,6 +180,36 @@ describe('the indexer in WASM', () => {
     expect(ids).not.toContain('pkg::C');
     expect(report.elixir.files_outside_source_dirs).toBe(1);
     expect(report.elixir.references.alias.resolved).toBe(1);
+  });
+
+  it('indexes TypeScript sources: the grammar runs inside the module', () => {
+    expect(isInput('a.ts')).toBe(true);
+    expect(isInput('a.tsx')).toBe(true);
+    expect(isInput('package.json')).toBe(true);
+    expect(isInput('tsconfig.json')).toBe(true);
+    expect(isInput('a.js')).toBe(false);
+    const files: [string, string][] = [
+      ['package.json', '{"name":"app"}'],
+      ['src/a.ts', "import { B } from './b';\nexport class A extends B {}\n"],
+      ['src/b.ts', 'export class B {}\n'],
+      ['src/b.test.ts', 'export class T {}\n'],
+    ];
+    const json = indexSources(
+      files.map(([path]) => path),
+      files.map(([, text]) => text),
+      'repo',
+    );
+    const { graph, report } = JSON.parse(json) as {
+      graph: Graph;
+      report: { typescript: { imports: { resolved: number } } };
+    };
+
+    const ids = graph.nodes.map((n) => n.id);
+    expect(ids).toEqual(expect.arrayContaining(['mod:', 'pkg::/src/a', 'pkg::/src/b', 'type::/src/a#A', 'type::/src/b#B']));
+    const kinds = (from: string, to: string) => graph.edges.filter((e) => e.from === from && e.to === to).map((e) => e.kind);
+    expect(kinds('pkg::/src/a', 'type::/src/b#B')).toEqual(['imports']);
+    expect(kinds('type::/src/a#A', 'type::/src/b#B')).toEqual(['extends']);
+    expect(report.typescript.imports.resolved).toBe(1);
   });
 
   it('builds the commit overlay from two source sets', () => {

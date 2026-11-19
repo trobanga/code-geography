@@ -1,5 +1,6 @@
 //! All front ends together: one rule for the files that any of them wants, one call that
-//! indexes them all. A repository can hold Java, Rust, Clojure and Elixir; the graphs are joined.
+//! indexes them all. A repository can hold Java, Rust, Clojure, Elixir and
+//! TypeScript; the graphs are joined.
 
 pub use cg_core::SourceFile;
 use cg_core::{Change, DiffInfo, EdgeSet, Graph, Node, NodeKind, PackageHolds};
@@ -19,6 +20,8 @@ pub struct Report {
     pub clojure: cg_index_clojure::Report,
     /// What the Elixir front end could not read or place. It has no call counts yet.
     pub elixir: cg_index_elixir::Report,
+    /// What the TypeScript front end could not read or resolve. It has no call counts.
+    pub typescript: cg_index_typescript::Report,
 }
 
 /// Whether some front end wants the file at `path` (relative to the root, `/` as
@@ -28,6 +31,7 @@ pub fn is_input(path: &str) -> bool {
         || cg_index_rust::is_input(path)
         || cg_index_clojure::is_input(path)
         || cg_index_elixir::is_input(path)
+        || cg_index_typescript::is_input(path)
 }
 
 /// Indexes sources that are given as data with each front end and joins the graphs.
@@ -44,6 +48,7 @@ pub fn index_sources(root_name: &str, files: &[SourceFile]) -> (Graph, Report) {
     let (rust, rust_report) = cg_index_rust::index_sources(root_name, files);
     let clojure = cg_index_clojure::index_sources_with(root_name, files, &java.classes);
     let (elixir, elixir_report) = cg_index_elixir::index_sources(root_name, files);
+    let (typescript, typescript_report) = cg_index_typescript::index_sources(root_name, files);
     let (mut java_graph, mut clojure_graph) = (java.graph, clojure.graph);
     nest_shared_packages(
         &mut java_graph,
@@ -60,6 +65,7 @@ pub fn index_sources(root_name: &str, files: &[SourceFile]) -> (Graph, Report) {
         .chain(rust.nodes)
         .chain(clojure.nodes)
         .chain(elixir.nodes)
+        .chain(typescript.nodes)
         .filter(|n| seen.insert(n.id.clone()))
         .collect();
     // The Clojure front end does not know where the Java types are in the tree: an edge from
@@ -89,6 +95,7 @@ pub fn index_sources(root_name: &str, files: &[SourceFile]) -> (Graph, Report) {
         .chain(rust.edges)
         .chain(clojure_edges)
         .chain(elixir.edges)
+        .chain(typescript.edges)
         .collect();
     let graph = Graph {
         edges: edges.into_edges(&nodes),
@@ -100,6 +107,7 @@ pub fn index_sources(root_name: &str, files: &[SourceFile]) -> (Graph, Report) {
         rust: rust_report,
         clojure: clojure_report,
         elixir: elixir_report,
+        typescript: typescript_report,
     };
     (graph, report)
 }
@@ -214,7 +222,8 @@ pub fn diff_sources(
 
 /// Which files are test code by the source directories of a `deps.edn` instead of the rule
 /// of ADR 8: Clojure files and Java files in a module that has no `pom.xml`, and the
-/// Elixir files of a Mix project (the directory `test`, ADR 35).
+/// Elixir files of a Mix project (the directory `test`, ADR 35); TypeScript files are test
+/// code by their name (`*.test.ts`, `*.spec.ts`, `__tests__`, `__mocks__`), not by the path.
 struct TestRule {
     layout: cg_index_clojure::Layout,
     elixir: cg_index_elixir::Layout,
@@ -240,6 +249,9 @@ impl TestRule {
 
     /// `None`: the rule of ADR 8 holds.
     fn test_code(&self, path: &str) -> Option<bool> {
+        if path.ends_with(".ts") || path.ends_with(".tsx") {
+            return Some(cg_index_typescript::is_test_file(path));
+        }
         if !path.ends_with(".java") {
             return self
                 .layout

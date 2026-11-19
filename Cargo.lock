@@ -46,6 +46,7 @@ dependencies = [
  "cg-core",
  "cg-index",
  "cg-index-elixir",
+ "cg-index-typescript",
  "cg-walk",
  "serde_json",
  "tempfile",
@@ -68,6 +69,7 @@ dependencies = [
  "cg-index-elixir",
  "cg-index-java",
  "cg-index-rust",
+ "cg-index-typescript",
  "cg-walk",
  "serde",
  "serde_json",
@@ -114,6 +116,17 @@ dependencies = [
  "serde",
  "tree-sitter",
  "tree-sitter-rust",
+]
+
+[[package]]
+name = "cg-index-typescript"
+version = "0.1.1"
+dependencies = [
+ "cg-core",
+ "serde",
+ "serde_json",
+ "tree-sitter",
+ "tree-sitter-typescript",
 ]
 
 [[package]]
@@ -443,6 +456,16 @@ name = "tree-sitter-rust"
 version = "0.24.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "439e577dbe07423ec2582ac62c7531120dbfccfa6e5f92406f93dd271a120e45"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-typescript"
+version = "0.23.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c5f76ed8d947a75cc446d5fccd8b602ebf0cde64ccf2ffa434d873d7a575eff"
 dependencies = [
  "cc",
  "tree-sitter-language",

@@ -26,47 +26,71 @@ pub struct PackageNode {
 pub fn package_nodes<'a>(
     holds: &BTreeMap<(Option<&'a str>, String), bool>,
 ) -> Vec<(Option<&'a str>, Vec<PackageNode>)> {
+    package_nodes_by(holds, '.')
+}
+
+/// `package_nodes` with `separator` in the place of `.`.
+fn package_nodes_by<'a>(
+    holds: &BTreeMap<(Option<&'a str>, String), bool>,
+    separator: char,
+) -> Vec<(Option<&'a str>, Vec<PackageNode>)> {
     let mut modules: BTreeMap<Option<&str>, BTreeMap<&str, bool>> = BTreeMap::new();
     for ((module, name), test) in holds {
         modules.entry(*module).or_default().insert(name, *test);
     }
-    let mut out = Vec::new();
-    for (module, packages) in modules {
-        // The default package has no name to nest by.
-        let named: Vec<&str> = packages.keys().copied().filter(|n| !n.is_empty()).collect();
-        let common = common_prefix(&named);
-        let mut next: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
-        for name in &named {
-            for (end, _) in name.match_indices('.') {
-                let segments = name[end + 1..].split('.').next().unwrap_or_default();
-                next.entry(&name[..end]).or_default().insert(segments);
-            }
+    modules
+        .into_iter()
+        .map(|(module, packages)| (module, module_package_nodes(&packages, separator)))
+        .collect()
+}
+
+/// The package nodes of one module: `packages` with their prefixes that branch.
+fn module_package_nodes(packages: &BTreeMap<&str, bool>, separator: char) -> Vec<PackageNode> {
+    // The default package has no name to nest by.
+    let named: Vec<&str> = packages.keys().copied().filter(|n| !n.is_empty()).collect();
+    let common = common_prefix(&named, separator);
+    let mut nodes: BTreeMap<&str, bool> = packages.iter().map(|(n, t)| (*n, *t)).collect();
+    for (prefix, following) in &following_segments(&named, separator) {
+        if following.len() >= 2 && *prefix != common && !nodes.contains_key(prefix) {
+            let below = named.iter().filter(|n| is_below(n, prefix, separator));
+            nodes.insert(prefix, below.clone().all(|n| packages[n]));
         }
-        let mut nodes: BTreeMap<&str, bool> = packages.iter().map(|(n, t)| (*n, *t)).collect();
-        for (prefix, following) in &next {
-            if following.len() >= 2 && *prefix != common && !nodes.contains_key(prefix) {
-                let below = named.iter().filter(|n| is_below(n, prefix));
-                nodes.insert(prefix, below.clone().all(|n| packages[n]));
-            }
-        }
-        let list = nodes
-            .iter()
-            .map(|(name, test)| {
-                let parent = nodes
-                    .keys()
-                    .filter(|candidate| is_below(name, candidate))
-                    .max_by_key(|candidate| candidate.len());
-                PackageNode {
-                    name: name.to_string(),
-                    display: parent.map_or(*name, |p| &name[p.len() + 1..]).to_string(),
-                    parent: parent.map(|p| p.to_string()),
-                    test: *test && !packages.contains_key(name),
-                }
-            })
-            .collect();
-        out.push((module, list));
     }
-    out
+    nodes
+        .iter()
+        .map(|(name, test)| {
+            let parent = nodes
+                .keys()
+                .filter(|candidate| is_below(name, candidate, separator))
+                .max_by_key(|candidate| candidate.len());
+            PackageNode {
+                name: name.to_string(),
+                display: parent
+                    .map_or(*name, |p| &name[p.len() + separator.len_utf8()..])
+                    .to_string(),
+                parent: parent.map(|p| p.to_string()),
+                test: *test && !packages.contains_key(name),
+            }
+        })
+        .collect()
+}
+
+/// For each proper prefix of a name, on `separator` boundaries, the segments that follow it.
+fn following_segments<'n>(
+    named: &[&'n str],
+    separator: char,
+) -> BTreeMap<&'n str, BTreeSet<&'n str>> {
+    let mut next: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    for name in named {
+        for (end, _) in name.match_indices(separator) {
+            let segments = name[end + separator.len_utf8()..]
+                .split(separator)
+                .next()
+                .unwrap_or_default();
+            next.entry(&name[..end]).or_default().insert(segments);
+        }
+    }
+    next
 }
 
 /// The packages that are nodes by themselves, per module (the key is the directory of the
@@ -84,11 +108,20 @@ pub type ClassTable = BTreeMap<String, String>;
 /// `deftest` forms) is hidden with the tests this way, unless a package of main code is
 /// below it.
 pub fn marked_package_nodes(holds: &PackageHolds) -> Vec<(String, Vec<PackageNode>)> {
+    marked_package_nodes_by(holds, '.')
+}
+
+/// `marked_package_nodes` with `separator` in the place of `.`: for names such as
+/// `src/lib/forge.test`, whose dots are no separators.
+pub fn marked_package_nodes_by(
+    holds: &PackageHolds,
+    separator: char,
+) -> Vec<(String, Vec<PackageNode>)> {
     let by_module: BTreeMap<(Option<&str>, String), bool> = holds
         .iter()
         .map(|((module, name), test)| ((Some(module.as_str()), name.clone()), *test))
         .collect();
-    package_nodes(&by_module)
+    package_nodes_by(&by_module, separator)
         .into_iter()
         .map(|(module, mut nodes)| {
             let module = module.expect("every package has a module");
@@ -104,7 +137,7 @@ pub fn marked_package_nodes(holds: &PackageHolds) -> Vec<(String, Vec<PackageNod
                     is_test(node)
                         && nodes
                             .iter()
-                            .filter(|n| is_below(&n.name, &node.name))
+                            .filter(|n| is_below(&n.name, &node.name, separator))
                             .all(is_test)
                 })
                 .collect();
@@ -116,25 +149,25 @@ pub fn marked_package_nodes(holds: &PackageHolds) -> Vec<(String, Vec<PackageNod
         .collect()
 }
 
-/// Whether `name` is a package below `prefix`, on `.` boundaries.
-fn is_below(name: &str, prefix: &str) -> bool {
+/// Whether `name` is a package below `prefix`, on `separator` boundaries.
+fn is_below(name: &str, prefix: &str, separator: char) -> bool {
     name.strip_prefix(prefix)
-        .is_some_and(|rest| rest.starts_with('.'))
+        .is_some_and(|rest| rest.starts_with(separator))
 }
 
-/// The longest common prefix of the names, on `.` boundaries.
-fn common_prefix(names: &[&str]) -> String {
+/// The longest common prefix of the names, on `separator` boundaries.
+fn common_prefix(names: &[&str], separator: char) -> String {
     let mut common: Vec<&str> = match names.first() {
-        Some(first) => first.split('.').collect(),
+        Some(first) => first.split(separator).collect(),
         None => return String::new(),
     };
     for name in names {
         let shared = common
             .iter()
-            .zip(name.split('.'))
+            .zip(name.split(separator))
             .take_while(|(a, b)| **a == *b)
             .count();
         common.truncate(shared);
     }
-    common.join(".")
+    common.join(&separator.to_string())
 }

@@ -8,6 +8,7 @@ license.workspace = true
 cg-core = { path = "../core" }
 cg-index-clojure = { path = "../index-clojure" }
 cg-index-elixir = { path = "../index-elixir" }
+cg-index-typescript = { path = "../index-typescript" }
 cg-index-java = { path = "../index-java" }
 cg-index-rust = { path = "../index-rust" }
 cg-walk = { path = "../walk" }

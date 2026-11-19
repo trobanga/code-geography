@@ -286,3 +286,38 @@ fn index_prints_how_the_clojure_class_references_were_resolved() {
     let line = "clojure classes: 2 to a type of the repository, 1 external, 2 a local could hide\n";
     assert!(stderr.contains(line), "{line}\n{stderr}");
 }
+
+#[test]
+fn index_prints_what_the_typescript_front_end_resolved_and_did_not_read() {
+    let dir = TempDir::new().unwrap();
+    let source = dir.path().join("repo");
+    fs::create_dir_all(source.join("app/src")).unwrap();
+    fs::create_dir_all(source.join("stray")).unwrap();
+    fs::write(source.join("app/package.json"), "{\"name\":\"app\"}").unwrap();
+    fs::write(
+        source.join("app/src/a.ts"),
+        "import { B } from './b';\nimport React from 'react';\nimport { M } from './missing';\nexport class A extends B {}\n",
+    )
+    .unwrap();
+    fs::write(source.join("app/src/b.ts"), "export class B {}\n").unwrap();
+    fs::write(source.join("stray/z.ts"), "export class Z {}\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_cg"))
+        .arg("index")
+        .arg(&source)
+        .arg("-o")
+        .arg(dir.path().join("graph.json"))
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    for line in [
+        "typescript: 1 files not read (no package.json above), 0 not TypeScript, 0 with syntax errors\n",
+        "typescript imports: 1 resolved, 1 external, 1 unresolved, 0 other files\n",
+        "typescript names: 1 to a declaration, 0 to a package\n",
+        "typescript heritage: 1 resolved, 0 external, 0 unresolved\n",
+    ] {
+        assert!(stderr.contains(line), "{line}{stderr}");
+    }
+}

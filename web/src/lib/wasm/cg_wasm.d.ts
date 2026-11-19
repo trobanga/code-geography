@@ -45,11 +45,11 @@ export interface InitOutput {
     readonly explorer_view: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly indexSources: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
     readonly isInput: (a: number, b: number) => number;
+    readonly iswspace: (a: number) => number;
+    readonly iswalpha: (a: number) => number;
+    readonly iswdigit: (a: number) => number;
     readonly calloc: (a: number, b: number) => number;
     readonly free: (a: number) => void;
-    readonly iswspace: (a: number) => number;
-    readonly iswdigit: (a: number) => number;
-    readonly iswalpha: (a: number) => number;
     readonly strlen: (a: number) => number;
     readonly abort: () => void;
     readonly malloc: (a: number) => number;

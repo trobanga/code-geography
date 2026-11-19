@@ -505,3 +505,41 @@ fn a_removed_edge_of_a_function_whose_file_moved_names_the_file_of_the_base() {
         (Some(Change::Added), vec![(None, vec![4])])
     );
 }
+
+#[test]
+fn a_changed_typescript_file_is_test_code_by_its_name_not_by_the_directory_src() {
+    let package = "{\"name\":\"app\"}";
+    let before = [source("package.json", package)];
+    let after = [source("package.json", package)];
+    let spec = DiffSpec {
+        base: "a".into(),
+        head: "b".into(),
+        changed: changed(&[
+            // ADR 8 alone would call this test code.
+            ("src/lib/x.ts", Change::Modified),
+            ("src/lib/x.test.ts", Change::Modified),
+            ("src/lib/y.spec.tsx", Change::Added),
+            ("src/__tests__/z.ts", Change::Added),
+            ("src/main/w.ts", Change::Removed),
+        ]),
+    };
+
+    let (graph, _) = diff_sources("repo", &before, &after, spec);
+
+    let info = graph.diff.expect("diff info");
+    let files: Vec<_> = info
+        .files
+        .iter()
+        .map(|f| (f.path.as_str(), f.test))
+        .collect();
+    assert_eq!(
+        files,
+        [
+            ("src/lib/x.ts", false),
+            ("src/lib/x.test.ts", true),
+            ("src/lib/y.spec.tsx", true),
+            ("src/__tests__/z.ts", true),
+            ("src/main/w.ts", false),
+        ]
+    );
+}

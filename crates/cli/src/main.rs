@@ -15,11 +15,41 @@ fn main() -> ExitCode {
 }
 
 fn run(args: Vec<String>) -> Result<(), String> {
+    let (command, positional, output) = parse_args(args)?;
+    let mut report = None;
+    let graph = match (command.as_str(), positional.as_slice()) {
+        ("index", [repo]) => {
+            let repo = PathBuf::from(repo);
+            let (graph, found) = cg_index::index_with_report(&repo)
+                .map_err(|e| format!("{}: {e}", repo.display()))?;
+            report = Some(found);
+            graph
+        }
+        ("diff", [repo, rev]) => diff(Path::new(repo), rev)?,
+        _ => return Err(USAGE.into()),
+    };
+    let json = serde_json::to_string(&graph).map_err(|e| e.to_string())?;
+    std::fs::write(&output, json).map_err(|e| format!("{}: {e}", output.display()))?;
+    eprintln!(
+        "{} nodes, {} edges -> {}",
+        graph.nodes.len(),
+        graph.edges.len(),
+        output.display()
+    );
+    if let Some(report) = report {
+        print_report(&report);
+    }
+    Ok(())
+}
+
+/// The command, its positional arguments and the output file (`-o`, else the default of
+/// the command).
+fn parse_args(args: Vec<String>) -> Result<(String, Vec<String>, PathBuf), String> {
     let mut args = args.into_iter();
-    let command = args.next();
-    let default_output = match command.as_deref() {
-        Some("index") => "graph.json",
-        Some("diff") => "diff.json",
+    let command = args.next().unwrap_or_default();
+    let default_output = match command.as_str() {
+        "index" => "graph.json",
+        "diff" => "diff.json",
         _ => return Err(USAGE.into()),
     };
     let mut positional = Vec::new();
@@ -31,124 +61,134 @@ fn run(args: Vec<String>) -> Result<(), String> {
             positional.push(arg);
         }
     }
+    Ok((command, positional, output))
+}
 
-    let mut report = None;
-    let graph = match (command.as_deref(), positional.as_slice()) {
-        (Some("index"), [repo]) => {
-            let repo = PathBuf::from(repo);
-            let (graph, found) = cg_index::index_with_report(&repo)
-                .map_err(|e| format!("{}: {e}", repo.display()))?;
-            report = Some(found);
-            graph
-        }
-        (Some("diff"), [repo, rev]) => diff(Path::new(repo), rev)?,
-        _ => return Err(USAGE.into()),
-    };
-    let json = serde_json::to_string(&graph).map_err(|e| e.to_string())?;
-    std::fs::write(&output, json).map_err(|e| format!("{}: {e}", output.display()))?;
+/// What the front ends could not resolve, one block per language.
+fn print_report(report: &cg_index::Report) {
+    let calls = &report.calls;
     eprintln!(
-        "{} nodes, {} edges -> {}",
-        graph.nodes.len(),
-        graph.edges.len(),
-        output.display()
+        "calls: {} to function, {} to type, {} to value, {} external, {} unresolved",
+        calls.to_function, calls.to_type, calls.to_value, calls.external, calls.unresolved
     );
-    if let Some(cg_index::Report {
-        calls,
-        rust,
-        clojure,
-        elixir,
-    }) = report
-    {
+    print_rust(report);
+    print_clojure(report);
+    print_elixir(&report.elixir);
+    print_typescript(&report.typescript);
+}
+
+/// What the Rust front end resolved and did not read.
+fn print_rust(report: &cg_index::Report) {
+    let rust = &report.rust;
+
+    let rust_calls = rust.calls;
+    eprintln!(
+        "rust calls: {} to function ({} as a value), {} to type, {} external, {} unresolved; {} more in macro arguments, not read",
+        rust_calls.to_function,
+        rust.function_values,
+        rust_calls.to_type,
+        rust_calls.external,
+        rust_calls.unresolved,
+        rust.macro_call_sites
+    );
+    let paths = rust.paths;
+    eprintln!(
+        "rust: {} paths resolved, {} external, {} unresolved; {} files not reached, {} #[path] attributes",
+        paths.resolved,
+        paths.external,
+        paths.unresolved,
+        rust.unreached_files.len(),
+        rust.path_attributes.len()
+    );
+}
+
+/// What the Clojure front end resolved and did not read.
+fn print_clojure(report: &cg_index::Report) {
+    let clojure = &report.clojure;
+    let clojure_calls = clojure.calls;
+    let no_source: usize = clojure.no_source_node.values().sum();
+    eprintln!(
+        "clojure calls: {} to function ({} as a value), {} to type, {} to value, {} external, {} unresolved ({} var without node); {} more in code without a function node, not read",
+        clojure_calls.to_function,
+        clojure.function_values,
+        clojure_calls.to_type,
+        clojure_calls.to_value,
+        clojure_calls.external,
+        clojure_calls.unresolved,
+        clojure.var_without_node,
+        no_source
+    );
+    if no_source > 0 {
+        let by_head: Vec<String> = clojure
+            .no_source_node
+            .iter()
+            .map(|(head, count)| format!("{head} {count}"))
+            .collect();
         eprintln!(
-            "calls: {} to function, {} to type, {} to value, {} external, {} unresolved",
-            calls.to_function, calls.to_type, calls.to_value, calls.external, calls.unresolved
+            "clojure code without a function node, by head: {}",
+            by_head.join(", ")
         );
-        let rust_calls = rust.calls;
-        eprintln!(
-            "rust calls: {} to function ({} as a value), {} to type, {} external, {} unresolved; {} more in macro arguments, not read",
-            rust_calls.to_function,
-            rust.function_values,
-            rust_calls.to_type,
-            rust_calls.external,
-            rust_calls.unresolved,
-            rust.macro_call_sites
-        );
-        let paths = rust.paths;
-        eprintln!(
-            "rust: {} paths resolved, {} external, {} unresolved; {} files not reached, {} #[path] attributes",
-            paths.resolved,
-            paths.external,
-            paths.unresolved,
-            rust.unreached_files.len(),
-            rust.path_attributes.len()
-        );
-        let clojure_calls = clojure.calls;
-        let no_source: usize = clojure.no_source_node.values().sum();
-        eprintln!(
-            "clojure calls: {} to function ({} as a value), {} to type, {} to value, {} external, {} unresolved ({} var without node); {} more in code without a function node, not read",
-            clojure_calls.to_function,
-            clojure.function_values,
-            clojure_calls.to_type,
-            clojure_calls.to_value,
-            clojure_calls.external,
-            clojure_calls.unresolved,
-            clojure.var_without_node,
-            no_source
-        );
-        if no_source > 0 {
-            let by_head: Vec<String> = clojure
-                .no_source_node
-                .iter()
-                .map(|(head, count)| format!("{head} {count}"))
-                .collect();
-            eprintln!(
-                "clojure code without a function node, by head: {}",
-                by_head.join(", ")
-            );
-        }
-        eprintln!(
-            "clojure nodes: {} values, {} defmethod, {} extend methods; {} duplicate declarations, {} extend calls with a map not read",
-            clojure.value_nodes,
-            clojure.method_nodes,
-            clojure.extend_nodes,
-            clojure.duplicate_declarations.values().sum::<usize>(),
-            clojure.extend_forms
-        );
-        let unqualified = &clojure.unqualified;
-        eprintln!(
-            "clojure unqualified: {} to function ({} as a value), {} to type, {} to value, {} a local could hide, {} ambiguous",
-            unqualified.to_function,
-            unqualified.function_values,
-            unqualified.to_type,
-            unqualified.to_value,
-            unqualified.maybe_local,
-            unqualified.ambiguous
-        );
-        eprintln!(
-            "clojure classes: {} to a type of the repository, {} external, {} a local could hide",
-            clojure.classes.to_type, clojure.classes.external, clojure.classes.maybe_local
-        );
-        // The most frequent names first: which macros of the repository make them.
-        print_top("clojure unresolved", &clojure.unresolved_names, 15);
-        let without_node: usize = clojure.forms_without_node.values().sum();
-        eprintln!(
-            "clojure: {} files outside the source directories, {} below no deps.edn, {} without ns form, {} duplicate namespaces; {} top-level forms without a node",
-            clojure.files_outside_source_dirs,
-            clojure.files_without_deps_edn,
-            clojure.files_without_ns,
-            clojure.duplicate_namespaces.len(),
-            without_node
-        );
-        // The most frequent heads first: the size of the gap that macros of the
-        // repository make.
-        print_top(
-            "clojure forms without a node",
-            &clojure.forms_without_node,
-            10,
-        );
-        print_elixir(&elixir);
     }
-    Ok(())
+    eprintln!(
+        "clojure nodes: {} values, {} defmethod, {} extend methods; {} duplicate declarations, {} extend calls with a map not read",
+        clojure.value_nodes,
+        clojure.method_nodes,
+        clojure.extend_nodes,
+        clojure.duplicate_declarations.values().sum::<usize>(),
+        clojure.extend_forms
+    );
+    let unqualified = &clojure.unqualified;
+    eprintln!(
+        "clojure unqualified: {} to function ({} as a value), {} to type, {} to value, {} a local could hide, {} ambiguous",
+        unqualified.to_function,
+        unqualified.function_values,
+        unqualified.to_type,
+        unqualified.to_value,
+        unqualified.maybe_local,
+        unqualified.ambiguous
+    );
+    eprintln!(
+        "clojure classes: {} to a type of the repository, {} external, {} a local could hide",
+        clojure.classes.to_type, clojure.classes.external, clojure.classes.maybe_local
+    );
+    // The most frequent names first: which macros of the repository make them.
+    print_top("clojure unresolved", &clojure.unresolved_names, 15);
+    let without_node: usize = clojure.forms_without_node.values().sum();
+    eprintln!(
+        "clojure: {} files outside the source directories, {} below no deps.edn, {} without ns form, {} duplicate namespaces; {} top-level forms without a node",
+        clojure.files_outside_source_dirs,
+        clojure.files_without_deps_edn,
+        clojure.files_without_ns,
+        clojure.duplicate_namespaces.len(),
+        without_node
+    );
+    // The most frequent heads first: the size of the gap that macros of the
+    // repository make.
+    print_top(
+        "clojure forms without a node",
+        &clojure.forms_without_node,
+        10,
+    );
+}
+
+/// What the TypeScript front end resolved and did not read.
+fn print_typescript(ts: &cg_index_typescript::Report) {
+    eprintln!(
+        "typescript: {} files not read (no package.json above), {} not TypeScript, {} with syntax errors",
+        ts.files_without_package_json, ts.files_not_typescript, ts.files_with_syntax_errors
+    );
+    eprintln!(
+        "typescript imports: {} resolved, {} external, {} unresolved, {} other files",
+        ts.imports.resolved, ts.imports.external, ts.imports.unresolved, ts.imports.other_files
+    );
+    eprintln!(
+        "typescript names: {} to a declaration, {} to a package",
+        ts.names.to_declaration, ts.names.to_package
+    );
+    eprintln!(
+        "typescript heritage: {} resolved, {} external, {} unresolved",
+        ts.heritage.resolved, ts.heritage.external, ts.heritage.unresolved
+    );
 }
 
 /// What the Elixir front end resolved and did not read.

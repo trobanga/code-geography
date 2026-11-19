@@ -1,4 +1,4 @@
-use cg_core::NodeKind;
+use cg_core::{EdgeKind, NodeKind};
 use cg_index::{SourceFile, index, index_sources, index_with_report, is_input};
 use std::fs;
 use tempfile::TempDir;
@@ -23,12 +23,17 @@ fn is_input_is_true_when_any_front_end_wants_the_file() {
         "mix.exs",
         "lib/a.ex",
         "test/a_test.exs",
+        "a.ts",
+        "a.tsx",
+        "package.json",
+        "tsconfig.json",
     ] {
         assert!(is_input(path), "{path}");
     }
     for path in [
         "README.md",
-        "web/package.json",
+        "a.js",
+        "web/node_modules/package.json",
         "target/x.rs",
         "a/node_modules/B.java",
         "src/a.cljs",
@@ -685,4 +690,69 @@ fn the_edges_of_each_front_end_keep_their_sites_in_the_joined_graph() {
         [(None, vec![6])]
     );
     assert!(graph.edges.iter().all(|e| !e.sites.is_empty()));
+}
+
+#[test]
+fn typescript_sources_give_a_graph_and_the_typescript_report() {
+    let files = [
+        source("package.json", "{\"name\":\"app\"}"),
+        source(
+            "src/a.ts",
+            "import { B } from './b';\nexport class A extends B {}\n",
+        ),
+        source("src/b.ts", "export class B {}\n"),
+    ];
+    let mut reversed = files.clone();
+    reversed.reverse();
+
+    let (graph, report) = index_sources("repo", &files);
+
+    for id in [
+        "mod:",
+        "pkg::/src/a",
+        "pkg::/src/b",
+        "type::/src/a#A",
+        "type::/src/b#B",
+    ] {
+        assert!(graph.node(id).is_some(), "{id}");
+    }
+    let has = |from: &str, to: &str, kind: EdgeKind| {
+        graph
+            .edges
+            .iter()
+            .any(|e| e.from == from && e.to == to && e.kind == kind)
+    };
+    assert!(has("pkg::/src/a", "type::/src/b#B", EdgeKind::Imports));
+    assert!(has("type::/src/a#A", "type::/src/b#B", EdgeKind::Extends));
+    assert_eq!(report.typescript.imports.resolved, 1);
+    assert_eq!((graph, report), index_sources("repo", &reversed));
+}
+
+#[test]
+fn typescript_and_rust_in_one_directory_share_the_module() {
+    let files = [
+        source("Cargo.toml", "[package]\nname = \"tool\"\n"),
+        source("src/lib.rs", "pub struct Bar;\n"),
+        source("package.json", "{\"name\":\"app\"}"),
+        source("web/package.json", "{\"name\":\"web\"}"),
+        source("src/a.ts", "export class A {}\n"),
+        source("web/b.ts", "export class B {}\n"),
+    ];
+
+    let (graph, _) = index_sources("repo", &files);
+
+    let modules: Vec<_> = graph
+        .nodes
+        .iter()
+        .filter(|n| n.kind == NodeKind::Module)
+        .map(|n| n.id.as_str())
+        .collect();
+    assert_eq!(modules, ["mod:", "mod:web"]);
+    assert!(graph.node("type:tool::Bar").is_some());
+    assert_eq!(
+        graph.node("pkg::/src/a").unwrap().parent.as_deref(),
+        Some("mod:")
+    );
+    assert!(graph.node("type::/src/a#A").is_some());
+    assert!(graph.node("type:web:/b#B").is_some());
 }

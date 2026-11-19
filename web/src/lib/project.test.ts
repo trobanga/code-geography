@@ -67,7 +67,7 @@ describe('summarize', () => {
 describe('inputError', () => {
   it('names the supported languages when no input is found', () => {
     expect(inputError({ root: 'docs', inputs: [] })).toBe(
-      'no Java, Rust, Clojure or Elixir sources found in docs (only these languages are supported now)',
+      'no Java, Rust, Clojure, Elixir or TypeScript sources found in docs (only these languages are supported now)',
     );
   });
 
@@ -89,12 +89,30 @@ describe('inputError for Elixir', () => {
   });
 
   it('counts a directory with a mix.exs but no source file as without sources', () => {
-    expect(inputError({ root: 'p', inputs: [{ path: 'mix.exs', file: null }] })).toMatch(/no Java, Rust, Clojure or Elixir sources found in p/);
+    expect(inputError({ root: 'p', inputs: [{ path: 'mix.exs', file: null }] })).toMatch(/no Java, Rust, Clojure, Elixir or TypeScript sources found in p/);
+  });
+});
+
+describe('inputError for TypeScript', () => {
+  it('accepts a repository with .ts or .tsx source files', () => {
+    expect(inputError({ root: 'p', inputs: [{ path: 'package.json', file: null }, { path: 'src/a.ts', file: null }] })).toBeNull();
+    expect(inputError({ root: 'p', inputs: [{ path: 'web/package.json', file: null }, { path: 'web/App.tsx', file: null }] })).toBeNull();
+  });
+
+  it('counts package.json and tsconfig files without a source file as without sources', () => {
+    const files = ['package.json', 'web/package.json', 'tsconfig.json', 'tsconfig.build.json', 'web/tsconfig.app.json'];
+    expect(inputError({ root: 'p', inputs: files.map((path) => ({ path, file: null })) })).toMatch(/no Java, Rust, Clojure, Elixir or TypeScript sources found in p/);
+  });
+
+  it('does not count the files of a summary for a package.json as source files', () => {
+    const graph = { nodes: [], edges: [] };
+    const report = { calls: { to_function: 0, to_type: 0, external: 0, unresolved: 0 } };
+    expect(summarize('p', ['package.json', 'tsconfig.json', 'a.ts', 'b.tsx'], graph, report).sources).toBe(2);
   });
 });
 
 describe('inputError with build files only', () => {
   it('counts a directory with pom.xml and Cargo.toml files but no source file as without sources', () => {
-    expect(inputError({ root: 'p', inputs: [{ path: 'pom.xml', file: null }, { path: 'Cargo.toml', file: null }] })).toMatch(/no Java, Rust, Clojure or Elixir sources found in p/);
+    expect(inputError({ root: 'p', inputs: [{ path: 'pom.xml', file: null }, { path: 'Cargo.toml', file: null }] })).toMatch(/no Java, Rust, Clojure, Elixir or TypeScript sources found in p/);
   });
 });

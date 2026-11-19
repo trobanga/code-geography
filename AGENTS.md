@@ -12,7 +12,7 @@ model. Record each new decision of that weight as a new ADR.
 | Term | Meaning |
 |---|---|
 | graph | Nodes in a tree (`parent`) plus edges between any two nodes. |
-| fact level | A node kind that comes from the language or build system: `module` (unit of build: Maven module, Cargo package, `deps.edn` directory, Mix project), `package` (namespace: Java package, Rust `mod`, Clojure namespace, Elixir module; nests in all four, ADR 0018), `type`, `function`, `value` (a Clojure `def`, ADR 0027). |
+| fact level | A node kind that comes from the language or build system: `module` (unit of build: Maven module, Cargo package, `deps.edn` directory, Mix project, directory of a `package.json`), `package` (namespace: Java package, Rust `mod`, Clojure namespace, Elixir module, TypeScript file or directory, ADR 0034; nests in all five, ADR 0018), `type`, `function`, `value` (a Clojure `def`, ADR 0027). |
 | group | A container that does not come from the language (directory or AI). Not built yet. |
 | edge | A dependency that the indexer can prove from the source: `extends`, `implements`, `imports`, `type_ref`, `calls` (ADR 0014), `value_ref` (ADR 0027). One edge per `(from, to, kind)`, however many references make it. |
 | site | A line of a file where a reference stands that makes an edge (ADR 0032). An edge has `sites`: entries `{file, lines}`; `file` is left out when it is the file of the `from` node. Data like `span`: in no id and not in the identity of an edge. In an overlay a removed edge has the sites of the base, every other edge those of the head. Not the "call site" of a report, which is each place of a call, resolved or not. |
@@ -26,8 +26,8 @@ model. Record each new decision of that weight as a new ADR.
 | selection | The boxes that the developer selected: a click selects one, Shift+click adds or removes one. Lines between two selected boxes are full, lines to the outside weak (dim with `between selected`); `open all` / `close all` works on all of them (ADR 0029). |
 | commit context | For an overlay of a forge repository, on demand: the full message of each commit of the overlay, its pull requests and the issue references (`#12`, `owner/repo#12`) read from the message and the pull request bodies, as links. A reference is a guess (ADR 0030). |
 | source view | The panel below the diagram for one or two selected boxes (ADR 0031). One box: its lines (`file`, `span`), or for a module or package the list of its declarations (the topmost nodes with a span below it). Two boxes: the declarations whose edges make their line, each with its targets, from `Explorer.edgesBetween`; an open declaration marks the lines of the sites of these edges and shows the sites outside its own lines below them (ADR 0032). Forge repositories only; a commit marks its added and removed lines. |
-| front end | The part that turns the sources of one language into a graph (Java, Rust, Clojure, Elixir). `cg-index` runs all of them. |
-| test code | Code in a source set other than `src/main`; for Clojure, code in a directory that only an alias of `deps.edn` names (ADR 0023); for Elixir, code below the directory `test` of a Mix project (ADR 0035). Hidden by default. |
+| front end | The part that turns the sources of one language into a graph (Java, Rust, Clojure, Elixir, TypeScript). `cg-index` runs all of them. |
+| test code | Code in a source set other than `src/main`; for Clojure, code in a directory that only an alias of `deps.edn` names (ADR 0023); for Elixir, code below the directory `test` of a Mix project (ADR 0035); for TypeScript, a file that Jest and Vitest take as a test by its name (`*.test.ts`, `*.spec.ts`, below `__tests__` or `__mocks__`, ADR 0034). Hidden by default. |
 
 ## Layout
 
@@ -46,6 +46,11 @@ crates/index-elixir  Elixir front end on tree-sitter: index_sources(root_name, f
                    (Mix projects as modules, defmodule/defprotocol/defimpl as packages, def as
                    function `name/arity`, imports and implements edges, no call edges yet, ADR 0035);
                    scope.rs: the aliases of a lexical scope; Layout::test_code(path) as for Clojure
+crates/index-typescript  TypeScript front end on tree-sitter: index_sources(root_name, files) -> Graph + Report
+                   (package.json modules, files and directories as packages, imports, extends and
+                   implements edges, ADR 0034; no call edges yet); resolve.rs: what the specifier of
+                   an import reaches (relative paths, tsconfig paths, packages of the repository);
+                   is_test_file(path) for the changed files of an overlay
 crates/walk        cg-walk: the one directory walk, read_sources(root, is_input) -> Vec<SourceFile>
                    (the only place with std::fs besides the CLI; used by index-java and index)
 crates/index       cg-index: is_input, index_sources, index(root) over all front ends; joins
@@ -79,7 +84,7 @@ web/src/lib/cover.ts  the cover of the diagram (the Survey picture) for a level 
                    screen before the cut of the step, off when its layout is there
 web/src/lib/tokenStore.ts  tokens by origin (session/local storage) and authorized(): the only
                    place that adds a token, refuses any other origin (ADR 0022)
-docs/adr/          architecture decision records (0016: how Rust maps onto the graph, 0023: Clojure, 0035: Elixir)
+docs/adr/          architecture decision records (0016: how Rust maps onto the graph, 0023: Clojure, 0034: TypeScript, 0035: Elixir)
 ```
 
 ## Commands
@@ -109,6 +114,8 @@ and `web/package.json`. The skill `.agents/skills/cut-release` does the steps.
   functions. No tests of private functions.
 - The indexer makes edges only from what it can resolve. No guessed edges (ADR 0001).
 - Node ids come from qualified names only, never from positions or file paths (ADR 0005).
+  The one case with a path is TypeScript: a file has no name but its path in its module,
+  so that path is its qualified name and stands in the ids (ADR 0034).
 - `crates/core` has no I/O and no dependency that needs it.
 - In the viewer, logic goes into pure functions in `web/src/lib` with Vitest tests. The cut
   is done in WASM and is not reimplemented in TypeScript.
@@ -164,7 +171,7 @@ and `web/package.json`. The skill `.agents/skills/cut-release` does the steps.
   Java class goes to the type, a type hint gives no edge (ADR 0025).
   Dispatch of protocols and multimethods is not followed (`implements` edges show the
   methods, ADR 0027). No node for what a macro of the repository declares.
-  Java and Rust make no value nodes. No `.cljs`, no Leiningen.
+  Java, Rust and TypeScript make no value nodes. No `.cljs`, no Leiningen.
   Duplicate namespace names: the first file wins.
   The grammar crate is pinned to 0.2.5 (0.2.9 does not build for wasm32).
 - Elixir (ADR 0035): no call edges yet (CG-10), so a module that writes the names of
@@ -182,6 +189,26 @@ and `web/package.json`. The skill `.agents/skills/cut-release` does the steps.
   function is an edge of the module. A `defimpl` of a protocol outside the repository
   has no `implements` edge. Duplicate module names: the first form wins, main code
   before test code. The grammar adds 1.6 MB to the `.wasm` file.
+- TypeScript (ADR 0034): no call edges yet (CG-8) and no `type_ref` edges: a file shows
+  what it imports, a class what it extends and implements. `.ts` and `.tsx` only: no
+  `.js`, `.jsx`, `.mts`, `.cts`, `.vue`, `.svelte`. A file with no `package.json` above it
+  is not read (the report counts these; a Deno project stays empty). No node for a
+  `const` that is not a function (an import of it goes to the package of its file), for
+  a function that is the argument of a call (`memo(function A() {})`), for a declaration
+  inside a function, for `declare module "x"` and `declare global`. `require` is not
+  read. An alias resolves only through `paths` and `baseUrl` of a `tsconfig` in the
+  repository or through the `name` of a `package.json`; an alias of a bundler
+  (`resolve.alias`) or of a generated `tsconfig` (`.svelte-kit`, `.nuxt`) counts as
+  unresolved. `include`, `exclude` and `files` of a `tsconfig` are not read. A package
+  of the repository whose `package.json` names only built files (`dist/index.js`) gets
+  the edge to its module, not to the declaration. Test code is found by the name of the
+  file only (`*.test.ts`, `*.spec.ts`, `__tests__`, `__mocks__`), not by a directory
+  `test`. The `index.ts` of a module directory is the module: its imports of files of
+  the module give no edge. Of a merged declaration (two `interface A`) only the first
+  part gives `extends` edges. A local directory is read with its built `.d.ts` files
+  (`dist`). The grammar is of 2024 (`export type * from` is read as
+  `export *`; a decorator before an overload signature is a syntax error) and adds
+  3.2 MB to the `.wasm` file (two languages, `.ts` and `.tsx`).
 - Commit context (ADR 0030): forge repositories only, not a local `diff.json`. Forgejo
   `commits/{sha}/pull` finds only the pull request whose merge commit is the sha; a commit
   inside a merged branch shows none. GitHub lists the newest 50 to 100 commits of a
