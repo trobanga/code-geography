@@ -2,7 +2,8 @@
 import type { Branch } from './forge';
 import type { CommitRow } from './forgeDiff';
 
-const words = (query: string) => query.toLowerCase().split(/\s+/).filter(Boolean);
+/** The words of a query, in lower case. */
+export const words = (query: string) => query.toLowerCase().split(/\s+/).filter(Boolean);
 
 /**
  * The rows for which each word of the query is in the title, the author or the day, or is the

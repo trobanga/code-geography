@@ -24,6 +24,7 @@ model. Record each new decision of that weight as a new ADR.
 | implied line | A line A→C of a view for which the drawn lines hold a path from A to C through another box. The viewer can hide these (`hide implied`, ADR 0026); the graph keeps the edge. |
 | changes together | A viewer option on top of `changes only`: the layout gets the changed lines only and puts the active boxes of each container together, in `layout:` boxes that only the ELK input knows (ADR 0028). Off: the layout stays, the other boxes are dimmed. |
 | selection | The boxes that the developer selected: a click selects one, Shift+click adds or removes one. Lines between two selected boxes are full, lines to the outside weak (dim with `between selected`); `open all` / `close all` works on all of them (ADR 0029). |
+| box search | A field in the toolbar that finds boxes by the words of their name, also in closed containers. Choosing a match opens and unfolds the containers on its path, selects the box and pans to it; a match in test code turns test code on (ADR 0038). |
 | commit context | For an overlay of a forge repository, on demand: the full message of each commit of the overlay, its pull requests and the issue references (`#12`, `owner/repo#12`) read from the message and the pull request bodies, as links. A reference is a guess (ADR 0030). |
 | source view | The panel below the diagram for one or two selected boxes (ADR 0031). One box: its lines (`file`, `span`), or for a module or package the list of its declarations (the topmost nodes with a span below it). Two boxes: the declarations whose edges make their line, each with its targets, from `Explorer.edgesBetween`; an open declaration marks the lines of the sites of these edges and shows the sites outside its own lines below them (ADR 0032). Forge repositories only; a commit marks its added and removed lines. |
 | front end | The part that turns the sources of one language into a graph (Java, Rust, Clojure, Elixir, TypeScript). `cg-index` runs all of them. |
@@ -79,6 +80,8 @@ web/src/lib/forges.ts  kind of forge (github, forgejo, later gitlab): kindOf(hos
 web/src/lib/commitContext.ts  the commit context (ADR 0030): issue references, the list of a range,
                    pull requests by sha, all links from the CommitSource; CommitContext.svelte
                    shows it under the commit strip
+web/src/lib/boxSearch.ts  box search (ADR 0038): boxIndex, findBoxes; BoxSearch.svelte is the field;
+                   revealDepth in expansion.ts gives the depth that shows a box
 web/src/lib/source.ts  the source view (ADR 0031): sourceView (what a selection shows), lineGroups,
                    declarations, sourceReader (texts by blob sha from the cache, else the forge),
                    overlayLines (marks of a commit, from lineDiff.ts), readInto (the state of one read);

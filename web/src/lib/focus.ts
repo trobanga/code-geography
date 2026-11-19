@@ -1,5 +1,4 @@
-import { pathToOpen } from './commit';
-import { foldedChildren, REST, type Tree } from './expansion';
+import { foldedChildren, pathToOpen, REST, type Tree } from './expansion';
 import { NODE_KINDS, type NodeKind, type View } from './types';
 
 /** Focus of the cut (ADR 0011): what the WASM `focusView` folds around. */

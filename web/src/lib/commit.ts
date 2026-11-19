@@ -1,4 +1,4 @@
-import { parentOf, type Tree } from './expansion';
+import { parentOf, pathToOpen, type Tree } from './expansion';
 import type { ChangeCount, Graph, NodeChange, ViewEdge } from './types';
 
 /** The node or one of its ancestors is test code; the WASM view hides such nodes. */
@@ -21,13 +21,6 @@ function markedIds(tree: Tree, tests: boolean, root: string | null = null): stri
   };
   for (const r of roots) if (tests || !inTestCode(tree, r)) walk(r);
   return out;
-}
-
-/** Containers on the path to `id`, top down, without `id`: what must be expanded to show it. */
-export function pathToOpen(tree: Tree, id: string): string[] {
-  const out: string[] = [];
-  for (let p = tree.byId.get(id)?.parent ?? null; p !== null; p = tree.byId.get(p)?.parent ?? null) out.push(p);
-  return out.reverse();
 }
 
 /** Expanded set that shows every marked node (outside test code unless `tests`) and opens nothing else. */

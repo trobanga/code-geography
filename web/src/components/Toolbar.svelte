@@ -1,6 +1,8 @@
 <script lang="ts">
   import type { Source } from '../lib/hash';
   import OpenButtons from './OpenButtons.svelte';
+  import BoxSearch from './BoxSearch.svelte';
+  import type { BoxEntry } from '../lib/boxSearch';
   import type { Collect } from '../lib/walk';
   import type { TokenField } from '../lib/tokenStore';
   import { KIND_LETTER, kindColor } from '../lib/kinds';
@@ -25,6 +27,7 @@
     ondir,
     onrepo,
     auth,
+    search,
   }: {
     /** null: a file opened from disk. */
     src: Source | null;
@@ -54,6 +57,8 @@
     ondir: (collect: Collect) => void;
     onrepo: (input: string) => void;
     auth: TokenField;
+    /** The box search; null while there is no graph. */
+    search: { index: BoxEntry[]; onpick: (id: string) => void } | null;
   } = $props();
 
   const btn = 'px-2 py-0.5 border border-[var(--line)] hover:border-[var(--muted)]';
@@ -104,6 +109,9 @@
     <input type="checkbox" checked={tests} onchange={(e) => ontests(e.currentTarget.checked)} />
     test code
   </label>
+  {#if search}
+    <BoxSearch index={search.index} {tests} onpick={search.onpick} />
+  {/if}
   <button class={btn} onclick={onfit}>fit</button>
   <button class="{btn} disabled:opacity-40" disabled={!moved} onclick={onreset}>reset positions</button>
   <OpenButtons {btn} {onfile} {ondir} {onrepo} {auth} />

@@ -103,6 +103,30 @@ export function collapse(tree: Tree, expanded: ReadonlySet<string>, id: string):
   return out;
 }
 
+/** Containers on the path to `id`, top down, without `id`: what must be expanded to show it. */
+export function pathToOpen(tree: Tree, id: string): string[] {
+  const out: string[] = [];
+  for (let p = tree.byId.get(id)?.parent ?? null; p !== null; p = tree.byId.get(p)?.parent ?? null) out.push(p);
+  return out.reverse();
+}
+
+/**
+ * The depth that shows `id` (ADR 0038): `expanded` plus every container on its path; `unfolded`
+ * plus each path container that would fold the next node on the path. With `focused` that is
+ * every path container (the focus cut folds what is not of interest, ADR 0011); without, a
+ * container that the kind fold folds (ADR 0019) when the next node is not a package. An unknown
+ * id leaves the depth as it is.
+ */
+export function revealDepth(tree: Tree, depth: Depth, id: string, focused: boolean, shown?: ReadonlySet<string>): Depth {
+  const path = pathToOpen(tree, id);
+  const unfolded = new Set(depth.unfolded);
+  path.forEach((c, i) => {
+    const next = tree.byId.get(i + 1 < path.length ? path[i + 1] : id);
+    if (focused || (next?.kind !== 'package' && mixed(tree, c, shown))) unfolded.add(c);
+  });
+  return { expanded: new Set([...depth.expanded, ...path]), unfolded };
+}
+
 /**
  * Deepest level whose expanded set is contained in `expanded`, and the ids beyond it. With
  * `shown`, the nodes that the view can show (from the WASM cut), a level container that the view

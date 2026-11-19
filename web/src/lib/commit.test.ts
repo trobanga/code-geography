@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { activeBoxes, badgeLabel, changeLabel, commitTotals, markedByModule, openChanged, openChangedStep, pathToOpen } from './commit';
-import { buildTree } from './expansion';
+import { activeBoxes, badgeLabel, changeLabel, commitTotals, markedByModule, openChanged, openChangedStep } from './commit';
+import { buildTree, pathToOpen } from './expansion';
 import type { Graph } from './types';
 
 // m1 { p1 { A (modified) { f (added) }, ATest (test, added) { g (test, added) } } }, m2 { p2 { B (removed) } }

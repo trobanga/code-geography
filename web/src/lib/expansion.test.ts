@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BOX_LIMIT, buildTree, mustConfirm, collapse, deeper, drawable, shallower, stepBack, stepForward, levelExpanded, levelUnfolded, splitByLevel } from './expansion';
+import { BOX_LIMIT, buildTree, mustConfirm, collapse, deeper, drawable, shallower, stepBack, stepForward, levelExpanded, levelUnfolded, revealDepth, splitByLevel } from './expansion';
 import type { GraphNode } from './types';
 
 const nodes: GraphNode[] = [
@@ -296,5 +296,56 @@ describe('mustConfirm', () => {
     expect(mustConfirm(BOX_LIMIT, false)).toBe(false);
     expect(mustConfirm(BOX_LIMIT + 1, false)).toBe(true);
     expect(mustConfirm(BOX_LIMIT + 1, true)).toBe(false);
+  });
+});
+
+describe('revealDepth', () => {
+  // m { p { q { T { f } }, U { g } } }: p holds a package and a type (mixed), q only T, m only p.
+  const tree = buildTree([
+    { id: 'm', parent: null, kind: 'module', name: 'm' },
+    { id: 'p', parent: 'm', kind: 'package', name: 'p' },
+    { id: 'q', parent: 'p', kind: 'package', name: 'q' },
+    { id: 'T', parent: 'q', kind: 'type', name: 'T' },
+    { id: 'f', parent: 'T', kind: 'function', name: 'f' },
+    { id: 'U', parent: 'p', kind: 'type', name: 'U' },
+    { id: 'g', parent: 'U', kind: 'function', name: 'g' },
+  ]);
+
+  it('adds the path containers to expanded and keeps the rest', () => {
+    const d = revealDepth(tree, { expanded: new Set(['x']), unfolded: new Set() }, 'f', false);
+    expect([...d.expanded].sort()).toEqual(['T', 'm', 'p', 'q', 'x']);
+  });
+
+  it('unfolds a mixed container only when the next path node is not a package', () => {
+    const none = { expanded: new Set<string>(), unfolded: new Set<string>() };
+    expect([...revealDepth(tree, none, 'g', false).unfolded]).toEqual(['p']);
+    expect([...revealDepth(tree, none, 'U', false).unfolded]).toEqual(['p']);
+    // p is mixed but the next node on the path to T is the package q; m and q are not mixed
+    expect([...revealDepth(tree, none, 'f', false).unfolded]).toEqual([]);
+  });
+
+  it('judges a mixed container by the children that the view can show', () => {
+    const none = { expanded: new Set<string>(), unfolded: new Set<string>() };
+    // q holds test code only: the view cannot show it, so p has only the type U.
+    expect([...revealDepth(tree, none, 'g', false, new Set(['m', 'p', 'U', 'g'])).unfolded]).toEqual([]);
+  });
+
+  it('keeps the unfolded containers and does not change its input', () => {
+    const before = { expanded: new Set(['x']), unfolded: new Set(['z']) };
+    const d = revealDepth(tree, before, 'g', false);
+    expect([...d.unfolded].sort()).toEqual(['p', 'z']);
+    expect([...before.expanded]).toEqual(['x']);
+    expect([...before.unfolded]).toEqual(['z']);
+  });
+
+  it('unfolds every path container under a focus', () => {
+    const none = { expanded: new Set<string>(), unfolded: new Set<string>() };
+    expect([...revealDepth(tree, none, 'f', true).unfolded].sort()).toEqual(['T', 'm', 'p', 'q']);
+  });
+
+  it('leaves the depth as it is for an unknown id', () => {
+    const d = revealDepth(tree, { expanded: new Set(['m']), unfolded: new Set(['p']) }, 'nope', true);
+    expect([...d.expanded]).toEqual(['m']);
+    expect([...d.unfolded]).toEqual(['p']);
   });
 });

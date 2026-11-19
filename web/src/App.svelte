@@ -16,7 +16,8 @@
   import type { Offset } from './lib/drag';
   import { DEFAULT_EDGE_OPTIONS, edgePipeline, painted, type Drawn, type EdgeOptions } from './lib/edgeOptions';
   import { toElkGraph } from './lib/elkGraph';
-  import { activeBoxes, commitTotals, openChangedStep, pathToOpen } from './lib/commit';
+  import { boxIndex } from './lib/boxSearch';
+  import { activeBoxes, commitTotals, inTestCode, openChangedStep } from './lib/commit';
   import { changedFiles } from './lib/files';
   import { openOrClose, pick } from './lib/selection';
   import { focusActive, focusOn, NO_FOCUS, type Focus } from './lib/focus';
@@ -27,6 +28,7 @@
     levelExpanded,
     levelUnfolded,
     mustConfirm,
+    revealDepth,
     splitByLevel,
     stepBack,
     stepForward,
@@ -159,6 +161,7 @@
     const all = JSON.parse(explorer.view([...tree.children.keys()], false, MERGE_IMPORTS)) as View;
     return new Set(all.nodes);
   });
+  const boxes = $derived(tree ? boxIndex(tree) : null);
   const hashState = $derived(tree ? splitByLevel(tree, expanded, shown, unfolded) : null);
   const extra = $derived(hashState ? hashState.open.length + hashState.unfold.length : 0);
   const activeLevel = $derived(hashState && extra === 0 ? hashState.level : null);
@@ -377,15 +380,24 @@
     else error = 'drop a directory to index it';
   }
 
-  /** Expands the containers on the path to `id` and selects it. */
+  /**
+   * Shows `id` (ADR 0038): turns test code on when it is in it, opens and unfolds the containers
+   * on its path, selects it and pans to it at the current zoom.
+   */
   function reveal(id: string) {
     if (!tree) return;
-    const path = pathToOpen(tree, id);
-    if (path.some((p) => !expanded.has(p))) {
-      expanded = new Set([...expanded, ...path]);
-      fitNext = true;
+    const toTests = !tests && inTestCode(tree, id);
+    if (toTests) tests = true;
+    // `shown` is derived from `tests`: read it after the change.
+    const next = revealDepth(tree, { expanded, unfolded }, id, focusActive(focus), shown);
+    const changed = toTests || next.expanded.size > expanded.size || next.unfolded.size > unfolded.size;
+    if (changed) {
+      expanded = new Set(next.expanded);
+      unfolded = new Set(next.unfolded);
     }
     selected = [id];
+    if (changed) inViewNext = id;
+    else diagram?.reveal(id);
   }
 
   /**
@@ -606,6 +618,7 @@
 
 <div class="flex h-full flex-col">
   <Toolbar
+    search={boxes ? { index: boxes, onpick: reveal } : null}
     level={activeLevel}
     ask={askLevel}
     partial={partialLevel}
