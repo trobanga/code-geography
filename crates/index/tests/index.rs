@@ -267,6 +267,35 @@ fn the_clojure_calls_are_added_to_the_calls_of_the_report_and_stay_visible() {
     assert_eq!(json["clojure"]["function_values"], 0);
 }
 
+#[test]
+fn the_typescript_calls_are_added_to_the_calls_of_the_report_and_stay_visible() {
+    let files = [
+        source("pom.xml", ""),
+        source(
+            "src/main/java/a/Foo.java",
+            "package a;\nclass Foo {\n    void one() {}\n    void two() { one(); }\n}\n",
+        ),
+        source("package.json", r#"{"name":"app"}"#),
+        source(
+            "a.ts",
+            "export function a() {\n  b();\n  console.log(1);\n  c();\n  items.map(b);\n}\nfunction b() {}\n",
+        ),
+    ];
+
+    let (_, report) = index_sources("repo", &files);
+
+    assert_eq!(report.typescript.calls.to_function, 2);
+    assert_eq!(report.typescript.calls.external, 3);
+    assert_eq!(report.typescript.function_values, 1);
+    assert_eq!(report.calls.to_function, 3);
+    assert_eq!(report.calls.external, 3);
+    let json = serde_json::to_value(&report).unwrap();
+    assert_eq!(json["typescript"]["calls"]["to_function"], 2);
+    assert_eq!(json["typescript"]["function_values"], 1);
+    assert_eq!(json["typescript"]["jsx_elements"], 0);
+    assert_eq!(json["calls"]["to_function"], 3);
+}
+
 const FOO: &str = "package a.b;\npublic class Foo {}\n";
 
 #[test]

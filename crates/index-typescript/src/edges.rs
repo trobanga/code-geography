@@ -1,4 +1,6 @@
-//! Pass 2: the `imports`, `extends` and `implements` edges.
+//! Pass 2: the `imports`, `extends` and `implements` edges. The `calls` edges (pass 3,
+//! `calls.rs`) are added to the same set at the end, so that the drop of related nodes
+//! applies to them too.
 
 use crate::bindings::{Bindings, Export, Import, Link, What};
 use crate::config::Config;
@@ -6,8 +8,10 @@ use crate::declare::{Decl, container_id};
 use crate::heritage;
 use crate::layout::Source;
 use crate::resolve::{Resolver, Target};
+use crate::scope::{Kind, Scope, namespace_scopes};
 use crate::{HeritageReport, ImportReport, NameReport};
-use cg_core::{EdgeKind, EdgeSet, Node, NodeKind};
+use cg_core::{CallReport, EdgeKind, EdgeSet, Node, NodeKind};
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 
 /// What pass 2 found.
@@ -16,25 +20,87 @@ pub struct Collected {
     pub imports: ImportReport,
     pub names: NameReport,
     pub heritage: HeritageReport,
+    pub calls: CallReport,
+    pub function_values: usize,
+    pub jsx_elements: usize,
 }
 
 /// The files with what they declare, import and export.
-struct Files<'a, 'd, 't> {
-    sources: &'a [Source<'a>],
-    decls: &'d [Decl<'t>],
-    resolver: Resolver<'a>,
-    bindings: Vec<Bindings>,
+pub(crate) struct Files<'a> {
+    pub(crate) sources: &'a [Source<'a>],
+    pub(crate) decls: &'a [Decl<'a>],
+    pub(crate) resolver: Resolver<'a>,
+    pub(crate) bindings: Vec<Bindings>,
     /// The types and functions at the top level of each file, by name: indices of `decls`.
-    tops: Vec<HashMap<&'d str, Vec<usize>>>,
+    tops: Vec<HashMap<&'a str, Vec<usize>>>,
     /// The types of each file, in any namespace: indices of `decls`.
     types: Vec<Vec<usize>>,
+    /// The declarations by the id of their parent: indices of `decls`.
+    children: HashMap<&'a str, Vec<usize>>,
+    /// The declaration of a syntax node, by file and byte range.
+    pub(crate) node_at: HashMap<(usize, usize, usize), (usize, &'a str)>,
+    /// The names of each file and namespace, by file and namespace path joined by `.`.
+    pub(crate) scopes: HashMap<(usize, String), Scope<'a>>,
 }
 
-impl<'a, 'd, 't> Files<'a, 'd, 't> {
-    fn new(sources: &'a [Source<'a>], decls: &'d [Decl<'t>], config: &'a Config) -> Self {
+/// The files and names that a lookup has been through.
+struct Reaching {
+    visited: HashSet<(usize, String)>,
+    /// Whether two stars that reach different declarations reach none.
+    strict: bool,
+}
+
+impl Reaching {
+    fn new(strict: bool) -> Self {
+        Reaching {
+            visited: HashSet::new(),
+            strict,
+        }
+    }
+}
+
+/// The scope of each file and of each namespace in it, by file and namespace path.
+fn name_scopes<'a>(sources: &'a [Source<'a>]) -> HashMap<(usize, String), Scope<'a>> {
+    let mut scopes = HashMap::new();
+    for (file, source) in sources.iter().enumerate() {
+        let root = source.tree.root_node();
+        let file_scope = Scope::of_statements(Kind::File, Vec::new(), root, source.text);
+        scopes.insert((file, String::new()), file_scope);
+        let mut namespaces = Vec::new();
+        namespace_scopes(root, &[], source.text, &mut namespaces);
+        for scope in namespaces {
+            match scopes.entry((file, scope.path.join("."))) {
+                Entry::Occupied(mut first) => first.get_mut().absorb(scope),
+                Entry::Vacant(free) => {
+                    free.insert(scope);
+                }
+            }
+        }
+    }
+    scopes
+}
+
+impl<'a> Files<'a> {
+    fn new(sources: &'a [Source<'a>], decls: &'a [Decl<'a>], config: &'a Config) -> Self {
         let mut tops: Vec<HashMap<&str, Vec<usize>>> = vec![HashMap::new(); sources.len()];
         let mut types: Vec<Vec<usize>> = vec![Vec::new(); sources.len()];
+        let mut children: HashMap<&str, Vec<usize>> = HashMap::new();
+        let mut node_at = HashMap::new();
         for (index, decl) in decls.iter().enumerate() {
+            children
+                .entry(decl.parent.as_str())
+                .or_default()
+                .push(index);
+            let range = decl.node.byte_range();
+            node_at.insert(
+                (decl.source, range.start, range.end),
+                (index, decl.node.kind()),
+            );
+            for node in &decl.also {
+                let range = node.byte_range();
+                let key = (decl.source, range.start, range.end);
+                node_at.insert(key, (index, node.kind()));
+            }
             if decl.kind == NodeKind::Type {
                 types[decl.source].push(index);
             }
@@ -55,6 +121,38 @@ impl<'a, 'd, 't> Files<'a, 'd, 't> {
             bindings: sources.iter().map(Bindings::of).collect(),
             tops,
             types,
+            children,
+            node_at,
+            scopes: name_scopes(sources),
+        }
+    }
+
+    /// The declarations whose parent is `parent` and whose name is `name`.
+    pub(crate) fn named<'s>(
+        &'s self,
+        parent: &str,
+        name: &'s str,
+    ) -> impl Iterator<Item = usize> + 's {
+        self.children
+            .get(parent)
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(move |&i| self.decls[i].name == name)
+    }
+
+    /// The id of the node that holds the declarations of `file` in the namespace `path`.
+    pub(crate) fn container(&self, file: usize, path: &[String]) -> String {
+        let source = &self.sources[file];
+        if path.is_empty() {
+            container_id(source.module, &source.package)
+        } else {
+            format!(
+                "pkg:{}:/{}#{}",
+                source.module,
+                source.package,
+                path.join(".")
+            )
         }
     }
 
@@ -75,12 +173,18 @@ impl<'a, 'd, 't> Files<'a, 'd, 't> {
 
     /// The declarations that `name` reaches in `file`: what the file exports under that
     /// name, through the re-exports of the files between.
-    fn lookup(&self, file: usize, name: &str) -> Vec<usize> {
-        self.reach(file, name, &mut HashSet::new())
+    pub(crate) fn lookup(&self, file: usize, name: &str) -> Vec<usize> {
+        self.reach(file, name, &mut Reaching::new(false))
     }
 
-    fn reach(&self, file: usize, name: &str, seen: &mut HashSet<(usize, String)>) -> Vec<usize> {
-        if !seen.insert((file, name.to_string())) {
+    /// As `lookup`, but a name that two `export *` of a file reach with different
+    /// declarations reaches nothing: a call must not pick one of them.
+    pub(crate) fn lookup_unique(&self, file: usize, name: &str) -> Vec<usize> {
+        self.reach(file, name, &mut Reaching::new(true))
+    }
+
+    fn reach(&self, file: usize, name: &str, seen: &mut Reaching) -> Vec<usize> {
+        if !seen.visited.insert((file, name.to_string())) {
             return Vec::new();
         }
         match self.bindings[file].exports.get(name) {
@@ -101,7 +205,7 @@ impl<'a, 'd, 't> Files<'a, 'd, 't> {
         file: usize,
         specifier: &str,
         name: &str,
-        seen: &mut HashSet<(usize, String)>,
+        seen: &mut Reaching,
     ) -> Vec<usize> {
         match self.resolver.resolve(file, specifier) {
             Target::Source(t) => self.reach(t, name, seen),
@@ -110,12 +214,7 @@ impl<'a, 'd, 't> Files<'a, 'd, 't> {
     }
 
     /// A name that `file` imports and exports again, as `local`.
-    fn reexported(
-        &self,
-        file: usize,
-        local: &str,
-        seen: &mut HashSet<(usize, String)>,
-    ) -> Vec<usize> {
+    fn reexported(&self, file: usize, local: &str, seen: &mut Reaching) -> Vec<usize> {
         let Some(import) = self.bindings[file].imports.get(local) else {
             return Vec::new();
         };
@@ -131,24 +230,33 @@ impl<'a, 'd, 't> Files<'a, 'd, 't> {
 
     /// The first `export * from` of `file` that reaches `name`; a default export is not
     /// passed on by a star.
-    fn through_stars(
-        &self,
-        file: usize,
-        name: &str,
-        seen: &mut HashSet<(usize, String)>,
-    ) -> Vec<usize> {
+    fn through_stars(&self, file: usize, name: &str, seen: &mut Reaching) -> Vec<usize> {
         if name == "default" {
             return Vec::new();
         }
+        let found = self.star_results(file, name, seen);
+        match found.first() {
+            Some(first) if found.iter().all(|f| f == first) => first.clone(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// What each `export * from` of `file` reaches for `name`, the non-empty answers only;
+    /// without `strict`, up to the first.
+    fn star_results(&self, file: usize, name: &str, seen: &mut Reaching) -> Vec<Vec<usize>> {
+        let mut found: Vec<Vec<usize>> = Vec::new();
         for specifier in &self.bindings[file].stars {
             if let Target::Source(t) = self.resolver.resolve(file, specifier) {
                 let reached = self.reach(t, name, seen);
                 if !reached.is_empty() {
-                    return reached;
+                    found.push(reached);
+                }
+                if !found.is_empty() && !seen.strict {
+                    break;
                 }
             }
         }
-        Vec::new()
+        found
     }
 }
 
@@ -215,7 +323,11 @@ impl Collected {
                 self.heritage.unresolved += 1;
                 continue;
             };
-            match files.heritage_target(decl, &name.path) {
+            let at = Place {
+                source: decl.source,
+                namespace: &decl.namespace,
+            };
+            match files.type_target(&at, &name.path) {
                 Reach::Types(reached) => {
                     self.heritage.resolved += 1;
                     for to in reached {
@@ -235,8 +347,8 @@ impl Collected {
     }
 }
 
-/// What a name in a clause reaches.
-enum Reach {
+/// What a name of a type reaches.
+pub(crate) enum Reach {
     /// Types of the repository: indices of `decls`.
     Types(Vec<usize>),
     /// A global, or a name of an external import.
@@ -245,21 +357,27 @@ enum Reach {
     Unresolved,
 }
 
-impl Files<'_, '_, '_> {
-    /// What the name `path`, written in the clause of `decl`, reaches.
-    fn heritage_target(&self, decl: &Decl, path: &[String]) -> Reach {
+/// Where a name is written: a file and the namespaces around the name.
+pub(crate) struct Place<'p> {
+    pub(crate) source: usize,
+    pub(crate) namespace: &'p [String],
+}
+
+impl Files<'_> {
+    /// What the name `path`, written at `at`, reaches.
+    pub(crate) fn type_target(&self, at: &Place, path: &[String]) -> Reach {
         match path {
-            [name] => self.simple_name(decl, name),
-            [qualifier @ .., name] => self.qualified_name(decl, qualifier, name),
+            [name] => self.simple_name(at, name),
+            [qualifier @ .., name] => self.qualified_name(at, qualifier, name),
             [] => Reach::Unresolved,
         }
     }
 
     /// `qualifier.name`: `x.B`, `a.b.C`.
-    fn qualified_name(&self, decl: &Decl, qualifier: &[String], name: &str) -> Reach {
-        let bindings = &self.bindings[decl.source];
+    fn qualified_name(&self, at: &Place, qualifier: &[String], name: &str) -> Reach {
+        let bindings = &self.bindings[at.source];
         let import = bindings.imports.get(&qualifier[0]);
-        let target = import.map(|i| self.resolver.resolve(decl.source, &i.specifier));
+        let target = import.map(|i| self.resolver.resolve(at.source, &i.specifier));
         if let (
             Some(Import {
                 what: What::Namespace,
@@ -271,7 +389,7 @@ impl Files<'_, '_, '_> {
         {
             return reach;
         }
-        if let Some(found) = self.in_namespaces(decl, qualifier, name) {
+        if let Some(found) = self.in_namespaces(at, qualifier, name) {
             return Reach::Types(found);
         }
         outside_namespaces(bindings, &qualifier[0], target)
@@ -279,11 +397,11 @@ impl Files<'_, '_, '_> {
 
     /// The types `qualifier.name` of this file, in the namespaces around the declaration,
     /// innermost first.
-    fn in_namespaces(&self, decl: &Decl, qualifier: &[String], name: &str) -> Option<Vec<usize>> {
-        (0..=decl.namespace.len()).rev().find_map(|depth| {
-            let mut namespace = decl.namespace[..depth].to_vec();
+    fn in_namespaces(&self, at: &Place, qualifier: &[String], name: &str) -> Option<Vec<usize>> {
+        (0..=at.namespace.len()).rev().find_map(|depth| {
+            let mut namespace = at.namespace[..depth].to_vec();
             namespace.extend_from_slice(qualifier);
-            Some(self.types_in(decl.source, &namespace, name)).filter(|found| !found.is_empty())
+            Some(self.types_in(at.source, &namespace, name)).filter(|found| !found.is_empty())
         })
     }
 
@@ -301,15 +419,15 @@ impl Files<'_, '_, '_> {
     }
 
     /// `name`.
-    fn simple_name(&self, decl: &Decl, name: &String) -> Reach {
+    fn simple_name(&self, at: &Place, name: &String) -> Reach {
         // The namespaces around the declaration, innermost first, then the top level.
-        for depth in (0..=decl.namespace.len()).rev() {
-            let found = self.types_in(decl.source, &decl.namespace[..depth], name);
+        for depth in (0..=at.namespace.len()).rev() {
+            let found = self.types_in(at.source, &at.namespace[..depth], name);
             if !found.is_empty() {
                 return Reach::Types(found);
             }
         }
-        let bindings = &self.bindings[decl.source];
+        let bindings = &self.bindings[at.source];
         let Some(import) = bindings.imports.get(name) else {
             // Declared here, but no type: a function, a `const`. Else a global.
             return if bindings.declared.contains(name) {
@@ -318,12 +436,12 @@ impl Files<'_, '_, '_> {
                 Reach::External
             };
         };
-        self.imported_name(decl, import)
+        self.imported_name(at, import)
     }
 
     /// What the name that `import` binds reaches.
-    fn imported_name(&self, decl: &Decl, import: &Import) -> Reach {
-        match self.resolver.resolve(decl.source, &import.specifier) {
+    fn imported_name(&self, at: &Place, import: &Import) -> Reach {
+        match self.resolver.resolve(at.source, &import.specifier) {
             Target::Source(t) => {
                 let reached = match &import.what {
                     What::Name(n) => self.lookup(t, n),
@@ -381,13 +499,20 @@ pub fn drop_related(edges: &mut EdgeSet, nodes: &[Node]) {
     edges.retain(|from, to| !within(from, to) && !within(to, from));
 }
 
-pub fn collect<'t>(sources: &[Source], decls: &[Decl<'t>], config: &Config) -> Collected {
+pub fn collect<'a>(
+    sources: &'a [Source<'a>],
+    decls: &'a [Decl<'a>],
+    config: &'a Config,
+) -> Collected {
     let files = Files::new(sources, decls, config);
     let mut found = Collected {
         edges: EdgeSet::new(),
         imports: ImportReport::default(),
         names: NameReport::default(),
         heritage: HeritageReport::default(),
+        calls: CallReport::default(),
+        function_values: 0,
+        jsx_elements: 0,
     };
     for file in 0..sources.len() {
         found.links(&files, file);
@@ -397,5 +522,6 @@ pub fn collect<'t>(sources: &[Source], decls: &[Decl<'t>], config: &Config) -> C
             found.heritage(&files, index);
         }
     }
+    crate::calls::collect(&files, &mut found);
     found
 }

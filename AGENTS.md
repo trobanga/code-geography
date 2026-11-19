@@ -48,7 +48,10 @@ crates/index-elixir  Elixir front end on tree-sitter: index_sources(root_name, f
                    scope.rs: the aliases of a lexical scope; Layout::test_code(path) as for Clojure
 crates/index-typescript  TypeScript front end on tree-sitter: index_sources(root_name, files) -> Graph + Report
                    (package.json modules, files and directories as packages, imports, extends and
-                   implements edges, ADR 0034; no call edges yet); resolve.rs: what the specifier of
+                   implements edges, ADR 0034; call edges, ADR 0036: calls.rs walks the files,
+                   scope.rs the names of a file, a namespace, a function, a class, subject.rs and typing.rs what a name or a
+                   written type denotes, member.rs the members of a type, target.rs a call site);
+                   resolve.rs: what the specifier of
                    an import reaches (relative paths, tsconfig paths, packages of the repository);
                    is_test_file(path) for the changed files of an overlay
 crates/walk        cg-walk: the one directory walk, read_sources(root, is_input) -> Vec<SourceFile>
@@ -189,7 +192,18 @@ and `web/package.json`. The skill `.agents/skills/cut-release` does the steps.
   function is an edge of the module. A `defimpl` of a protocol outside the repository
   has no `implements` edge. Duplicate module names: the first form wins, main code
   before test code. The grammar adds 1.6 MB to the `.wasm` file.
-- TypeScript (ADR 0034): no call edges yet (CG-8) and no `type_ref` edges: a file shows
+- TypeScript call edges (ADR 0036) need a type that is written: a parameter, a variable
+  with a type or `new T()`, a field, `this`. On excalidraw 38 % of the call sites give an
+  edge, 30 % are external and 31 % unresolved (the viewer: 25 %, 37 %, 38 %): inferred
+  types of locals, results of calls, destructured props, callbacks that are parameters,
+  `any`. No types from return types, from an imported `const` (`export const api = new
+  Api()`) or from an `as` cast; a type parameter gives no edge, also with a bound. A name
+  that one block of a function binds hides the name of the file in the whole function.
+  `let` and `var` functions give no edge (they can be assigned again). `<A />` is a call
+  of `A`. A function value gives an edge only as an argument or a JSX attribute. Calls
+  at the top level of a file are edges of its package; those to the file's own functions
+  have none. A global function of a `.d.ts` of the repository counts as external.
+- TypeScript (ADR 0034): no `type_ref` edges: a file shows
   what it imports, a class what it extends and implements. `.ts` and `.tsx` only: no
   `.js`, `.jsx`, `.mts`, `.cts`, `.vue`, `.svelte`. A file with no `package.json` above it
   is not read (the report counts these; a Deno project stays empty). No node for a

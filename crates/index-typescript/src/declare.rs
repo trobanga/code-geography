@@ -25,6 +25,9 @@ pub struct Decl<'t> {
     pub span: Span,
     /// A function with a body replaces an overload signature of the same id.
     pub has_body: bool,
+    /// The syntax nodes of the declarations of the same id that this one absorbed: the
+    /// setter beside a getter, a `static m` beside `m`, an overload signature.
+    pub also: Vec<Ts<'t>>,
 }
 
 /// The id of the node of a package: the module node for the `index.ts` of its directory.
@@ -76,7 +79,7 @@ struct Member<'t> {
 }
 
 /// The name of a member, if it is written out: an identifier, a private name or a string.
-fn member_name(name: Ts, source: &str) -> Option<String> {
+pub(crate) fn member_name(name: Ts, source: &str) -> Option<String> {
     let written = text(name, source);
     match name.kind() {
         "property_identifier" | "private_property_identifier" => Some(written.to_string()),
@@ -111,7 +114,7 @@ fn is_variable_kind(kind: &str) -> bool {
 }
 
 /// A kind of node that has members: a class or an interface.
-fn has_members_kind(kind: &str) -> bool {
+pub(crate) fn has_members_kind(kind: &str) -> bool {
     matches!(
         kind,
         "class" | "class_declaration" | "abstract_class_declaration" | "interface_declaration"
@@ -163,9 +166,12 @@ fn dedup(declarations: Vec<Decl>) -> Vec<Decl> {
     for decl in declarations {
         match at.get(&decl.id) {
             Some(&position) => {
+                let mut decl = decl;
                 if decl.has_body && !kept[position].has_body {
-                    kept[position] = decl;
+                    std::mem::swap(&mut kept[position], &mut decl);
                 }
+                kept[position].also.push(decl.node);
+                kept[position].also.extend(decl.also);
             }
             None => {
                 at.insert(decl.id.clone(), kept.len());
@@ -303,19 +309,15 @@ impl<'t> Declarer<'_, 't> {
 
     /// A namespace: a package for each of its names, and its statements.
     fn namespace(&mut self, scope: &Scope, node: Ts<'t>) {
-        let (Some(name), Some(body)) = (
-            node.child_by_field_name("name"),
+        // `declare module "name" {}` declares things outside the file: no parts.
+        let (Some(parts), Some(body)) = (
+            crate::syntax::namespace_parts(node, self.source.text),
             node.child_by_field_name("body"),
         ) else {
             return;
         };
-        // `declare module "name" {}` declares things outside the file.
-        if name.kind() == "string" {
-            return;
-        }
         let mut scope = scope.clone();
-        for part in text(name, self.source.text).split('.') {
-            let part = part.trim();
+        for part in parts {
             scope.namespace.push(part.to_string());
             let id = format!("pkg:{}#{}", self.prefix, scope.namespace.join("."));
             self.namespaces.push(Namespace {
@@ -437,6 +439,7 @@ impl<'t> Declarer<'_, 't> {
                 end_line: outer.end_position().row as u32 + 1,
             },
             has_body,
+            also: Vec::new(),
         });
     }
 }

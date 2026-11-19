@@ -8,18 +8,24 @@ use std::collections::BTreeSet;
 use tree_sitter::Parser;
 
 mod bindings;
+mod calls;
 mod config;
 mod declare;
 mod edges;
 mod heritage;
 mod layout;
+mod member;
 mod path;
 mod resolve;
+mod scope;
+mod subject;
 mod syntax;
+mod target;
+mod typing;
 
 use layout::Source;
 
-/// What the indexer could not read or resolve. The call edges (CG-8) add their counts.
+/// What the indexer could not read or resolve, and how the call sites were resolved.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct Report {
     /// `.ts` and `.tsx` files with no `package.json` above them: not read.
@@ -37,6 +43,12 @@ pub struct Report {
     pub names: NameReport,
     /// The names in `extends` and `implements` clauses.
     pub heritage: HeritageReport,
+    /// How the call sites were resolved (ADR 36).
+    pub calls: cg_core::CallReport,
+    /// Of `calls.to_function`: functions named as a value (an argument, a JSX attribute).
+    pub function_values: usize,
+    /// JSX elements with a capitalized or member tag; also in the four counts.
+    pub jsx_elements: usize,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
@@ -128,6 +140,9 @@ pub fn index_sources(root_name: &str, files: &[SourceFile]) -> (Graph, Report) {
     report.imports = found.imports;
     report.names = found.names;
     report.heritage = found.heritage;
+    report.calls = found.calls;
+    report.function_values = found.function_values;
+    report.jsx_elements = found.jsx_elements;
     graph.edges = found.edges.into_edges(&graph.nodes);
     (graph, report)
 }

@@ -189,6 +189,15 @@ fn print_typescript(ts: &cg_index_typescript::Report) {
         "typescript heritage: {} resolved, {} external, {} unresolved",
         ts.heritage.resolved, ts.heritage.external, ts.heritage.unresolved
     );
+    eprintln!(
+        "typescript calls: {} to function ({} as a value), {} to type, {} external, {} unresolved; {} of the call sites are JSX elements",
+        ts.calls.to_function,
+        ts.function_values,
+        ts.calls.to_type,
+        ts.calls.external,
+        ts.calls.unresolved,
+        ts.jsx_elements
+    );
 }
 
 /// What the Elixir front end resolved and did not read.

@@ -66,7 +66,7 @@ fn listed(parent: Ts, field: &str, kind: EdgeKind, source: &str) -> Vec<Clause> 
 }
 
 /// The name that a node writes, without type arguments; `None` if it is no plain name.
-fn written(node: Ts, source: &str) -> Option<Written> {
+pub(crate) fn written(node: Ts, source: &str) -> Option<Written> {
     match node.kind() {
         "identifier" | "type_identifier" => Some(Written {
             path: vec![text(node, source).to_string()],

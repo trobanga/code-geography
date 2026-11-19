@@ -14,13 +14,13 @@ use std::path::Path;
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct Report {
     /// How the call sites of all front ends were resolved: the sum of the Java part and
-    /// `rust.calls` and `clojure.calls`. The viewer reads this.
+    /// `rust.calls`, `clojure.calls` and `typescript.calls`. The viewer reads this.
     pub calls: CallReport,
     pub rust: cg_index_rust::Report,
     pub clojure: cg_index_clojure::Report,
     /// What the Elixir front end could not read or place. It has no call counts yet.
     pub elixir: cg_index_elixir::Report,
-    /// What the TypeScript front end could not read or resolve. It has no call counts.
+    /// What the TypeScript front end could not read or resolve, and its call counts.
     pub typescript: cg_index_typescript::Report,
 }
 
@@ -103,7 +103,7 @@ pub fn index_sources(root_name: &str, files: &[SourceFile]) -> (Graph, Report) {
         diff: None,
     };
     let report = Report {
-        calls: calls.calls + rust_report.calls + clojure_report.calls,
+        calls: calls.calls + rust_report.calls + clojure_report.calls + typescript_report.calls,
         rust: rust_report,
         clojure: clojure_report,
         elixir: elixir_report,
