@@ -84,14 +84,14 @@ impl Explorer {
     }
 }
 
-/// Whether some indexer (Java, Rust, Clojure) wants the file at `path`. See `cg_index::is_input`.
+/// Whether some indexer (Java, Rust, Clojure, Elixir) wants the file at `path`. See `cg_index::is_input`.
 pub fn is_input(path: &str) -> bool {
     cg_index::is_input(path)
 }
 
 /// Indexes sources that are given as data: `paths[i]` (relative to the root, with `/`)
 /// holds `texts[i]`. Returns the JSON `{"graph": ..., "report": {"calls": ..., "rust":
-/// ..., "clojure": ...}}`.
+/// ..., "clojure": ..., "elixir": ...}}`.
 pub fn index_sources(
     paths: &[String],
     texts: &[String],

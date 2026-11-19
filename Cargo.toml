@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/index-java", "crates/index-rust", "crates/index-clojure", "crates/walk", "crates/index", "crates/cli", "crates/wasm"]
+members = ["crates/core", "crates/index-java", "crates/index-rust", "crates/index-clojure", "crates/index-elixir", "crates/walk", "crates/index", "crates/cli", "crates/wasm"]
 
 # The release version: the cut-release skill bumps it here and in web/package.json.
 [workspace.package]

@@ -1,5 +1,5 @@
 //! The nesting of packages (ADR 18), shared by the front ends whose packages are
-//! dot-separated names: Java packages and Clojure namespaces.
+//! dot-separated names: Java packages, Clojure namespaces and Elixir modules.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -77,7 +77,8 @@ pub type PackageHolds = BTreeMap<(String, String), bool>;
 /// binary class name (`a.b.Outer$Inner`) to the id of the type node.
 pub type ClassTable = BTreeMap<String, String>;
 
-/// Like `package_nodes`, with the `test` flag of the Clojure front end (ADR 23) for each
+/// Like `package_nodes`, with the `test` flag of the Clojure front end (ADR 23; the
+/// Elixir front end uses it too, ADR 35) for each
 /// node, also for a package that holds something: it is test code if all it holds is, and
 /// so are all packages below it. A package of test code that holds no node (a file of
 /// `deftest` forms) is hidden with the tests this way, unless a package of main code is

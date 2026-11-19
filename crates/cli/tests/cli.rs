@@ -166,6 +166,58 @@ fn index_prints_what_the_clojure_front_end_did_not_read() {
 }
 
 #[test]
+fn index_prints_what_the_elixir_front_end_resolved_and_did_not_read() {
+    let dir = TempDir::new().unwrap();
+    let source = dir.path().join("repo");
+    fs::create_dir_all(source.join("app/lib")).unwrap();
+    fs::create_dir_all(source.join("app/src")).unwrap();
+    fs::create_dir_all(source.join("stray")).unwrap();
+    fs::write(
+        source.join("app/mix.exs"),
+        "def project, do: [app: :demo]\n",
+    )
+    .unwrap();
+    fs::write(
+        source.join("app/lib/a.ex"),
+        "defmodule Demo.A do
+  use Demo.B
+  alias Demo.B
+  alias Demo.B.Missing
+  import :lists
+  defstruct [:x]
+  schema \"x\" do
+  end
+end
+defmodule Demo.B do
+end
+",
+    )
+    .unwrap();
+    fs::write(source.join("app/lib/dup.ex"), "defmodule Demo.B do\nend\n").unwrap();
+    fs::write(source.join("app/src/x.ex"), "defmodule Demo.X do\nend\n").unwrap();
+    fs::write(source.join("stray/z.ex"), "defmodule Z do\nend\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_cg"))
+        .arg("index")
+        .arg(&source)
+        .arg("-o")
+        .arg(dir.path().join("graph.json"))
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    for line in [
+        "elixir: 2 module references resolved, 1 external, 1 unresolved, 0 dynamic; 1 files outside the source directories, 1 in no project, 1 duplicate modules; 2 forms without a node\n",
+        "elixir references: alias 1/0/1/0, import 0/1/0/0, use 1/0/0/0\n",
+        "elixir unresolved: Demo.B.Missing 1\n",
+        "elixir forms without a node: defstruct 1, schema 1\n",
+    ] {
+        assert!(stderr.contains(line), "{line}{stderr}");
+    }
+}
+
+#[test]
 fn index_prints_how_the_clojure_calls_were_resolved() {
     let dir = TempDir::new().unwrap();
     let source = dir.path().join("repo");

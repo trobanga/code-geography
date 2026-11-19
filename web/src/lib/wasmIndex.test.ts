@@ -1,4 +1,4 @@
-// Proof that the C parsers (tree-sitter-java, tree-sitter-rust and tree-sitter-clojure-orchard) link and run inside the WASM module.
+// Proof that the C parsers (tree-sitter-java, tree-sitter-rust, tree-sitter-clojure-orchard and tree-sitter-elixir) link and run inside the WASM module.
 // Loads the generated .wasm from disk, as the browser would load it over HTTP.
 // @ts-ignore The project has no @types/node; this test is the only file that reads from disk.
 import { readFileSync } from 'node:fs';
@@ -148,6 +148,38 @@ describe('the indexer in WASM', () => {
     expect(graph.edges).toContainEqual({ from: 'fn:a/b/m :k', to: 'fn:b/m', kind: 'implements', sites: [{ lines: [4] }] });
     expect(report.clojure.value_nodes).toBe(1);
     expect(report.clojure.method_nodes).toBe(1);
+  });
+
+  it('indexes Elixir sources: the grammar runs inside the module', () => {
+    const files: [string, string][] = [
+      ['mix.exs', 'def project, do: [app: :demo]\n'],
+      ['lib/a.ex', 'defmodule A do\n  alias B\n  def f(x), do: x\nend\n'],
+      ['lib/b.ex', 'defmodule B do\nend\n'],
+      ['test/a_test.exs', 'defmodule ATest do\nend\n'],
+      ['src/c.ex', 'defmodule C do\nend\n'],
+    ];
+    const json = indexSources(
+      files.map(([path]) => path),
+      files.map(([, text]) => text),
+      'repo',
+    );
+    const { graph, report } = JSON.parse(json) as {
+      graph: Graph;
+      report: { elixir: { files_outside_source_dirs: number; references: Record<string, { resolved: number }> } };
+    };
+
+    const ids = graph.nodes.map((n) => n.id);
+    expect(ids).toContain('mod:');
+    expect(graph.nodes.find((n) => n.id === 'mod:')?.name).toBe('demo');
+    expect(ids).toContain('fn:A.f/1');
+    // A module is a package without a file: the site names it.
+    expect(graph.edges).toContainEqual({ from: 'pkg::A', to: 'pkg::B', kind: 'imports', sites: [{ file: 'lib/a.ex', lines: [2] }] });
+    expect(graph.nodes.find((n) => n.id === 'pkg::ATest')?.test).toBe(true);
+    // The flag is left out of the JSON when it is false.
+    expect(graph.nodes.find((n) => n.id === 'pkg::A')?.test).toBeFalsy();
+    expect(ids).not.toContain('pkg::C');
+    expect(report.elixir.files_outside_source_dirs).toBe(1);
+    expect(report.elixir.references.alias.resolved).toBe(1);
   });
 
   it('builds the commit overlay from two source sets', () => {

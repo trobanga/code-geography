@@ -56,6 +56,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
         calls,
         rust,
         clojure,
+        elixir,
     }) = report
     {
         eprintln!(
@@ -128,16 +129,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
             clojure.classes.to_type, clojure.classes.external, clojure.classes.maybe_local
         );
         // The most frequent names first: which macros of the repository make them.
-        let mut names: Vec<_> = clojure.unresolved_names.iter().collect();
-        names.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
-        if !names.is_empty() {
-            let top: Vec<String> = names
-                .iter()
-                .take(15)
-                .map(|(name, count)| format!("{name} {count}"))
-                .collect();
-            eprintln!("clojure unresolved: {}", top.join(", "));
-        }
+        print_top("clojure unresolved", &clojure.unresolved_names, 15);
         let without_node: usize = clojure.forms_without_node.values().sum();
         eprintln!(
             "clojure: {} files outside the source directories, {} below no deps.edn, {} without ns form, {} duplicate namespaces; {} top-level forms without a node",
@@ -149,18 +141,66 @@ fn run(args: Vec<String>) -> Result<(), String> {
         );
         // The most frequent heads first: the size of the gap that macros of the
         // repository make.
-        let mut heads: Vec<_> = clojure.forms_without_node.iter().collect();
-        heads.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
-        if !heads.is_empty() {
-            let top: Vec<String> = heads
-                .iter()
-                .take(10)
-                .map(|(head, count)| format!("{head} {count}"))
-                .collect();
-            eprintln!("clojure forms without a node: {}", top.join(", "));
-        }
+        print_top(
+            "clojure forms without a node",
+            &clojure.forms_without_node,
+            10,
+        );
+        print_elixir(&elixir);
     }
     Ok(())
+}
+
+/// What the Elixir front end resolved and did not read.
+fn print_elixir(elixir: &cg_index_elixir::Report) {
+    let sum = |f: fn(&cg_index_elixir::ModuleRefs) -> usize| -> usize {
+        elixir.references.values().map(f).sum()
+    };
+    eprintln!(
+        "elixir: {} module references resolved, {} external, {} unresolved, {} dynamic; {} files outside the source directories, {} in no project, {} duplicate modules; {} forms without a node",
+        sum(|r| r.resolved),
+        sum(|r| r.external),
+        sum(|r| r.unresolved),
+        sum(|r| r.dynamic),
+        elixir.files_outside_source_dirs,
+        elixir.files_without_project,
+        elixir.duplicate_modules.len(),
+        elixir.forms_without_node.values().sum::<usize>()
+    );
+    if !elixir.references.is_empty() {
+        let by_kind: Vec<String> = elixir
+            .references
+            .iter()
+            .map(|(kind, r)| {
+                format!(
+                    "{kind} {}/{}/{}/{}",
+                    r.resolved, r.external, r.unresolved, r.dynamic
+                )
+            })
+            .collect();
+        eprintln!("elixir references: {}", by_kind.join(", "));
+    }
+    print_top("elixir unresolved", &elixir.unresolved_names, 10);
+    print_top(
+        "elixir forms without a node",
+        &elixir.forms_without_node,
+        10,
+    );
+}
+
+/// Prints the `n` most frequent names of `counts` with their counts, the most frequent
+/// first, then by name; nothing if there is none.
+fn print_top(label: &str, counts: &std::collections::BTreeMap<String, usize>, n: usize) {
+    let mut counts: Vec<_> = counts.iter().collect();
+    counts.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+    if !counts.is_empty() {
+        let top: Vec<String> = counts
+            .iter()
+            .take(n)
+            .map(|(name, count)| format!("{name} {count}"))
+            .collect();
+        eprintln!("{label}: {}", top.join(", "));
+    }
 }
 
 /// The union graph of two revisions. `spec` is one revision, compared with its

@@ -20,6 +20,9 @@ fn is_input_is_true_when_any_front_end_wants_the_file() {
         "deps.edn",
         "src/a.clj",
         "src/a.cljc",
+        "mix.exs",
+        "lib/a.ex",
+        "test/a_test.exs",
     ] {
         assert!(is_input(path), "{path}");
     }
@@ -30,6 +33,9 @@ fn is_input_is_true_when_any_front_end_wants_the_file() {
         "a/node_modules/B.java",
         "src/a.cljs",
         "project.clj",
+        "config/config.exs",
+        "lib/a.eex",
+        "deps/x/lib/a.ex",
     ] {
         assert!(!is_input(path), "{path}");
     }
@@ -98,6 +104,48 @@ fn clojure_sources_give_a_graph_and_the_clojure_report() {
     assert_eq!(report.clojure.files_outside_source_dirs, 1);
     assert_eq!(graph.node("val:a/x").unwrap().kind, NodeKind::Value);
     assert_eq!(report.clojure.value_nodes, 1);
+    assert_eq!((graph, report), index_sources("repo", &reversed));
+}
+
+#[test]
+fn elixir_and_rust_in_one_directory_share_the_module_and_the_report_has_an_elixir_part() {
+    let files = [
+        source("Cargo.toml", "[package]\nname = \"tool\"\n"),
+        source("src/lib.rs", "pub struct Bar;\n"),
+        source("mix.exs", "def project, do: [app: :tool_ex]\n"),
+        source(
+            "lib/a.ex",
+            "defmodule A do\n  alias B\n  def f(x), do: x\nend\n",
+        ),
+        source("lib/b.ex", "defmodule B do\nend\n"),
+    ];
+    let mut reversed = files.clone();
+    reversed.reverse();
+
+    let (graph, report) = index_sources("repo", &files);
+
+    let modules: Vec<_> = graph
+        .nodes
+        .iter()
+        .filter(|n| n.kind == NodeKind::Module)
+        .collect();
+    assert_eq!(modules.len(), 1);
+    assert_eq!(
+        graph.node("type:tool::Bar").unwrap().parent.as_deref(),
+        Some("mod:")
+    );
+    assert_eq!(
+        graph.node("pkg::A").unwrap().parent.as_deref(),
+        Some("mod:")
+    );
+    assert!(graph.node("fn:A.f/1").is_some());
+    assert!(
+        graph
+            .edges
+            .iter()
+            .any(|e| e.from == "pkg::A" && e.to == "pkg::B")
+    );
+    assert_eq!(report.elixir.references["alias"].resolved, 1);
     assert_eq!((graph, report), index_sources("repo", &reversed));
 }
 

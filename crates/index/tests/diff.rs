@@ -206,6 +206,46 @@ fn a_changed_clojure_file_is_test_code_by_the_source_directories_of_its_deps_edn
 }
 
 #[test]
+fn a_changed_elixir_file_is_test_code_by_the_directory_test_of_its_mix_project() {
+    let mix = "def project, do: [app: :app]\n";
+    let before = [source("mix.exs", mix), source("gone/mix.exs", mix)];
+    let after = [source("mix.exs", mix)];
+    let spec = DiffSpec {
+        base: "a".into(),
+        head: "b".into(),
+        changed: changed(&[
+            ("test/a_test.exs", Change::Modified),
+            ("test/support/h.ex", Change::Added),
+            ("lib/a.ex", Change::Modified),
+            // ADR 8 alone would call this test code.
+            ("lib/src/x/a.ex", Change::Modified),
+            ("gone/test/x_test.exs", Change::Removed),
+            ("gone/lib/x.ex", Change::Removed),
+        ]),
+    };
+
+    let (graph, _) = diff_sources("repo", &before, &after, spec);
+
+    let info = graph.diff.expect("diff info");
+    let files: Vec<_> = info
+        .files
+        .iter()
+        .map(|f| (f.path.as_str(), f.test))
+        .collect();
+    assert_eq!(
+        files,
+        [
+            ("test/a_test.exs", true),
+            ("test/support/h.ex", true),
+            ("lib/a.ex", false),
+            ("lib/src/x/a.ex", false),
+            ("gone/test/x_test.exs", true),
+            ("gone/lib/x.ex", false),
+        ]
+    );
+}
+
+#[test]
 fn a_changed_java_file_in_a_deps_edn_module_follows_the_source_directories_of_its_deps_edn() {
     let deps = "{:paths [\"src\" \"java\"] :aliases {:test {:extra-paths [\"java-test\"]}}}";
     let before = [

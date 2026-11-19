@@ -67,7 +67,7 @@ describe('summarize', () => {
 describe('inputError', () => {
   it('names the supported languages when no input is found', () => {
     expect(inputError({ root: 'docs', inputs: [] })).toBe(
-      'no Java, Rust or Clojure sources found in docs (only these languages are supported now)',
+      'no Java, Rust, Clojure or Elixir sources found in docs (only these languages are supported now)',
     );
   });
 
@@ -82,8 +82,19 @@ describe('inputError for Clojure', () => {
   });
 });
 
+describe('inputError for Elixir', () => {
+  it('accepts a repository with Elixir source files only', () => {
+    expect(inputError({ root: 'p', inputs: [{ path: 'mix.exs', file: null }, { path: 'lib/app.ex', file: null }] })).toBeNull();
+    expect(inputError({ root: 'p', inputs: [{ path: 'mix.exs', file: null }, { path: 'test/app_test.exs', file: null }] })).toBeNull();
+  });
+
+  it('counts a directory with a mix.exs but no source file as without sources', () => {
+    expect(inputError({ root: 'p', inputs: [{ path: 'mix.exs', file: null }] })).toMatch(/no Java, Rust, Clojure or Elixir sources found in p/);
+  });
+});
+
 describe('inputError with build files only', () => {
   it('counts a directory with pom.xml and Cargo.toml files but no source file as without sources', () => {
-    expect(inputError({ root: 'p', inputs: [{ path: 'pom.xml', file: null }, { path: 'Cargo.toml', file: null }] })).toMatch(/no Java, Rust or Clojure sources found in p/);
+    expect(inputError({ root: 'p', inputs: [{ path: 'pom.xml', file: null }, { path: 'Cargo.toml', file: null }] })).toMatch(/no Java, Rust, Clojure or Elixir sources found in p/);
   });
 });

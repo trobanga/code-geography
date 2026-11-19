@@ -24,6 +24,7 @@ calls through a type that the declarations do not prove. `AGENTS.md`, section
 | Java | Maven module | Java package |
 | Rust | Cargo package | `mod` |
 | Clojure | `deps.edn` directory | namespace |
+| Elixir | Mix project | module (`defmodule`) |
 
 A repository can hold more than one language. All front ends use tree-sitter, and the
 viewer runs them in the browser, compiled to WebAssembly.

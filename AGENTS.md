@@ -12,7 +12,7 @@ model. Record each new decision of that weight as a new ADR.
 | Term | Meaning |
 |---|---|
 | graph | Nodes in a tree (`parent`) plus edges between any two nodes. |
-| fact level | A node kind that comes from the language or build system: `module` (unit of build: Maven module, Cargo package, `deps.edn` directory), `package` (namespace: Java package, Rust `mod`, Clojure namespace; nests in all three, ADR 0018), `type`, `function`, `value` (a Clojure `def`, ADR 0027). |
+| fact level | A node kind that comes from the language or build system: `module` (unit of build: Maven module, Cargo package, `deps.edn` directory, Mix project), `package` (namespace: Java package, Rust `mod`, Clojure namespace, Elixir module; nests in all four, ADR 0018), `type`, `function`, `value` (a Clojure `def`, ADR 0027). |
 | group | A container that does not come from the language (directory or AI). Not built yet. |
 | edge | A dependency that the indexer can prove from the source: `extends`, `implements`, `imports`, `type_ref`, `calls` (ADR 0014), `value_ref` (ADR 0027). One edge per `(from, to, kind)`, however many references make it. |
 | site | A line of a file where a reference stands that makes an edge (ADR 0032). An edge has `sites`: entries `{file, lines}`; `file` is left out when it is the file of the `from` node. Data like `span`: in no id and not in the identity of an edge. In an overlay a removed edge has the sites of the base, every other edge those of the head. Not the "call site" of a report, which is each place of a call, resolved or not. |
@@ -26,8 +26,8 @@ model. Record each new decision of that weight as a new ADR.
 | selection | The boxes that the developer selected: a click selects one, Shift+click adds or removes one. Lines between two selected boxes are full, lines to the outside weak (dim with `between selected`); `open all` / `close all` works on all of them (ADR 0029). |
 | commit context | For an overlay of a forge repository, on demand: the full message of each commit of the overlay, its pull requests and the issue references (`#12`, `owner/repo#12`) read from the message and the pull request bodies, as links. A reference is a guess (ADR 0030). |
 | source view | The panel below the diagram for one or two selected boxes (ADR 0031). One box: its lines (`file`, `span`), or for a module or package the list of its declarations (the topmost nodes with a span below it). Two boxes: the declarations whose edges make their line, each with its targets, from `Explorer.edgesBetween`; an open declaration marks the lines of the sites of these edges and shows the sites outside its own lines below them (ADR 0032). Forge repositories only; a commit marks its added and removed lines. |
-| front end | The part that turns the sources of one language into a graph (Java, Rust, Clojure). `cg-index` runs all of them. |
-| test code | Code in a source set other than `src/main`; for Clojure, code in a directory that only an alias of `deps.edn` names (ADR 0023). Hidden by default. |
+| front end | The part that turns the sources of one language into a graph (Java, Rust, Clojure, Elixir). `cg-index` runs all of them. |
+| test code | Code in a source set other than `src/main`; for Clojure, code in a directory that only an alias of `deps.edn` names (ADR 0023); for Elixir, code below the directory `test` of a Mix project (ADR 0035). Hidden by default. |
 
 ## Layout
 
@@ -42,6 +42,10 @@ crates/index-clojure  Clojure front end on tree-sitter: index_sources(root_name,
                    (deps.edn modules, namespaces as packages, imports edges, ADR 0023; call
                    edges, ADR 0024; values, defmethod and extend-protocol nodes, ADR 0027); Layout::test_code(path) for the
                    changed files of an overlay
+crates/index-elixir  Elixir front end on tree-sitter: index_sources(root_name, files) -> Graph + Report
+                   (Mix projects as modules, defmodule/defprotocol/defimpl as packages, def as
+                   function `name/arity`, imports and implements edges, no call edges yet, ADR 0035);
+                   scope.rs: the aliases of a lexical scope; Layout::test_code(path) as for Clojure
 crates/walk        cg-walk: the one directory walk, read_sources(root, is_input) -> Vec<SourceFile>
                    (the only place with std::fs besides the CLI; used by index-java and index)
 crates/index       cg-index: is_input, index_sources, index(root) over all front ends; joins
@@ -75,7 +79,7 @@ web/src/lib/cover.ts  the cover of the diagram (the Survey picture) for a level 
                    screen before the cut of the step, off when its layout is there
 web/src/lib/tokenStore.ts  tokens by origin (session/local storage) and authorized(): the only
                    place that adds a token, refuses any other origin (ADR 0022)
-docs/adr/          architecture decision records (0016: how Rust maps onto the graph, 0023: Clojure)
+docs/adr/          architecture decision records (0016: how Rust maps onto the graph, 0023: Clojure, 0035: Elixir)
 ```
 
 ## Commands
@@ -163,6 +167,21 @@ and `web/package.json`. The skill `.agents/skills/cut-release` does the steps.
   Java and Rust make no value nodes. No `.cljs`, no Leiningen.
   Duplicate namespace names: the first file wins.
   The grammar crate is pinned to 0.2.5 (0.2.9 does not build for wasm32).
+- Elixir (ADR 0035): no call edges yet (CG-10), so a module that writes the names of
+  other modules in full at the call shows no edge. What a `use` adds to a module is not
+  known: its functions, imports, `@behaviour` and aliases. An alias that a `use` adds can
+  hide a module of the repository: this is the one way to a wrong edge. No node for
+  `defstruct`, `@type`, `@callback`, or for what a macro declares (`schema`, `test`); the
+  body of a module has no hash. Definitions are read at the top level, in a module body
+  and in `if`/`unless` blocks there, not in other blocks (`for`). A project is a
+  `mix.exs`; sources are `lib` (or the string literals of `elixirc_paths`) and `test`.
+  Not read: `config/`, `priv/` (migrations), `mix.exs` itself, files below a directory
+  `deps` or `_build` at any depth, `.exs` outside `test`, a file with no `mix.exs` above
+  it, a module that a test defines in its body. An `elixirc_paths` without a string
+  literal counts as `lib`. A parent module that names its child shows no edge. A directive in a
+  function is an edge of the module. A `defimpl` of a protocol outside the repository
+  has no `implements` edge. Duplicate module names: the first form wins, main code
+  before test code. The grammar adds 1.6 MB to the `.wasm` file.
 - Commit context (ADR 0030): forge repositories only, not a local `diff.json`. Forgejo
   `commits/{sha}/pull` finds only the pull request whose merge commit is the sha; a commit
   inside a merged branch shows none. GitHub lists the newest 50 to 100 commits of a

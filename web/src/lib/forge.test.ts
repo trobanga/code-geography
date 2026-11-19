@@ -143,7 +143,7 @@ describe('fetchRepo', () => {
 
   it('fails before any file fetch when the repository has no sources of a supported language', async () => {
     const { forge, calls } = fakeForge({ 'pom.xml': '', 'x.py': '' });
-    await expect(fetchRepo(forge, REPO, memoryCache(), isInput)).rejects.toThrow('no Java, Rust or Clojure sources found in a/b');
+    await expect(fetchRepo(forge, REPO, memoryCache(), isInput)).rejects.toThrow('no Java, Rust, Clojure or Elixir sources found in a/b');
     expect(calls.some((c) => c.startsWith('text'))).toBe(false);
   });
 });
