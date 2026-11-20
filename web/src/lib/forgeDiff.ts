@@ -140,7 +140,8 @@ export async function listedCommits(forge: Forge, repo: Repo, sha: string, want:
   return { list, next: page };
 }
 
-const LIST_PAGES = 5;
+/** The most pages that one listing of the commit list reads, when update bots fill them. */
+export const LIST_PAGES = 5;
 
 /**
  * The author names of Renovate and Dependabot: `renovate[bot]`, `dependabot[bot]`,

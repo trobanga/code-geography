@@ -1,5 +1,5 @@
 use cg_core::{Change, EdgeKind};
-use cg_index::{DiffSpec, SourceFile, diff_sources};
+use cg_index::{DiffSpec, SourceFile, diff_indexed, diff_sources, index_sources};
 
 fn source(path: &str, text: &str) -> SourceFile {
     SourceFile {
@@ -578,4 +578,43 @@ fn equal_source_sets_give_the_overlay_of_the_graph_with_itself() {
         serde_json::to_value(&report).unwrap(),
         serde_json::to_value(&plain_report).unwrap()
     );
+}
+
+#[test]
+fn indexed_sides_give_the_graph_that_diff_sources_gives() {
+    let before = [
+        source("pom.xml", ""),
+        source("src/main/java/a/Base.java", BASE),
+        source(
+            "src/main/java/a/Gone.java",
+            "package a;\nclass Gone extends Base {}\n",
+        ),
+    ];
+    let after = [
+        source("pom.xml", ""),
+        source("src/main/java/a/Base.java", BASE),
+        source(
+            "src/main/java/a/Sub.java",
+            "package a;\nclass Sub extends Base {}\n",
+        ),
+    ];
+    let spec = DiffSpec {
+        base: "v1".into(),
+        head: "v2".into(),
+        changed: changed(&[
+            ("src/main/java/a/Gone.java", Change::Removed),
+            ("src/main/java/a/Sub.java", Change::Added),
+        ]),
+    };
+
+    let (expected, _) = diff_sources("repo", &before, &after, spec.clone());
+    let (base_graph, _) = index_sources("repo", &before);
+    let (head_graph, _) = index_sources("repo", &after);
+    let graph = diff_indexed((&before, &base_graph), (&after, &head_graph), spec);
+
+    assert_eq!(
+        serde_json::to_value(&graph).unwrap(),
+        serde_json::to_value(&expected).unwrap()
+    );
+    assert!(graph.nodes.iter().any(|n| n.change.is_some()));
 }

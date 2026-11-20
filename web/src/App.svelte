@@ -44,8 +44,9 @@
   import { forgeSession, NO_FORGE, shaOf, shownBase, type ForgeState } from './lib/forgeSession';
   import { forgeOfRepo, parseSource } from './lib/forges';
   import { tokenStore, type TokenField } from './lib/tokenStore';
-  import { diffInWorker, indexInWorker, worktreeInWorker } from './lib/indexProject';
+  import { diffInWorker, indexInWorker, localRepoWorker, type LocalRepoWorker } from './lib/indexProject';
   import { indexLocal } from './lib/localGit';
+  import { localSession, NO_LOCAL, type LocalState } from './lib/localSession';
   import { inputError, summarize, type Summary } from './lib/project';
   import { collectDir, fromEntry, type Collect, type DirEntry } from './lib/walk';
   import { runLayout, type Layout } from './lib/layout';
@@ -89,9 +90,18 @@
       // Opened from the hash with nothing to show: offer the open buttons.
       if (!tree) missing = true;
     },
-    show: (text, summary, hash) => loadOpened(text, summary, hash, true),
+    show: (text, summary, hash) => loadOpened(text, summary, hash, 'forge'),
     hash: () => location.hash,
     onState: (s) => (fs = s),
+  });
+  /** The local repository with history shown (ADR 0040): one worker keeps its git repository for the list and the overlays. */
+  let ls = $state.raw<LocalState>(NO_LOCAL);
+  const local = localSession({
+    begin,
+    phase: (p) => (phase = p),
+    fail: (m) => (error = m),
+    show: (text, summary, texts) => loadOpened(text, summary, undefined, 'local', texts),
+    onState: (s) => (ls = s),
   });
   /** The origin of a non-GitHub repository that the hash asks for: its token field shows also when the open failed. */
   let hashOrigin = $state<string | null>(null);
@@ -290,6 +300,7 @@
       const text = await r.text();
       src = s;
       forge.forget();
+      local.forget();
       localTexts = null;
       selected = [];
       project = null;
@@ -299,16 +310,20 @@
     }
   }
 
-  /** Replaces the graph by one opened from disk or a forge (`keep`): by default nothing open, no focus, no selection. */
-  /** `texts`: those of a local directory, for the source view. */
+  /**
+   * Replaces the graph by one opened from disk or a forge: by default nothing open, no focus, no
+   * selection. `keep`: the session that shows it stays, a forge repository or a local one (ADR
+   * 0040); every other session ends. `texts`: those of a local directory, for the source view.
+   */
   async function loadOpened(
     text: string,
     summary: Summary | null,
     hash = freshHash(location.hash),
-    keep = false,
+    keep: 'forge' | 'local' | false = false,
     texts: SourceTexts | null = null,
   ) {
-    if (!keep) forge.forget();
+    if (keep !== 'local') local.forget();
+    if (keep === false) forge.forget();
     localTexts = texts;
     selected = [];
     src = null;
@@ -317,15 +332,18 @@
     if (graph) missing = false;
   }
 
-  /** Indexes the Java, Rust, Clojure, Elixir and TypeScript sources of a chosen directory in a worker (ADR 0015). Only inputs are read. */
   /** Starts an open of a directory or a repository; the result tells whether it is still the latest. */
   function begin() {
     const my = ++openSeq;
     return () => my === openSeq;
   }
 
+  /** Indexes the Java, Rust, Clojure, Elixir and TypeScript sources of a chosen directory in a worker (ADR 0015). Only inputs are read. */
   async function openDirectory(collect: Collect) {
     const current = begin();
+    /** The worker that keeps the git repository for the commit list (ADR 0040); closed unless the local session takes it. */
+    let handle: LocalRepoWorker | null = null;
+    let started = false;
     try {
       await init();
       const t0 = performance.now();
@@ -349,8 +367,9 @@
       const probe = await chosen.git();
       if (!current()) return;
       phase = `indexing ${chosen.inputs.length} files of ${chosen.root}`;
-      // A repository: the overlay of the uncommitted changes against HEAD (ADR 0039).
-      const r = await indexLocal({ paths, texts, rootName: chosen.root }, probe, { index: indexInWorker, worktree: worktreeInWorker });
+      // A repository: the overlay of the uncommitted changes against HEAD (ADR 0039), in the worker that then serves its history (ADR 0040).
+      const repoWorker = probe.kind === 'repo' ? (handle = localRepoWorker()) : null;
+      const r = await indexLocal({ paths, texts, rootName: chosen.root }, probe, { index: indexInWorker, worktree: (req) => repoWorker!.worktree(req) });
       if (!current()) return;
       const g = JSON.parse(r.graphText) as Graph;
       console.info(`indexed ${chosen.root}: ${g.nodes.length} nodes ${g.edges.length} edges ${Math.round(performance.now() - t0)} ms`);
@@ -358,11 +377,21 @@
       // The texts of the index stay for the source view: a file read again could have changed (CG-12).
       const kept = { head: new Map(paths.map((p, i) => [p, texts[i]])), base: r.base ?? undefined };
       const summary = summarize(chosen.root, paths, g, r.report);
-      await loadOpened(r.graphText, r.note ? { ...summary, text: `${summary.text} · ${r.note}` } : summary, undefined, false, kept);
+      const shownSummary = r.note ? { ...summary, text: `${summary.text} · ${r.note}` } : summary;
+      await loadOpened(r.graphText, shownSummary, undefined, false, kept);
+      // The overlay came from the repository: the list of its commits and their overlays are served by the same worker.
+      // No `current()` here: `loadOpened` ends the forge session, whose `cancel` starts a new open of its own. A later
+      // open of another source ends this session again in its own `loadOpened`.
+      if (handle && r.base !== null) {
+        local.start(handle, chosen.root, { text: r.graphText, summary: shownSummary, texts: kept });
+        started = true;
+      }
     } catch (e) {
       if (!current()) return;
       phase = null;
       error = `cannot index the directory: ${e instanceof Error ? e.message : String(e)}`;
+    } finally {
+      if (!started) handle?.close();
     }
   }
 
@@ -490,6 +519,11 @@
       forge.closeList();
       return;
     }
+    if (e.key === 'Escape' && ls.active && ls.listOpen) {
+      e.preventDefault();
+      local.closeList();
+      return;
+    }
     const k = depthKey(e);
     if (k === null) return;
     e.preventDefault();
@@ -614,6 +648,7 @@
   onpointerdown={(e) => {
     // A click outside the commit list closes it. Not on its control: the click that follows toggles it.
     if (fs.listOpen && !(e.target as Element | null)?.closest?.('[data-commits], [data-list-toggle]')) forge.closeList();
+    if (ls.listOpen && !(e.target as Element | null)?.closest?.('[data-commits], [data-list-toggle]')) local.closeList();
     if (fs.branchOpen && !(e.target as Element | null)?.closest?.('[data-branches], [data-branch-toggle]')) forge.closeBranches();
   }}
   ondragenter={(e) => {
@@ -696,6 +731,20 @@
           <span>{diff ? `${diff.base} → ${diff.head}` : shaOf(fs.at).slice(0, 7)}</span>
           <span class="text-[var(--muted)]" aria-hidden="true">▾</span>
         </button>
+      {:else if ls.active}
+        <!-- A local repository: the same control for its commit list, with the uncommitted changes as one entry. -->
+        <button
+          class="flex shrink-0 items-center gap-2 border border-[var(--line)] px-2 py-0.5 text-[var(--fg)] tabular-nums hover:border-[var(--muted)] {ls.listOpen ? 'bg-[var(--line)]' : ''}"
+          onclick={local.toggleList}
+          title="pick a commit of this repository"
+          aria-haspopup="listbox"
+          aria-expanded={ls.listOpen}
+          data-list-toggle
+        >
+          <span class="text-[var(--muted)]">commit</span>
+          <span>{diff ? `${diff.base} → ${diff.head}` : ''}</span>
+          <span class="text-[var(--muted)]" aria-hidden="true">▾</span>
+        </button>
       {/if}
       <span class="min-w-0">{project.text}</span>
     </div>
@@ -731,6 +780,25 @@
       </div>
     </div>
   {/if}
+  {#if ls.active && !fs.at && ls.listOpen}
+    {@const rows = ls.commits ? commitRows(ls.commits.list, ls.shown === 'worktree' ? null : ls.shown) : null}
+    <div class="relative z-30">
+      <div class="absolute inset-x-0 top-0 shadow-lg">
+        <CommitList
+          {rows}
+          hidden={ls.commits && rows ? ls.commits.list.length - rows.length : 0}
+          status={ls.listStatus}
+          more={ls.commits ? ls.commits.next !== null : false}
+          onpick={local.pick}
+          onsha={local.pickSha}
+          onmore={local.loadMore}
+          worktree={{ current: ls.shown === 'worktree', onpick: local.pickWorktree }}
+          onrange={local.pickRange}
+          asks="reads the repository"
+        />
+      </div>
+    </div>
+  {/if}
   {#if diff && totals}
     <CommitStrip
       {diff}
@@ -749,7 +817,7 @@
         unfolded = new Set();
         setFocus({ nodes: [], changes: true, neighbors: focus.neighbors });
       }}
-      label={!fs.at}
+      label={!fs.at && !ls.active}
     />
   {/if}
   {#if fs.at && fs.mode === 'commit' && fs.overlay && fs.repo}

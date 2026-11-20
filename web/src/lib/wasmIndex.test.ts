@@ -9,7 +9,8 @@ import { deflateSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import { Explorer, GitRepo, diffSources, indexSources, initSync, isInput, worktreeOverlay } from './wasm/cg_wasm.js';
 import type { Graph, GraphEdge, View } from './types';
-import { runJob, worktreeOf } from './workerJob';
+import type { GitFiles } from './localGit';
+import { jobRunner, type WorktreeJob } from './workerJob';
 import { headOf } from './commit';
 import { textReader } from './source';
 
@@ -272,7 +273,7 @@ describe('the indexer in WASM', () => {
   });
 });
 
-const wasm = { indexSources, diffSources, worktreeOverlay: worktreeOf(GitRepo, worktreeOverlay) };
+const runJob = jobRunner({ indexSources, diffSources, GitRepo, worktreeOverlay });
 
 describe('runJob', () => {
   it('builds the overlay of two source sets with the changed files', () => {
@@ -290,7 +291,6 @@ describe('runJob', () => {
           { path: 'src/main/java/a/B.java', change: 'added' },
         ],
       },
-      wasm,
     );
     if (!reply.ok) throw new Error(reply.error);
     const g = JSON.parse(reply.graphText) as Graph;
@@ -309,7 +309,7 @@ function loose(kind: string, content: Uint8Array): { id: string; bytes: Uint8Arr
 }
 
 /** The loose objects of a commit with the files `files` (path → text); the commit is the first. */
-function commitOf(files: [string, string][]) {
+function commitOf(files: [string, string][], opts: { parent?: string; message?: string; time?: number } = {}) {
   const objects: { id: string; bytes: Uint8Array }[] = [];
   const hexBytes = (hex: string) => new Uint8Array(hex.match(/../g)!.map((h) => parseInt(h, 16)));
   type Dir = Map<string, Dir | string>;
@@ -334,7 +334,10 @@ function commitOf(files: [string, string][]) {
     return tree.id;
   };
   const tree = write(root);
-  const commit = loose('commit', new TextEncoder().encode(`tree ${tree}\nauthor T <t@x> 0 +0000\ncommitter T <t@x> 0 +0000\n\none\n`));
+  const commit = loose('commit', new TextEncoder().encode(
+      `tree ${tree}\n${opts.parent ? `parent ${opts.parent}\n` : ''}author T <t@x> ${opts.time ?? 0} +0000\ncommitter T <t@x> ${opts.time ?? 0} +0000\n\n${opts.message ?? 'one'}\n`,
+    ),
+  );
   return [commit, ...objects];
 }
 
@@ -354,7 +357,6 @@ describe('runJob of a worktree', () => {
         texts: ['', 'package a;\nclass A { int x; }\n', 'package a;\nclass New {}\n'],
         git,
       },
-      wasm,
     );
     if (!reply.ok) throw new Error(reply.error);
     const g = JSON.parse(reply.graphText) as Graph;
@@ -369,8 +371,91 @@ describe('runJob of a worktree', () => {
 
   it('fails with the reason when HEAD names no commit', () => {
     const git = { head: 'ref: refs/heads/main\n', refs: [], packedRefs: null, packs: [], loose: [] };
-    const reply = runJob({ kind: 'worktree', rootName: 'repo', paths: [], texts: [], git }, wasm);
+    const reply = runJob({ kind: 'worktree', rootName: 'repo', paths: [], texts: [], git });
     expect(reply).toEqual({ ok: false, error: 'no commit at HEAD: no ref refs/heads/main' });
+  });
+});
+
+describe('the job runner of a local repository', () => {
+  const A1 = 'package a;\nclass A {}\n';
+  const A2 = 'package a;\nclass A { int x; }\n';
+  const B = 'package a;\nclass B {}\n';
+  const history = () => {
+    const one = commitOf([['pom.xml', ''], ['src/main/java/a/A.java', A1]], { message: 'first', time: 1_700_000_000 });
+    const two = commitOf([['pom.xml', ''], ['src/main/java/a/A.java', A2]], { parent: one[0].id, message: 'second\n\nwith a body', time: 1_700_000_100 });
+    const three = commitOf([['pom.xml', ''], ['src/main/java/a/A.java', A2], ['src/main/java/a/B.java', B]], { parent: two[0].id, message: 'third', time: 1_700_000_200 });
+    const loose = [...new Map([...one, ...two, ...three].map((o) => [o.id, o])).values()];
+    const git = { head: 'ref: refs/heads/main\n', refs: [{ name: 'refs/heads/main', text: `${three[0].id}\n` }], packedRefs: null, packs: [], loose };
+    return { ids: [one[0].id, two[0].id, three[0].id], git };
+  };
+  const worktree = (git: GitFiles): WorktreeJob => ({
+    kind: 'worktree',
+    rootName: 'repo',
+    paths: ['pom.xml', 'src/main/java/a/A.java', 'src/main/java/a/B.java'],
+    texts: ['', A2, B],
+    git,
+  });
+
+  it('keeps the repository after the worktree job: the log, then the overlay of a commit against its first parent', () => {
+    const run = jobRunner({ indexSources, diffSources, GitRepo, worktreeOverlay });
+    const { ids, git } = history();
+    expect(run(worktree(git)).ok).toBe(true);
+
+    const log = run({ kind: 'log', from: null, n: 10 });
+    if (!log.ok) throw new Error(log.error);
+    expect(log.commits.map((c) => c.title)).toEqual(['third', 'second', 'first']);
+    expect(log.commits[0]).toMatchObject({ sha: ids[2], parents: [ids[1]], author: 'T' });
+    expect(log.commits[1].message).toContain('with a body');
+    const page = run({ kind: 'log', from: log.commits[0].parents[0], n: 1 });
+    if (!page.ok) throw new Error(page.error);
+    expect(page.commits.map((c) => c.sha)).toEqual([ids[1]]);
+
+    const reply = run({ kind: 'commit', base: ids[1], head: ids[2], rootName: 'repo' });
+    if (!reply.ok) throw new Error(reply.error);
+    const g = JSON.parse(reply.graphText) as Graph;
+    expect(g.diff).toMatchObject({ base: ids[1].slice(0, 7), head: ids[2].slice(0, 7) });
+    expect(g.diff?.files?.map((f) => [f.path, f.change])).toEqual([['src/main/java/a/B.java', 'added']]);
+    expect(reply.head['src/main/java/a/B.java']).toBe(B);
+    expect(reply.base['src/main/java/a/A.java']).toBe(A2);
+  });
+
+  it('indexes one tree less when the next overlay steps down the history', () => {
+    const run = jobRunner({ indexSources, diffSources, GitRepo, worktreeOverlay });
+    const { ids, git } = history();
+    run(worktree(git));
+    const indexes = (base: string, head: string) => {
+      const r = run({ kind: 'commit', base, head, rootName: 'repo' });
+      if (!r.ok) throw new Error(r.error);
+      return r.indexes;
+    };
+
+    expect(indexes(ids[0], ids[1])).toBe(2);
+    expect(indexes(ids[1], ids[2])).toBe(1);
+  });
+
+  it('compares a root commit with nothing', () => {
+    const run = jobRunner({ indexSources, diffSources, GitRepo, worktreeOverlay });
+    const { ids, git } = history();
+    run(worktree(git));
+    const r = run({ kind: 'commit', base: null, head: ids[0], rootName: 'repo' });
+    if (!r.ok) throw new Error(r.error);
+    expect((JSON.parse(r.graphText) as Graph).diff?.base).toBe('none');
+  });
+
+  it('fails a log or a commit job without a repository', () => {
+    const run = jobRunner({ indexSources, diffSources, GitRepo, worktreeOverlay });
+
+    expect(run({ kind: 'log', from: null, n: 5 })).toEqual({ ok: false, error: 'no repository' });
+    expect(run({ kind: 'commit', base: null, head: 'abc', rootName: 'repo' })).toEqual({ ok: false, error: 'no repository' });
+  });
+
+  it('fails a log of a name that is no commit with the reason', () => {
+    const run = jobRunner({ indexSources, diffSources, GitRepo, worktreeOverlay });
+    run(worktree(history().git));
+
+    const r = run({ kind: 'log', from: 'deadbeef', n: 1 });
+
+    expect(r.ok).toBe(false);
   });
 });
 
@@ -384,7 +469,7 @@ describe('headOf', () => {
       paths: ['pom.xml', 'src/main/java/a/A.java', 'src/main/java/a/New.java'],
       texts: ['', 'package a;\nclass A { void f() { g(); } void g() {} }\n', 'package a;\nclass New extends A {}\n'],
     };
-    const reply = runJob({ kind: 'diff', rootName: 'r', base, head, baseName: 'b', headName: 'h', changed: [] }, wasm);
+    const reply = runJob({ kind: 'diff', rootName: 'r', base, head, baseName: 'b', headName: 'h', changed: [] });
     if (!reply.ok) throw new Error(reply.error);
     const plain = JSON.parse(indexSources(head.paths, head.texts, 'r')).graph as Graph;
     const got = headOf(JSON.parse(reply.graphText) as Graph);

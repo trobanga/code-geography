@@ -12,7 +12,10 @@ export const explorer_view: (a: number, b: number, c: number, d: number, e: numb
 export const gitrepo_addLoose: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
 export const gitrepo_addPack: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
 export const gitrepo_addRef: (a: number, b: number, c: number, d: number, e: number) => void;
+export const gitrepo_commitOverlay: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
+export const gitrepo_log: (a: number, b: number, c: number, d: number, e: number) => void;
 export const gitrepo_new: (a: number, b: number) => number;
+export const gitrepo_resolve: (a: number, b: number, c: number, d: number) => void;
 export const gitrepo_setPackedRefs: (a: number, b: number, c: number) => void;
 export const indexSources: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
 export const isInput: (a: number, b: number) => number;

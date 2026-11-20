@@ -77,7 +77,9 @@ fn inputs(dir: &Path, paths: &[&str]) -> (Vec<String>, Vec<String>) {
 
 fn overlay(dir: &Path, paths: &[&str]) -> Graph {
     let (paths, texts) = inputs(dir, paths);
-    let json = cg_wasm::worktree_overlay(&reader(dir), &paths, &texts, "r").unwrap();
+    let json = cg_wasm::LocalRepo::new(reader(dir))
+        .worktree_overlay(&paths, &texts, "r")
+        .unwrap();
     let value: serde_json::Value = serde_json::from_str(&json).unwrap();
     serde_json::from_value(value["graph"].clone()).unwrap()
 }
@@ -158,7 +160,9 @@ fn the_overlay_carries_the_texts_of_the_inputs_at_head() {
     fs::remove_file(dir.join("src/main/java/p/B.java")).unwrap();
     write(&dir, "src/main/java/p/C.java", "package p;\nclass C {}\n");
     let (paths, texts) = inputs(&dir, &ALL);
-    let json = cg_wasm::worktree_overlay(&reader(&dir), &paths, &texts, "r").unwrap();
+    let json = cg_wasm::LocalRepo::new(reader(&dir))
+        .worktree_overlay(&paths, &texts, "r")
+        .unwrap();
     let value: serde_json::Value = serde_json::from_str(&json).unwrap();
     assert_eq!(
         value["base"],
@@ -209,7 +213,9 @@ fn a_byte_order_mark_that_the_browser_drops_is_no_change() {
         fs::read_to_string(dir.join("pom.xml")).unwrap(),
         "package p;\nclass A {}\n".to_string(),
     ];
-    let json = cg_wasm::worktree_overlay(&reader(&dir), &paths, &texts, "r").unwrap();
+    let json = cg_wasm::LocalRepo::new(reader(&dir))
+        .worktree_overlay(&paths, &texts, "r")
+        .unwrap();
     let value: serde_json::Value = serde_json::from_str(&json).unwrap();
     let graph: Graph = serde_json::from_value(value["graph"].clone()).unwrap();
     assert!(changes(&graph).is_empty());
@@ -243,7 +249,9 @@ fn a_repository_with_no_commit_is_an_error() {
     let dir = repo("unborn");
     write(&dir, "src/main/java/p/A.java", "package p;\nclass A {}\n");
     let (paths, texts) = inputs(&dir, &ALL);
-    let err = cg_wasm::worktree_overlay(&reader(&dir), &paths, &texts, "r").unwrap_err();
+    let err = cg_wasm::LocalRepo::new(reader(&dir))
+        .worktree_overlay(&paths, &texts, "r")
+        .unwrap_err();
     assert!(err.contains("no commit"), "{err}");
     let _ = fs::remove_dir_all(&dir);
 }

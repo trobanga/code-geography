@@ -925,6 +925,17 @@ describe('textReader of a local directory', () => {
     expect(shown(gone.lines)).toEqual(['1 x -', '2 y -']);
   });
 
+  it('names the sides of a commit overlay in its messages', async () => {
+    const read = textReader({
+      head: new Map([['A.java', 'a\n']]),
+      base: new Map([['B.java', 'b\n']]),
+      names: { base: 'bbbbbbb', head: 'hhhhhhh' },
+    });
+
+    await expect(read({ file: 'C.java', span: span(1, 1), change: 'modified' })).rejects.toThrow('no file C.java at hhhhhhh');
+    await expect(read({ file: 'C.java', span: span(1, 1), change: 'removed' })).rejects.toThrow('no file C.java at bbbbbbb');
+  });
+
   it('marks the references of an open declaration, also on lines outside its own', async () => {
     const read = textReader({ head: new Map([['A.java', 'import B;\nclass A {\n  B b;\n}\n']]) });
     const e = { ...edge('A', 'B', 'type_ref'), sites: [{ lines: [1, 3] }] };

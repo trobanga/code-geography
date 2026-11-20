@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { filterBranches, filterCommits, shaOf } from './menuSearch';
+import { filterBranches, filterCommits, rangeOf, shaOf } from './menuSearch';
 import type { CommitRow } from './forgeDiff';
 
 const row = (sha: string, title: string, author = 'Ada', day = '2026-11-01'): CommitRow => ({ sha, short: sha.slice(0, 7), title, author, day, current: false });
@@ -38,6 +38,20 @@ describe('shaOf', () => {
     expect(shaOf('f'.repeat(41))).toBeNull();
     expect(shaOf('decade fix')).toBeNull();
     expect(shaOf('branchy')).toBeNull();
+  });
+});
+
+describe('rangeOf', () => {
+  it('takes A..B with two shas of 7 to 40 hex digits as a range, trimmed and in lower case', () => {
+    expect(rangeOf(' A1B2C3D..' + 'F'.repeat(40) + ' ')).toEqual({ base: 'a1b2c3d', head: 'f'.repeat(40) });
+  });
+
+  it('gives none for A...B, a short sha, a single sha or anything else', () => {
+    expect(rangeOf('a1b2c3d...ffee0011')).toBeNull();
+    expect(rangeOf('a1b2c3..ffee0011')).toBeNull();
+    expect(rangeOf('a1b2c3d..')).toBeNull();
+    expect(rangeOf('a1b2c3d')).toBeNull();
+    expect(rangeOf('main..a1b2c3d')).toBeNull();
   });
 });
 

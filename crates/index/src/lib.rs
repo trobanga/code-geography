@@ -193,7 +193,7 @@ pub struct DiffSpec {
 }
 
 /// Whether two source sets hold the same paths with the same texts, in any order.
-fn same_sources(a: &[SourceFile], b: &[SourceFile]) -> bool {
+pub fn same_sources(a: &[SourceFile], b: &[SourceFile]) -> bool {
     fn set(s: &[SourceFile]) -> std::collections::BTreeMap<&str, &str> {
         s.iter()
             .map(|f| (f.path.as_str(), f.text.as_str()))
@@ -214,11 +214,25 @@ pub fn diff_sources(
     spec: DiffSpec,
 ) -> (Graph, Report) {
     let (after, report) = index_sources(root_name, head);
-    let mut graph = if same_sources(base, head) {
-        cg_core::diff(&after, &after)
+    let graph = if same_sources(base, head) {
+        diff_indexed((base, &after), (head, &after), spec)
     } else {
-        cg_core::diff(&index_sources(root_name, base).0, &after)
+        let (before, _) = index_sources(root_name, base);
+        diff_indexed((base, &before), (head, &after), spec)
     };
+    (graph, report)
+}
+
+/// The overlay of two source sets that are indexed already (`index_sources` of each): what
+/// `diff_sources` does after the indexing, so that a caller can keep an index and use it
+/// again (a list of commits, ADR 0039).
+pub fn diff_indexed(
+    base: (&[SourceFile], &Graph),
+    head: (&[SourceFile], &Graph),
+    spec: DiffSpec,
+) -> Graph {
+    let ((base, before), (head, after)) = (base, head);
+    let mut graph = cg_core::diff(before, after);
     let mut files = cg_core::file_changes(&graph, &spec.changed);
     // The rule of ADR 8 calls `src/blaze/db/api.clj` test code. A file of a `deps.edn`
     // module follows the source directories of its `deps.edn` (ADR 23); a removed file's
@@ -237,7 +251,7 @@ pub fn diff_sources(
         head: spec.head,
         files,
     });
-    (graph, report)
+    graph
 }
 
 /// Which files are test code by the source directories of a `deps.edn` instead of the rule

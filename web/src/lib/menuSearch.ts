@@ -23,6 +23,12 @@ export function shaOf(query: string): string | null {
   return /^[0-9a-f]{7,40}$/.test(q) ? q : null;
 }
 
+/** The query as a range `A..B` of two shas (as `shaOf`); null for anything else, also for `A...B`. */
+export function rangeOf(query: string): { base: string; head: string } | null {
+  const m = /^([0-9a-f]{7,40})\.\.([0-9a-f]{7,40})$/.exec(query.trim().toLowerCase());
+  return m ? { base: m[1], head: m[2] } : null;
+}
+
 /** Alphabetical, capitals not apart; equal names in lower case by code point, so the order is total. */
 const byName = (a: Branch, b: Branch) => {
   const x = a.name.toLowerCase();

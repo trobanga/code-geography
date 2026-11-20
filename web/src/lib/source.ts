@@ -286,6 +286,8 @@ export function sourceReader(d: SourceRepo): ReadSource {
 export interface SourceTexts {
   head: ReadonlyMap<string, string>;
   base?: ReadonlyMap<string, string>;
+  /** The names of the two sides for messages (a commit overlay): `at <name>`. Without: ` at HEAD` for the base, nothing for the head. */
+  names?: { base: string; head: string };
 }
 
 /** The reader of a local directory: the lines of the span, from the texts held; with a base, the marks of the uncommitted changes. */
@@ -294,7 +296,7 @@ export function textReader(t: SourceTexts): ReadSource {
     const text = texts.get(path);
     return text === undefined ? undefined : { key: text, text: async () => text };
   };
-  return readerOf({ head: fileIn(t.head), base: t.base && fileIn(t.base), at: (side) => (side === 'base' ? ' at HEAD' : '') });
+  return readerOf({ head: fileIn(t.head), base: t.base && fileIn(t.base), at: (side) => (t.names ? ` at ${t.names[side]}` : side === 'base' ? ' at HEAD' : '') });
 }
 
 /** One file of one side: what names its content (equal keys, equal texts) and how to read it. */

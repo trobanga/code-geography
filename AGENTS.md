@@ -20,13 +20,14 @@ model. Record each new decision of that weight as a new ADR.
 | view | The result of a cut: visible nodes, nodes that can open, aggregated edges with counts. |
 | focus cut | A cut that folds the children that are not of interest into one placeholder `rest:<container id>` (ADR 0011). |
 | kind fold | A focus cut option (`fold_mixed`): a container with packages and other children, none of interest, shows the packages and folds the rest into `rest:<container id>` (ADR 0019). The viewer always sets it; a click on the placeholder or "+" puts the container into `unfolded`. |
-| overlay | The diff graph of a commit: the union of two graphs with `change` marks, plus the list of changed files (ADR 0009, 0012). For a local repository: the working tree against `HEAD` (ADR 0039). |
+| overlay | The diff graph of a commit: the union of two graphs with `change` marks, plus the list of changed files (ADR 0009, 0012). For a local repository: the working tree against `HEAD` (ADR 0039), a commit against its first parent or a range `A..B` (ADR 0040). |
+| commit list | The commits to pick an overlay from. Forge: the history from the commit shown (ADR 0021). Local repository: the first parents from `HEAD`, 30 a page, below one first row for the uncommitted changes (ADR 0040). |
 | implied line | A line A→C of a view for which the drawn lines hold a path from A to C through another box. The viewer can hide these (`hide implied`, ADR 0026); the graph keeps the edge. |
 | changes together | A viewer option on top of `changes only`: the layout gets the changed lines only and puts the active boxes of each container together, in `layout:` boxes that only the ELK input knows (ADR 0028). Off: the layout stays, the other boxes are dimmed. |
 | selection | The boxes that the developer selected: a click selects one, Shift+click adds or removes one. Lines between two selected boxes are full, lines to the outside weak (dim with `between selected`); `open all` / `close all` works on all of them (ADR 0029). |
 | box search | A field in the toolbar that finds boxes by the words of their name, also in closed containers. Choosing a match opens and unfolds the containers on its path, selects the box and pans to it; a match in test code turns test code on (ADR 0038). |
 | commit context | For an overlay of a forge repository, on demand: the full message of each commit of the overlay, its pull requests and the issue references (`#12`, `owner/repo#12`) read from the message and the pull request bodies, as links. A reference is a guess (ADR 0030). |
-| source view | The panel below the diagram for one or two selected boxes (ADR 0031). One box: its lines (`file`, `span`), or for a module or package the list of its declarations (the topmost nodes with a span below it). Two boxes: the declarations whose edges make their line, each with its targets, from `Explorer.edgesBetween`; an open declaration marks the lines of the sites of these edges and shows the sites outside its own lines below them (ADR 0032). Forge repositories and local directories (the texts of the index, kept in memory); a commit marks its added and removed lines. |
+| source view | The panel below the diagram for one or two selected boxes (ADR 0031). One box: its lines (`file`, `span`), or for a module or package the list of its declarations (the topmost nodes with a span below it). Two boxes: the declarations whose edges make their line, each with its targets, from `Explorer.edgesBetween`; an open declaration marks the lines of the sites of these edges and shows the sites outside its own lines below them (ADR 0032). Forge repositories and local directories (the texts of the index, kept in memory; for a chosen local commit the texts of its two trees, ADR 0040); a commit marks its added and removed lines. |
 | front end | The part that turns the sources of one language into a graph (Java, Rust, Clojure, Elixir, TypeScript). `cg-index` runs all of them. |
 | test code | Code in a source set other than `src/main`; for Clojure, code in a directory that only an alias of `deps.edn` names (ADR 0023); for Elixir, code below the directory `test` of a Mix project (ADR 0035); for TypeScript, a file that Jest and Vitest take as a test by its name (`*.test.ts`, `*.spec.ts`, below `__tests__` or `__mocks__`, ADR 0034). Hidden by default. |
 
@@ -58,8 +59,9 @@ crates/index-typescript  TypeScript front end on tree-sitter: index_sources(root
                    an import reaches (relative paths, tsconfig paths, packages of the repository);
                    is_test_file(path) for the changed files of an overlay
 crates/git         cg-git: a git repository from bytes in memory (HEAD, refs, packed-refs, packs,
-                   loose objects), no file system, builds for wasm32 (ADR 0039): resolve, commit,
-                   files of a tree, blob
+                   loose objects), no file system, builds for wasm32 (ADR 0039): resolve (also an
+                   abbreviated id), commit (with author, date, message), first_parents, files of a
+                   tree, changes between two trees, blob (ADR 0040)
 crates/walk        cg-walk: the one directory walk, read_sources(root, is_input) -> Vec<SourceFile>
                    (the only place with std::fs besides the CLI; used by index-java and index)
 crates/index       cg-index: is_input, index_sources, index(root) over all front ends; joins
@@ -70,7 +72,8 @@ crates/index       cg-index: is_input, index_sources, index(root) over all front
 crates/cli         cg index <repo> -o graph.json; cg diff <repo> <rev|A..B> -o diff.json
 crates/wasm        wasm-bindgen binding of core and the indexers: class Explorer (view, focusView,
                    edgesBetween), indexSources(paths, texts, rootName), diffSources(...), isInput(path),
-                   class GitRepo and worktreeOverlay(repo, paths, texts, rootName) (ADR 0039)
+                   class GitRepo (log, resolve, commitOverlay; LocalRepo keeps the indexed trees of
+                   the last overlay) and worktreeOverlay(repo, paths, texts, rootName) (ADR 0039, 0040)
 scripts/build-wasm.sh   builds crates/wasm into web/src/lib/wasm (generated, committed) with the
                         Cargo profile `wasm` (LTO, opt-level 2, ADR 0039);
                         sets the C include path for the tree-sitter grammars (needs cargo, jq)
@@ -97,11 +100,14 @@ web/src/lib/source.ts  the source view (ADR 0031): sourceView (what a selection 
 web/src/lib/localGit.ts  the .git of a chosen directory (ADR 0039): readGit (the files the reader
                    needs, a note for a work tree or above the limit), filesDir (the fallback input),
                    indexLocal (the overlay against HEAD, else the plain index with a note)
+web/src/lib/localSession.ts  a local repository in the viewer (ADR 0040): the commit list, the overlay
+                   of a commit or a range, the uncommitted entry; its worker (localRepoWorker in
+                   indexProject.ts) holds the GitRepo while the directory is shown
 web/src/lib/cover.ts  the cover of the diagram (the Survey picture) for a level button, "+" and "−": on the
                    screen before the cut of the step, off when its layout is there
 web/src/lib/tokenStore.ts  tokens by origin (session/local storage) and authorized(): the only
                    place that adds a token, refuses any other origin (ADR 0022)
-docs/adr/          architecture decision records (0016: how Rust maps onto the graph, 0023: Clojure, 0034: TypeScript, 0035: Elixir, 0037: Elixir calls, 0039: local git)
+docs/adr/          architecture decision records (0016: how Rust maps onto the graph, 0023: Clojure, 0034: TypeScript, 0035: Elixir, 0037: Elixir calls, 0039: local git, 0040: local commits)
 ```
 
 ## Commands
@@ -280,8 +286,21 @@ and `web/package.json`. The skill `.agents/skills/cut-release` does the steps.
   another call of the same target stays is a removed line without a mark of a reference.
   `merge imports` drops the import that a use covers, with its site. The view of one box
   marks nothing.
-- Local git (ADR 0039): only the overlay of the working tree against `HEAD`; no commit
-  list, no other commit (CG-14). The packs and loose objects of `.git` must fit in 512 MiB
+- Local git (ADR 0039, 0040): the commit list holds the first parents of `HEAD` only: no
+  branch menu, no commit of a merged side branch except through a sha typed into the field;
+  `A..B` but no `A...B` (merge base); no commit context; a chosen commit is not in the link
+  (a reload returns to the start screen). A click on a commit costs two indexes, one for the
+  next commit down the list or the first one after the open, none for the uncommitted entry.
+  The worker holds the repository and two indexed trees while the directory is shown. A
+  commit message in another encoding than UTF-8 (`encoding` header) is read as UTF-8. A
+  shallow clone lists its commits up to the last one it holds; the overlay of that one fails,
+  as its parent is missing (`.git/shallow` is not read). An abbreviated sha that a blob or a
+  tree shares is ambiguous, also where git would take the commit. Opening fts-next (130 880
+  files, 67 MB of `.git`: 15 packs, 8 709 loose objects) through the fallback input in headless
+  Chromium takes 15 s: 11.5 s pass before any code runs, while the browser lists all files for
+  the input, and the 3.0 s after that go to reading `.git` (2.25 s: taking the sizes of the files
+  1.1 s, reading the loose objects 1.0 s, reading the packs 24 ms), building `GitRepo` 22 ms and
+  the overlay 290 ms; the first picture waits for all of it; the picker path was not measured. The packs and loose objects of `.git` must fit in 512 MiB
   together: they are read whole into the memory of the worker; above, the directory opens
   without overlay and with a note. Every loose object is read. A work tree or a submodule
   (`.git` is a file) gives a note: its history lies outside the chosen directory. Not read:

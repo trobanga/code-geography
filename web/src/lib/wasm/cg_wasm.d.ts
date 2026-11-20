@@ -33,9 +33,24 @@ export class GitRepo {
      */
     addRef(name: string, text: string): void;
     /**
+     * `commitOverlay(base, head, rootName)`: JSON of `{graph, report, base, head, indexes}`
+     * with the overlay of the commit `head` against `base` (`undefined`: a root commit).
+     */
+    commitOverlay(base: string | null | undefined, head: string, root_name: string): string;
+    /**
+     * `log(from, n)`: JSON array of `{sha, parents, title, author, date, message}` for the
+     * first-parent history of `from` (default `HEAD`), at most `n` commits.
+     */
+    log(from: string | null | undefined, n: number): string;
+    /**
      * `new GitRepo(head)`: `head` is the text of `.git/HEAD`.
      */
     constructor(head: string);
+    /**
+     * `resolve(name)`: the full id of the commit that `name` names (a ref, `HEAD`, a full or
+     * an abbreviated id); throws for anything else.
+     */
+    resolve(name: string): string;
     /**
      * `setPackedRefs(text)`: the text of `.git/packed-refs`.
      */
@@ -82,7 +97,10 @@ export interface InitOutput {
     readonly gitrepo_addLoose: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly gitrepo_addPack: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly gitrepo_addRef: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly gitrepo_commitOverlay: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
+    readonly gitrepo_log: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly gitrepo_new: (a: number, b: number) => number;
+    readonly gitrepo_resolve: (a: number, b: number, c: number, d: number) => void;
     readonly gitrepo_setPackedRefs: (a: number, b: number, c: number) => void;
     readonly indexSources: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly isInput: (a: number, b: number) => number;

@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { CommitRow } from '../lib/forgeDiff';
-  import { filterCommits, shaOf } from '../lib/menuSearch';
+  import { filterCommits, rangeOf, shaOf } from '../lib/menuSearch';
 
   let {
     rows,
@@ -10,6 +10,9 @@
     onpick,
     onsha,
     onmore,
+    worktree,
+    onrange,
+    asks = 'asks the forge',
   }: {
     /** Commits of update bots (Renovate, Dependabot) that the list leaves out. */
     hidden?: number;
@@ -23,6 +26,12 @@
     /** A full or short sha from the text field that no row of the list has. */
     onsha: (sha: string) => void;
     onmore: () => void;
+    /** A first row for the uncommitted changes of a local repository, shown while the text field is empty. */
+    worktree?: { current: boolean; onpick: () => void };
+    /** A range `A..B` from the text field, for a repository that can compare any two commits. */
+    onrange?: (base: string, head: string) => void;
+    /** How the end of the hint for a sha that is not listed goes on. */
+    asks?: string;
   } = $props();
 
   let query = $state('');
@@ -31,12 +40,15 @@
   const sha = $derived(shaOf(query));
   /** The sha of the text field, if no listed commit has it: the forge is asked for it. */
   const other = $derived(sha !== null && found.length === 0 ? sha : null);
+  /** The text field as a range `A..B`, if `onrange` takes one. */
+  const range = $derived(onrange ? rangeOf(query) : null);
 
   $effect(() => field?.focus());
 
   /** Enter: the commit of the pasted sha, or the only row left. */
   function enter() {
-    if (other) onsha(other);
+    if (range) onrange?.(range.base, range.head);
+    else if (other) onsha(other);
     else if (found.length === 1) onpick(found[0].sha);
   }
 </script>
@@ -65,6 +77,16 @@
     {#if status}
       <div class="text-[var(--muted)]" data-commit-status>{status}</div>
     {/if}
+    {#if worktree && query.trim() === ''}
+      <button
+        class="flex w-full items-baseline gap-3 px-1 text-left hover:bg-[var(--line)] {worktree.current ? 'bg-[var(--line)] font-semibold' : ''}"
+        data-worktree
+        onclick={worktree.onpick}
+      >
+        <span class="min-w-0 flex-1 truncate">uncommitted changes</span>
+        <span class="shrink-0 text-[var(--muted)]">the working tree against HEAD</span>
+      </button>
+    {/if}
     {#if rows}
       <div class="text-[var(--muted)]">
         pick a commit to see its overlay against its first parent{#if hidden > 0}<span class="ml-2" data-hidden-commits>
@@ -88,10 +110,15 @@
           </li>
         {/each}
       </ul>
-      {#if other}
+      {#if range}
+        <button class="w-full px-1 text-left hover:bg-[var(--line)]" data-commit-range onclick={() => onrange?.(range.base, range.head)}>
+          open range <code>{range.base}..{range.head}</code>
+          <span class="text-[var(--muted)]">· the tree of the second against the tree of the first (Enter)</span>
+        </button>
+      {:else if other}
         <button class="w-full px-1 text-left hover:bg-[var(--line)]" data-commit-sha={other} onclick={() => onsha(other)}>
           open commit <code>{other}</code>
-          <span class="text-[var(--muted)]">· not among the {rows.length} commits listed; asks the forge (Enter)</span>
+          <span class="text-[var(--muted)]">· not among the {rows.length} commits listed; {asks} (Enter)</span>
         </button>
       {:else if found.length === 0 && rows.length > 0}
         <div class="text-[var(--muted)]" data-no-commit>no match among the {rows.length} commits listed</div>

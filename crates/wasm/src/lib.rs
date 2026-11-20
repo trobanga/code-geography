@@ -2,7 +2,9 @@
 //! `view` calls with the JSON of a `cg_core::View`.
 
 use cg_core::{Focus, Graph};
-use std::collections::HashSet;
+use serde_json::{Value, json};
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 
 /// A graph and its filtered variants, ready to be cut.
@@ -169,42 +171,232 @@ pub fn diff_sources(
         .map_err(|e| e.to_string())
 }
 
-/// The overlay of the working tree against `HEAD` (ADR 0039): the inputs of the commit at
-/// `HEAD` are the base, `paths` and `texts` (the inputs that the walk read) the head. A file
-/// is changed when its text differs; an input that `HEAD` lacks is `added`, also when git
-/// does not track it. JSON `{graph, report, base}` like `diff_sources`; `base` maps the
-/// path of each input at `HEAD` to its text there, for the source view.
-pub fn worktree_overlay(
-    repo: &cg_git::Repository,
-    paths: &[String],
-    texts: &[String],
-    root_name: &str,
-) -> Result<String, String> {
-    let head = source_files(paths, texts, "paths", "texts")?;
-    let commit = repo
-        .resolve("HEAD")
-        .map_err(|e| format!("no commit at HEAD: {e}"))?;
-    let tree = repo.commit(&commit)?.tree;
-    let base = repo
-        .files(&tree, &walk_lists, &is_input)?
-        .into_iter()
-        .map(|(path, id)| {
-            let text = blob_text(&repo.blob(&id)?);
-            Ok(cg_index::SourceFile { path, text })
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-    let before: serde_json::Map<String, serde_json::Value> = base
-        .iter()
-        .map(|f| (f.path.clone(), f.text.clone().into()))
-        .collect();
-    let spec = cg_index::DiffSpec {
-        base: commit.to_hex_with_len(7).to_string(),
-        head: "working tree".to_string(),
-        changed: text_changes(&base, &head),
-    };
-    let (graph, report) = cg_index::diff_sources(root_name, &base, &head, spec);
-    serde_json::to_string(&serde_json::json!({ "graph": graph, "report": report, "base": before }))
-        .map_err(|e| e.to_string())
+/// A tree of a commit with the index of its inputs.
+struct Indexed {
+    root_name: String,
+    files: Vec<cg_index::SourceFile>,
+    graph: Graph,
+    report: cg_index::Report,
+}
+
+impl Indexed {
+    fn texts(&self) -> serde_json::Map<String, Value> {
+        self.files
+            .iter()
+            .map(|f| (f.path.clone(), f.text.clone().into()))
+            .collect()
+    }
+}
+
+/// A local repository (ADR 0039): the objects of a `.git` and the trees that were indexed
+/// by the last overlay (at most two), so that stepping down a list of commits indexes one
+/// tree per step: the head of one step is the base of the next. The cache is by tree id
+/// and root name.
+pub struct LocalRepo {
+    repo: cg_git::Repository,
+    cache: HashMap<cg_git::Id, Rc<Indexed>>,
+}
+
+impl LocalRepo {
+    pub fn new(repo: cg_git::Repository) -> LocalRepo {
+        LocalRepo {
+            repo,
+            cache: HashMap::new(),
+        }
+    }
+
+    /// The repository, to add refs and objects before the first overlay.
+    pub fn repo_mut(&mut self) -> &mut cg_git::Repository {
+        &mut self.repo
+    }
+
+    /// The first-parent history from `from` (a name `resolve` takes; default `HEAD`), at
+    /// most `n` commits, as a JSON array of `{sha, parents, title, author, date, message}`:
+    /// the `Commit` of `web/src/lib/forge.ts`. The next page starts at the first parent of
+    /// the last commit listed.
+    pub fn log(&self, from: Option<&str>, n: usize) -> Result<String, String> {
+        let from = self.resolve_commit(from.unwrap_or("HEAD"))?;
+        let commits: Vec<Value> = self
+            .repo
+            .first_parents(&from, n)?
+            .into_iter()
+            .map(|(id, commit)| {
+                json!({
+                    "sha": id.to_string(),
+                    "parents": commit.parents.iter().map(|p| p.to_string()).collect::<Vec<_>>(),
+                    "title": commit.message.lines().next().unwrap_or(""),
+                    "author": commit.author,
+                    "date": commit.date,
+                    "message": commit.message,
+                })
+            })
+            .collect();
+        serde_json::to_string(&commits).map_err(|e| e.to_string())
+    }
+
+    /// The full id of the commit that `name` names: a ref, `HEAD`, a full or an abbreviated
+    /// id. An object that is no commit is an error.
+    pub fn resolve(&self, name: &str) -> Result<String, String> {
+        self.resolve_commit(name).map(|id| id.to_string())
+    }
+
+    fn resolve_commit(&self, name: &str) -> Result<cg_git::Id, String> {
+        let id = self.repo.resolve(name)?;
+        self.repo
+            .commit(&id)
+            .map_err(|_| format!("{name} is no commit"))?;
+        Ok(id)
+    }
+
+    /// The files of the tree `tree` that the walk of a directory would read and an indexer
+    /// wants, with their texts as the browser reads a file.
+    fn inputs_of(&self, tree: &cg_git::Id) -> Result<Vec<cg_index::SourceFile>, String> {
+        self.repo
+            .files(tree, &walk_lists, &is_input)?
+            .into_iter()
+            .map(|(path, id)| {
+                let text = blob_text(&self.repo.blob(&id)?);
+                Ok(cg_index::SourceFile { path, text })
+            })
+            .collect()
+    }
+
+    /// The index of the inputs of `tree`: from the cache, else made (`runs` counts it).
+    fn indexed(
+        &self,
+        tree: &cg_git::Id,
+        root_name: &str,
+        runs: &mut u32,
+    ) -> Result<Rc<Indexed>, String> {
+        if let Some(found) = self.cache.get(tree).filter(|i| i.root_name == root_name) {
+            return Ok(Rc::clone(found));
+        }
+        let files = self.inputs_of(tree)?;
+        Ok(Rc::new(index_files(root_name, files, runs)))
+    }
+
+    /// The overlay of the commit `head` against the commit `base` (None: against nothing, for
+    /// a root commit), as JSON `{graph, report, base, head, indexes}`: `base` and `head` map
+    /// the path of each input at that commit to its text, for the source view; `indexes` is
+    /// how many times the indexers ran for this call (a tree that the last overlay indexed is
+    /// not indexed again). The names are the first 7 digits of the ids (`none` for no base).
+    /// The report is the one of the head.
+    pub fn commit_overlay(
+        &mut self,
+        base: Option<&str>,
+        head: &str,
+        root_name: &str,
+    ) -> Result<String, String> {
+        let head_id = self.resolve_commit(head)?;
+        let base_id = base.map(|name| self.resolve_commit(name)).transpose()?;
+        let head_tree = self.repo.commit(&head_id)?.tree;
+        let base_tree = base_id
+            .map(|id| self.repo.commit(&id).map(|c| c.tree))
+            .transpose()?;
+        let mut runs = 0;
+        let after = self.indexed(&head_tree, root_name, &mut runs)?;
+        let before = match &base_tree {
+            Some(tree) if *tree == head_tree => Rc::clone(&after),
+            Some(tree) => self.indexed(tree, root_name, &mut runs)?,
+            None => Rc::new(index_files(root_name, Vec::new(), &mut runs)),
+        };
+        let changed = self
+            .repo
+            .changes(base_tree.as_ref(), &head_tree)?
+            .into_iter()
+            .map(|(path, change)| {
+                let change = match change {
+                    cg_git::Change::Added => cg_core::Change::Added,
+                    cg_git::Change::Removed => cg_core::Change::Removed,
+                    cg_git::Change::Modified => cg_core::Change::Modified,
+                };
+                (path, change)
+            })
+            .collect();
+        let spec = cg_index::DiffSpec {
+            base: base_id.map_or("none".to_string(), |id| id.to_hex_with_len(7).to_string()),
+            head: head_id.to_hex_with_len(7).to_string(),
+            changed,
+        };
+        let graph = cg_index::diff_indexed(
+            (&before.files, &before.graph),
+            (&after.files, &after.graph),
+            spec,
+        );
+        let answer = serde_json::to_string(&json!({
+            "graph": graph,
+            "report": after.report,
+            "base": before.texts(),
+            "head": after.texts(),
+            "indexes": runs,
+        }))
+        .map_err(|e| e.to_string())?;
+        self.cache.clear();
+        self.cache.insert(head_tree, after);
+        if let Some(tree) = base_tree {
+            self.cache.insert(tree, before);
+        }
+        Ok(answer)
+    }
+
+    /// The overlay of the working tree against `HEAD` (ADR 0039): the inputs of the commit
+    /// at `HEAD` are the base, `paths` and `texts` (the inputs that the walk read) the head.
+    /// A file is changed when its text differs; an input that `HEAD` lacks is `added`, also
+    /// when it is not tracked. JSON `{graph, report, base, indexes}` like `diff_sources`;
+    /// `base` maps the path of each input at `HEAD` to its text there, for the source view;
+    /// `indexes` is as for `commit_overlay` (a working tree equal to `HEAD` is indexed once).
+    pub fn worktree_overlay(
+        &mut self,
+        paths: &[String],
+        texts: &[String],
+        root_name: &str,
+    ) -> Result<String, String> {
+        let head = source_files(paths, texts, "paths", "texts")?;
+        let commit = self
+            .repo
+            .resolve("HEAD")
+            .map_err(|e| format!("no commit at HEAD: {e}"))?;
+        let tree = self.repo.commit(&commit)?.tree;
+        let mut runs = 0;
+        let before = self.indexed(&tree, root_name, &mut runs)?;
+        let after = if cg_index::same_sources(&before.files, &head) {
+            None
+        } else {
+            Some(index_files(root_name, head, &mut runs))
+        };
+        let (files, graph, report) = match &after {
+            Some(i) => (&i.files, &i.graph, &i.report),
+            None => (&before.files, &before.graph, &before.report),
+        };
+        let spec = cg_index::DiffSpec {
+            base: commit.to_hex_with_len(7).to_string(),
+            head: "working tree".to_string(),
+            changed: text_changes(&before.files, files),
+        };
+        let overlay = cg_index::diff_indexed((&before.files, &before.graph), (files, graph), spec);
+        let answer = serde_json::to_string(&json!({
+            "graph": overlay,
+            "report": report,
+            "base": before.texts(),
+            "indexes": runs,
+        }))
+        .map_err(|e| e.to_string())?;
+        self.cache.clear();
+        self.cache.insert(tree, before);
+        Ok(answer)
+    }
+}
+
+/// Indexes `files`; `runs` counts it.
+fn index_files(root_name: &str, files: Vec<cg_index::SourceFile>, runs: &mut u32) -> Indexed {
+    *runs += 1;
+    let (graph, report) = cg_index::index_sources(root_name, &files);
+    Indexed {
+        root_name: root_name.to_string(),
+        files,
+        graph,
+        report,
+    }
 }
 
 /// Whether the walk of a chosen directory (`web/src/lib/walk.ts`) lists the directory
@@ -323,38 +515,70 @@ impl JsExplorer {
 /// The JavaScript class `GitRepo`: a repository built from the files of its `.git`
 /// (ADR 0039). See `cg_git::Repository`.
 #[wasm_bindgen(js_name = GitRepo)]
-pub struct JsGitRepo(cg_git::Repository);
+pub struct JsGitRepo(LocalRepo);
 
 #[wasm_bindgen(js_class = GitRepo)]
 impl JsGitRepo {
     /// `new GitRepo(head)`: `head` is the text of `.git/HEAD`.
     #[wasm_bindgen(constructor)]
     pub fn new(head: &str) -> JsGitRepo {
-        JsGitRepo(cg_git::Repository::new(head))
+        JsGitRepo(LocalRepo::new(cg_git::Repository::new(head)))
     }
 
     /// `addRef(name, text)`: a file below `.git/refs`, `name` from `.git` (`refs/heads/main`).
     #[wasm_bindgen(js_name = addRef)]
     pub fn add_ref(&mut self, name: &str, text: &str) {
-        self.0.add_ref(name, text);
+        self.0.repo_mut().add_ref(name, text);
     }
 
     /// `setPackedRefs(text)`: the text of `.git/packed-refs`.
     #[wasm_bindgen(js_name = setPackedRefs)]
     pub fn set_packed_refs(&mut self, text: &str) {
-        self.0.set_packed_refs(text);
+        self.0.repo_mut().set_packed_refs(text);
     }
 
     /// `addPack(index, data)`: a `.idx` file and its `.pack` file; throws on a broken pack.
     #[wasm_bindgen(js_name = addPack)]
     pub fn add_pack(&mut self, index: Vec<u8>, data: Vec<u8>) -> Result<(), JsError> {
-        self.0.add_pack(index, data).map_err(|e| JsError::new(&e))
+        self.0
+            .repo_mut()
+            .add_pack(index, data)
+            .map_err(|e| JsError::new(&e))
     }
 
     /// `addLoose(id, bytes)`: the file `.git/objects/xx/yyyy…` with `id` = `xxyyyy…`.
     #[wasm_bindgen(js_name = addLoose)]
     pub fn add_loose(&mut self, id: &str, bytes: Vec<u8>) -> Result<(), JsError> {
-        self.0.add_loose(id, bytes).map_err(|e| JsError::new(&e))
+        self.0
+            .repo_mut()
+            .add_loose(id, bytes)
+            .map_err(|e| JsError::new(&e))
+    }
+
+    /// `log(from, n)`: JSON array of `{sha, parents, title, author, date, message}` for the
+    /// first-parent history of `from` (default `HEAD`), at most `n` commits.
+    pub fn log(&self, from: Option<String>, n: usize) -> Result<String, JsError> {
+        self.0.log(from.as_deref(), n).map_err(|e| JsError::new(&e))
+    }
+
+    /// `resolve(name)`: the full id of the commit that `name` names (a ref, `HEAD`, a full or
+    /// an abbreviated id); throws for anything else.
+    pub fn resolve(&self, name: &str) -> Result<String, JsError> {
+        self.0.resolve(name).map_err(|e| JsError::new(&e))
+    }
+
+    /// `commitOverlay(base, head, rootName)`: JSON of `{graph, report, base, head, indexes}`
+    /// with the overlay of the commit `head` against `base` (`undefined`: a root commit).
+    #[wasm_bindgen(js_name = commitOverlay)]
+    pub fn commit_overlay(
+        &mut self,
+        base: Option<String>,
+        head: &str,
+        root_name: &str,
+    ) -> Result<String, JsError> {
+        self.0
+            .commit_overlay(base.as_deref(), head, root_name)
+            .map_err(|e| JsError::new(&e))
     }
 }
 
@@ -362,12 +586,14 @@ impl JsGitRepo {
 /// overlay of the working tree against `HEAD`; throws when git cannot give `HEAD`.
 #[wasm_bindgen(js_name = worktreeOverlay)]
 pub fn js_worktree_overlay(
-    repo: &JsGitRepo,
+    repo: &mut JsGitRepo,
     paths: Vec<String>,
     texts: Vec<String>,
     root_name: &str,
 ) -> Result<String, JsError> {
-    worktree_overlay(&repo.0, &paths, &texts, root_name).map_err(|message| JsError::new(&message))
+    repo.0
+        .worktree_overlay(&paths, &texts, root_name)
+        .map_err(|message| JsError::new(&message))
 }
 
 /// `diffSources(basePaths, baseTexts, headPaths, headTexts, rootName, baseName, headName,

@@ -90,4 +90,4 @@ read the git objects in WASM with `gix` crates, not with a JavaScript library.
 - A work tree of this repository's agents (`.claude/worktrees/…`) gives the note, not an
   overlay.
 - Only the overlay against `HEAD`: the commit list and the overlay of a chosen commit of a
-  local repository are CG-14.
+  local repository are CG-14 (ADR 0040).
