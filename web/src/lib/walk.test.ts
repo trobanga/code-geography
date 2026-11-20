@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fromEntry, fromHandle, isCancel, walkInputs, type DirEntry, type DirHandle, type FileEntry, type Readable, type WalkDir, type WalkEntry } from './walk';
+import { collectDir, collectFiles, fromEntry, fromHandle, isCancel, walkInputs, type DirEntry, type DirHandle, type FileEntry, type FileLike, type WalkDir, type WalkEntry } from './walk';
 
 // The rule of the indexer (`is_input` in crates/index-java), written here only as a test double.
 const isInput = (p: string) => {
@@ -17,7 +17,7 @@ function fakeDir(name: string, tree: Tree, opened: string[] = [], at = name): Wa
     async *entries(): AsyncIterable<WalkEntry> {
       opened.push(at);
       for (const [n, v] of Object.entries(tree)) {
-        if (typeof v === 'string') yield { kind: 'file', name: n, text: async () => v };
+        if (typeof v === 'string') yield { kind: 'file', name: n, text: async () => v, open: async () => new Blob([v]) };
         else yield { kind: 'directory', ...fakeDir(n, v, opened, `${at}/${n}`) };
       }
     },
@@ -56,7 +56,7 @@ function fakeHandle(name: string, tree: Tree): DirHandle {
     name,
     async *values() {
       for (const [n, v] of Object.entries(tree)) {
-        if (typeof v === 'string') yield { kind: 'file' as const, name: n, getFile: async () => ({ text: async () => v }) };
+        if (typeof v === 'string') yield { kind: 'file' as const, name: n, getFile: async () => new Blob([v]) };
         else yield fakeHandle(n, v);
       }
     },
@@ -80,7 +80,7 @@ function fakeEntry(name: string, tree: Tree): DirEntry {
     createReader() {
       const all: (DirEntry | FileEntry)[] = Object.entries(tree).map(([n, v]) =>
         typeof v === 'string'
-          ? { name: n, file: (ok: (f: Readable) => void) => setTimeout(() => ok({ text: async () => v })) }
+          ? { name: n, file: (ok: (f: FileLike) => void) => setTimeout(() => ok(new Blob([v]))) }
           : fakeEntry(n, v),
       );
       return { readEntries: (ok: (es: (DirEntry | FileEntry)[]) => void) => setTimeout(() => ok(all.splice(0, 2))) };
@@ -103,5 +103,30 @@ describe('isCancel', () => {
     expect(isCancel(new DOMException('The user aborted a request.', 'AbortError'))).toBe(true);
     expect(isCancel(new DOMException('denied', 'NotAllowedError'))).toBe(false);
     expect(isCancel(new Error('AbortError'))).toBe(false);
+  });
+});
+
+describe('collectFiles', () => {
+  it('gives the inputs and reads .git from the files that the fallback input listed', async () => {
+    const file = (path: string, text: string) => Object.assign(new File([text], path.split('/').pop()!), { webkitRelativePath: path });
+    const collect = collectFiles([file('repo/.git', 'gitdir: /elsewhere/.git/worktrees/repo\n'), file('repo/src/A.java', 'class A {}')]);
+
+    const chosen = await collect(isInput, () => {});
+
+    expect(chosen.inputs.map((i) => i.path)).toEqual(['src/A.java']);
+    expect(await chosen.git()).toMatchObject({ kind: 'note', note: expect.stringContaining('/elsewhere/.git/worktrees/repo') });
+  });
+});
+
+describe('collectDir', () => {
+  it('reads .git of the directory it walks, with the bytes of a loose object through open', async () => {
+    const id = 'ab' + 'c'.repeat(38);
+    const objects = { [id.slice(0, 2)]: { [id.slice(2)]: 'zz' } };
+    const dir = fakeDir('repo', { '.git': { HEAD: 'ref: refs/heads/main\n', objects }, src: { 'A.java': 'class A {}' } });
+
+    const chosen = await collectDir(dir)(isInput, () => {});
+
+    expect(chosen.inputs.map((i) => i.path)).toEqual(['src/A.java']);
+    expect(await chosen.git()).toMatchObject({ kind: 'repo', files: { loose: [{ id, bytes: new TextEncoder().encode('zz') }] } });
   });
 });

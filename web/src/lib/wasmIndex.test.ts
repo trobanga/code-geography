@@ -2,10 +2,14 @@
 // Loads the generated .wasm from disk, as the browser would load it over HTTP.
 // @ts-ignore The project has no @types/node; this test is the only file that reads from disk.
 import { readFileSync } from 'node:fs';
+// @ts-ignore As above: git objects are SHA-1 named zlib streams.
+import { createHash } from 'node:crypto';
+// @ts-ignore As above.
+import { deflateSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
-import { Explorer, diffSources, indexSources, initSync, isInput } from './wasm/cg_wasm.js';
+import { Explorer, GitRepo, diffSources, indexSources, initSync, isInput, worktreeOverlay } from './wasm/cg_wasm.js';
 import type { Graph, GraphEdge, View } from './types';
-import { runJob } from './workerJob';
+import { runJob, worktreeOf } from './workerJob';
 import { headOf } from './commit';
 import { textReader } from './source';
 
@@ -268,7 +272,7 @@ describe('the indexer in WASM', () => {
   });
 });
 
-const wasm = { indexSources, diffSources };
+const wasm = { indexSources, diffSources, worktreeOverlay: worktreeOf(GitRepo, worktreeOverlay) };
 
 describe('runJob', () => {
   it('builds the overlay of two source sets with the changed files', () => {
@@ -295,6 +299,78 @@ describe('runJob', () => {
     expect(g.diff).toMatchObject({ base: 'aaaaaaa', head: 'bbbbbbb' });
     expect(g.diff?.files?.map((f) => f.path)).toEqual(['README.md', 'src/main/java/a/A.java', 'src/main/java/a/B.java']);
     expect(reply.report.calls).toBeDefined();
+  });
+});
+
+/** A loose object as git writes it: zlib around `<kind> <size>\0<content>`, named by the SHA-1 of the uncompressed bytes. */
+function loose(kind: string, content: Uint8Array): { id: string; bytes: Uint8Array } {
+  const raw = new Uint8Array([...new TextEncoder().encode(`${kind} ${content.length}\0`), ...content]);
+  return { id: createHash('sha1').update(raw).digest('hex'), bytes: new Uint8Array(deflateSync(raw)) };
+}
+
+/** The loose objects of a commit with the files `files` (path → text); the commit is the first. */
+function commitOf(files: [string, string][]) {
+  const objects: { id: string; bytes: Uint8Array }[] = [];
+  const hexBytes = (hex: string) => new Uint8Array(hex.match(/../g)!.map((h) => parseInt(h, 16)));
+  type Dir = Map<string, Dir | string>;
+  const root: Dir = new Map();
+  for (const [path, text] of files) {
+    const parts = path.split('/');
+    let at = root;
+    for (const d of parts.slice(0, -1)) at = (at.get(d) as Dir | undefined) ?? (at.set(d, new Map()), at.get(d) as Dir);
+    at.set(parts[parts.length - 1], text);
+  }
+  const write = (dir: Dir): string => {
+    const entries = [...dir].map(([name, v]) => {
+      const o = typeof v === 'string' ? loose('blob', new TextEncoder().encode(v)) : null;
+      if (o) objects.push(o);
+      return { name, mode: o ? '100644' : '40000', id: o ? o.id : write(v as Dir), dir: !o };
+    });
+    // git sorts a directory as if its name ended in `/`.
+    entries.sort((a, b) => ((a.dir ? a.name + '/' : a.name) < (b.dir ? b.name + '/' : b.name) ? -1 : 1));
+    const body = entries.flatMap((e) => [...new TextEncoder().encode(`${e.mode} ${e.name}\0`), ...hexBytes(e.id)]);
+    const tree = loose('tree', new Uint8Array(body));
+    objects.push(tree);
+    return tree.id;
+  };
+  const tree = write(root);
+  const commit = loose('commit', new TextEncoder().encode(`tree ${tree}\nauthor T <t@x> 0 +0000\ncommitter T <t@x> 0 +0000\n\none\n`));
+  return [commit, ...objects];
+}
+
+describe('runJob of a worktree', () => {
+  it('reads HEAD from the loose objects and builds the overlay of the working tree, with the texts at HEAD', () => {
+    const objects = commitOf([
+      ['pom.xml', ''],
+      ['src/main/java/a/A.java', 'package a;\nclass A {}\n'],
+      ['src/main/java/a/Gone.java', 'package a;\nclass Gone {}\n'],
+    ]);
+    const git = { head: 'ref: refs/heads/main\n', refs: [{ name: 'refs/heads/main', text: `${objects[0].id}\n` }], packedRefs: null, packs: [], loose: objects };
+    const reply = runJob(
+      {
+        kind: 'worktree',
+        rootName: 'repo',
+        paths: ['pom.xml', 'src/main/java/a/A.java', 'src/main/java/a/New.java'],
+        texts: ['', 'package a;\nclass A { int x; }\n', 'package a;\nclass New {}\n'],
+        git,
+      },
+      wasm,
+    );
+    if (!reply.ok) throw new Error(reply.error);
+    const g = JSON.parse(reply.graphText) as Graph;
+    expect(g.diff).toMatchObject({ base: objects[0].id.slice(0, 7), head: 'working tree' });
+    expect(g.diff?.files?.map((f) => [f.path, f.change])).toEqual([
+      ['src/main/java/a/A.java', 'modified'],
+      ['src/main/java/a/Gone.java', 'removed'],
+      ['src/main/java/a/New.java', 'added'],
+    ]);
+    expect(reply.base?.['src/main/java/a/A.java']).toBe('package a;\nclass A {}\n');
+  });
+
+  it('fails with the reason when HEAD names no commit', () => {
+    const git = { head: 'ref: refs/heads/main\n', refs: [], packedRefs: null, packs: [], loose: [] };
+    const reply = runJob({ kind: 'worktree', rootName: 'repo', paths: [], texts: [], git }, wasm);
+    expect(reply).toEqual({ ok: false, error: 'no commit at HEAD: no ref refs/heads/main' });
   });
 });
 

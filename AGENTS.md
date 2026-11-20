@@ -20,7 +20,7 @@ model. Record each new decision of that weight as a new ADR.
 | view | The result of a cut: visible nodes, nodes that can open, aggregated edges with counts. |
 | focus cut | A cut that folds the children that are not of interest into one placeholder `rest:<container id>` (ADR 0011). |
 | kind fold | A focus cut option (`fold_mixed`): a container with packages and other children, none of interest, shows the packages and folds the rest into `rest:<container id>` (ADR 0019). The viewer always sets it; a click on the placeholder or "+" puts the container into `unfolded`. |
-| overlay | The diff graph of a commit: the union of two graphs with `change` marks, plus the list of changed files (ADR 0009, 0012). |
+| overlay | The diff graph of a commit: the union of two graphs with `change` marks, plus the list of changed files (ADR 0009, 0012). For a local repository: the working tree against `HEAD` (ADR 0039). |
 | implied line | A line A→C of a view for which the drawn lines hold a path from A to C through another box. The viewer can hide these (`hide implied`, ADR 0026); the graph keeps the edge. |
 | changes together | A viewer option on top of `changes only`: the layout gets the changed lines only and puts the active boxes of each container together, in `layout:` boxes that only the ELK input knows (ADR 0028). Off: the layout stays, the other boxes are dimmed. |
 | selection | The boxes that the developer selected: a click selects one, Shift+click adds or removes one. Lines between two selected boxes are full, lines to the outside weak (dim with `between selected`); `open all` / `close all` works on all of them (ADR 0029). |
@@ -57,6 +57,9 @@ crates/index-typescript  TypeScript front end on tree-sitter: index_sources(root
                    resolve.rs: what the specifier of
                    an import reaches (relative paths, tsconfig paths, packages of the repository);
                    is_test_file(path) for the changed files of an overlay
+crates/git         cg-git: a git repository from bytes in memory (HEAD, refs, packed-refs, packs,
+                   loose objects), no file system, builds for wasm32 (ADR 0039): resolve, commit,
+                   files of a tree, blob
 crates/walk        cg-walk: the one directory walk, read_sources(root, is_input) -> Vec<SourceFile>
                    (the only place with std::fs besides the CLI; used by index-java and index)
 crates/index       cg-index: is_input, index_sources, index(root) over all front ends; joins
@@ -66,8 +69,10 @@ crates/index       cg-index: is_input, index_sources, index(root) over all front
                    (CLI and WASM share it)
 crates/cli         cg index <repo> -o graph.json; cg diff <repo> <rev|A..B> -o diff.json
 crates/wasm        wasm-bindgen binding of core and the indexers: class Explorer (view, focusView,
-                   edgesBetween), indexSources(paths, texts, rootName), diffSources(...), isInput(path)
-scripts/build-wasm.sh   builds crates/wasm into web/src/lib/wasm (generated, committed);
+                   edgesBetween), indexSources(paths, texts, rootName), diffSources(...), isInput(path),
+                   class GitRepo and worktreeOverlay(repo, paths, texts, rootName) (ADR 0039)
+scripts/build-wasm.sh   builds crates/wasm into web/src/lib/wasm (generated, committed) with the
+                        Cargo profile `wasm` (LTO, opt-level 2, ADR 0039);
                         sets the C include path for the tree-sitter grammars (needs cargo, jq)
 web/               viewer: Svelte 5, Tailwind 4, ELK layout in a web worker, plain SVG
 web/src/lib/forge.ts   opens a repository of a forge: pool, cache by blob sha, progress (ADR 0020);
@@ -89,11 +94,14 @@ web/src/lib/source.ts  the source view (ADR 0031): sourceView (what a selection 
                    withRefs (the sites of edges on shown lines), readDeclaration (the lines of a
                    declaration and the sites outside them), openable (whether a row opens), ADR 0032;
                    SourcePanel.svelte, SourceList.svelte and SourceCode.svelte show it
+web/src/lib/localGit.ts  the .git of a chosen directory (ADR 0039): readGit (the files the reader
+                   needs, a note for a work tree or above the limit), filesDir (the fallback input),
+                   indexLocal (the overlay against HEAD, else the plain index with a note)
 web/src/lib/cover.ts  the cover of the diagram (the Survey picture) for a level button, "+" and "−": on the
                    screen before the cut of the step, off when its layout is there
 web/src/lib/tokenStore.ts  tokens by origin (session/local storage) and authorized(): the only
                    place that adds a token, refuses any other origin (ADR 0022)
-docs/adr/          architecture decision records (0016: how Rust maps onto the graph, 0023: Clojure, 0034: TypeScript, 0035: Elixir, 0037: Elixir calls)
+docs/adr/          architecture decision records (0016: how Rust maps onto the graph, 0023: Clojure, 0034: TypeScript, 0035: Elixir, 0037: Elixir calls, 0039: local git)
 ```
 
 ## Commands
@@ -103,7 +111,8 @@ cargo test --workspace
 cargo clippy --workspace --all-targets      # must be free of warnings
 cargo fmt --all --check
 cargo build -p cg-core --target wasm32-unknown-unknown   # core must stay free of I/O
-scripts/build-wasm.sh                        # after each change in crates/core, index-java or wasm
+cargo build -p cg-git --target wasm32-unknown-unknown    # so must the git reader
+scripts/build-wasm.sh                        # after each change in crates/core, the index crates, git or wasm
 cargo run --release -p cg -- index <repo> -o web/public/graph.json
 
 cd web
@@ -271,5 +280,15 @@ and `web/package.json`. The skill `.agents/skills/cut-release` does the steps.
   another call of the same target stays is a removed line without a mark of a reference.
   `merge imports` drops the import that a use covers, with its site. The view of one box
   marks nothing.
+- Local git (ADR 0039): only the overlay of the working tree against `HEAD`; no commit
+  list, no other commit (CG-14). The packs and loose objects of `.git` must fit in 512 MiB
+  together: they are read whole into the memory of the worker; above, the directory opens
+  without overlay and with a note. Every loose object is read. A work tree or a submodule
+  (`.git` is a file) gives a note: its history lies outside the chosen directory. Not read:
+  `.gitignore` (an untracked input is `added`), `alternates`, `.gitattributes`, LFS, the
+  index (staged and unstaged changes are one). CRLF in the working tree against LF blobs
+  shows the file as modified. SHA-1 repositories only. A delta base outside its pack is an
+  error. The File System Access API path and the fallback input were checked with fakes and
+  on disk through Node, not in a browser.
 - Local classes and members of anonymous classes get no node.
 - A rename of a type or method looks like one removal and one addition.

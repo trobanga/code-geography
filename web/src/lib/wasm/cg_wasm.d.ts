@@ -14,6 +14,35 @@ export class Explorer {
 }
 
 /**
+ * The JavaScript class `GitRepo`: a repository built from the files of its `.git`
+ * (ADR 0039). See `cg_git::Repository`.
+ */
+export class GitRepo {
+    free(): void;
+    [Symbol.dispose](): void;
+    /**
+     * `addLoose(id, bytes)`: the file `.git/objects/xx/yyyy…` with `id` = `xxyyyy…`.
+     */
+    addLoose(id: string, bytes: Uint8Array): void;
+    /**
+     * `addPack(index, data)`: a `.idx` file and its `.pack` file; throws on a broken pack.
+     */
+    addPack(index: Uint8Array, data: Uint8Array): void;
+    /**
+     * `addRef(name, text)`: a file below `.git/refs`, `name` from `.git` (`refs/heads/main`).
+     */
+    addRef(name: string, text: string): void;
+    /**
+     * `new GitRepo(head)`: `head` is the text of `.git/HEAD`.
+     */
+    constructor(head: string);
+    /**
+     * `setPackedRefs(text)`: the text of `.git/packed-refs`.
+     */
+    setPackedRefs(text: string): void;
+}
+
+/**
  * `diffSources(basePaths, baseTexts, headPaths, headTexts, rootName, baseName, headName,
  * changedPaths, changedKinds)`: JSON of `{graph, report}` with the overlay graph; throws
  * when two parallel arrays differ in length or a kind is not `added`, `removed` or
@@ -32,27 +61,40 @@ export function indexSources(paths: string[], texts: string[], root_name: string
  */
 export function isInput(path: string): boolean;
 
+/**
+ * `worktreeOverlay(repo, paths, texts, rootName)`: JSON of `{graph, report, base}` with the
+ * overlay of the working tree against `HEAD`; throws when git cannot give `HEAD`.
+ */
+export function worktreeOverlay(repo: GitRepo, paths: string[], texts: string[], root_name: string): string;
+
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly memcmp: (a: number, b: number, c: number) => number;
     readonly __wbg_explorer_free: (a: number, b: number) => void;
-    readonly diffSources: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number) => [number, number, number, number];
-    readonly explorer_edgesBetween: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
-    readonly explorer_focusView: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number];
-    readonly explorer_new: (a: number, b: number) => [number, number, number];
-    readonly explorer_view: (a: number, b: number, c: number, d: number, e: number) => [number, number];
-    readonly indexSources: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
+    readonly __wbg_gitrepo_free: (a: number, b: number) => void;
+    readonly diffSources: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number) => void;
+    readonly explorer_edgesBetween: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
+    readonly explorer_focusView: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number) => void;
+    readonly explorer_new: (a: number, b: number, c: number) => void;
+    readonly explorer_view: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
+    readonly gitrepo_addLoose: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
+    readonly gitrepo_addPack: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
+    readonly gitrepo_addRef: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly gitrepo_new: (a: number, b: number) => number;
+    readonly gitrepo_setPackedRefs: (a: number, b: number, c: number) => void;
+    readonly indexSources: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly isInput: (a: number, b: number) => number;
+    readonly worktreeOverlay: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
+    readonly strlen: (a: number) => number;
+    readonly free: (a: number) => void;
+    readonly malloc: (a: number) => number;
     readonly iswspace: (a: number) => number;
     readonly iswalpha: (a: number) => number;
     readonly iswdigit: (a: number) => number;
     readonly calloc: (a: number, b: number) => number;
-    readonly free: (a: number) => void;
-    readonly strlen: (a: number) => number;
     readonly abort: () => void;
-    readonly malloc: (a: number) => number;
     readonly realloc: (a: number, b: number) => number;
     readonly strncmp: (a: number, b: number, c: number) => number;
     readonly memchr: (a: number, b: number, c: number) => number;
@@ -71,13 +113,10 @@ export interface InitOutput {
     readonly iswupper: (a: number) => number;
     readonly towlower: (a: number) => number;
     readonly iswxdigit: (a: number) => number;
-    readonly __wbindgen_malloc: (a: number, b: number) => number;
-    readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
-    readonly __wbindgen_externrefs: WebAssembly.Table;
-    readonly __externref_table_alloc: () => number;
-    readonly __externref_table_dealloc: (a: number) => void;
-    readonly __wbindgen_free: (a: number, b: number, c: number) => void;
-    readonly __wbindgen_start: () => void;
+    readonly __wbindgen_export: (a: number, b: number) => number;
+    readonly __wbindgen_export2: (a: number, b: number, c: number, d: number) => number;
+    readonly __wbindgen_add_to_stack_pointer: (a: number) => number;
+    readonly __wbindgen_export3: (a: number, b: number, c: number) => void;
 }
 
 export type SyncInitInput = BufferSource | WebAssembly.Module;

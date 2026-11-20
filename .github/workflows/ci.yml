@@ -32,6 +32,8 @@ jobs:
       - run: cargo test --workspace
       # crates/core must stay free of I/O.
       - run: cargo build -p cg-core --target wasm32-unknown-unknown
+      # crates/git reads git from bytes in memory, no file system (ADR 0039).
+      - run: cargo build -p cg-git --target wasm32-unknown-unknown
 
   web:
     runs-on: ubuntu-latest

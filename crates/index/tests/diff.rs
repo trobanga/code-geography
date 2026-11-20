@@ -543,3 +543,39 @@ fn a_changed_typescript_file_is_test_code_by_its_name_not_by_the_directory_src()
         ]
     );
 }
+
+/// Equal source sets (a clean working tree, ADR 0039) give the overlay of the graph with
+/// itself: no marks, the names and the files of the spec, the report of the head.
+#[test]
+fn equal_source_sets_give_the_overlay_of_the_graph_with_itself() {
+    let sub = "package a;\nclass Sub extends Base {\n    int two() { return one(); }\n}\n";
+    let base = [
+        source("pom.xml", ""),
+        source("src/main/java/a/Base.java", BASE),
+        source("src/main/java/a/Sub.java", sub),
+    ];
+    // Another order: the sides are sets.
+    let head = [base[2].clone(), base[0].clone(), base[1].clone()];
+    let spec = DiffSpec {
+        base: "abc1234".into(),
+        head: "working tree".into(),
+        changed: changed(&[("README.md", Change::Modified)]),
+    };
+
+    let (graph, report) = diff_sources("repo", &base, &head, spec);
+
+    let (plain, plain_report) = cg_index::index_sources("repo", &head);
+    let itself = cg_core::diff(&plain, &plain);
+    assert_eq!(graph.nodes, itself.nodes);
+    assert_eq!(graph.edges, itself.edges);
+    assert!(graph.nodes.iter().all(|n| n.change.is_none()));
+    let diff = graph.diff.unwrap();
+    assert_eq!(
+        (diff.base.as_str(), diff.head.as_str(), diff.files.len()),
+        ("abc1234", "working tree", 1)
+    );
+    assert_eq!(
+        serde_json::to_value(&report).unwrap(),
+        serde_json::to_value(&plain_report).unwrap()
+    );
+}

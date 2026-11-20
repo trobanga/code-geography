@@ -44,11 +44,12 @@
   import { forgeSession, NO_FORGE, shaOf, shownBase, type ForgeState } from './lib/forgeSession';
   import { forgeOfRepo, parseSource } from './lib/forges';
   import { tokenStore, type TokenField } from './lib/tokenStore';
-  import { diffInWorker, indexInWorker } from './lib/indexProject';
+  import { diffInWorker, indexInWorker, worktreeInWorker } from './lib/indexProject';
+  import { indexLocal } from './lib/localGit';
   import { inputError, summarize, type Summary } from './lib/project';
   import { collectDir, fromEntry, type Collect, type DirEntry } from './lib/walk';
   import { runLayout, type Layout } from './lib/layout';
-  import { sourceReader, textReader } from './lib/source';
+  import { sourceReader, textReader, type SourceTexts } from './lib/source';
   import type { Graph, GraphEdge, Level, View } from './lib/types';
   import init, { Explorer, isInput } from './lib/wasm/cg_wasm.js';
 
@@ -228,7 +229,7 @@
   const sourceRepo = $derived(fs.repo);
   const sourceBase = $derived(shownBase(fs));
   /** The texts of the local directory shown, kept from its index (CG-12); null for any other graph. */
-  let localTexts = $state.raw<ReadonlyMap<string, string> | null>(null);
+  let localTexts = $state.raw<SourceTexts | null>(null);
   /** Reads the lines of a node of the repository shown; null: the graph has no texts. */
   const readSource = $derived(
     sourceAt && sourceRepo
@@ -240,7 +241,7 @@
           base: sourceBase,
         })
       : localTexts
-        ? textReader({ head: localTexts })
+        ? textReader(localTexts)
         : null,
   );
   /** The edges behind the line from one box to another, from the graph in WASM. */
@@ -305,7 +306,7 @@
     summary: Summary | null,
     hash = freshHash(location.hash),
     keep = false,
-    texts: ReadonlyMap<string, string> | null = null,
+    texts: SourceTexts | null = null,
   ) {
     if (!keep) forge.forget();
     localTexts = texts;
@@ -344,15 +345,20 @@
       const paths = chosen.inputs.map((i) => i.path);
       const texts = await Promise.all(chosen.inputs.map((i) => i.file.text()));
       if (!current()) return;
+      phase = `reading .git of ${chosen.root}`;
+      const probe = await chosen.git();
+      if (!current()) return;
       phase = `indexing ${chosen.inputs.length} files of ${chosen.root}`;
-      const r = await indexInWorker({ paths, texts, rootName: chosen.root });
+      // A repository: the overlay of the uncommitted changes against HEAD (ADR 0039).
+      const r = await indexLocal({ paths, texts, rootName: chosen.root }, probe, { index: indexInWorker, worktree: worktreeInWorker });
       if (!current()) return;
       const g = JSON.parse(r.graphText) as Graph;
       console.info(`indexed ${chosen.root}: ${g.nodes.length} nodes ${g.edges.length} edges ${Math.round(performance.now() - t0)} ms`);
       phase = null;
       // The texts of the index stay for the source view: a file read again could have changed (CG-12).
-      const kept = new Map(paths.map((p, i) => [p, texts[i]]));
-      await loadOpened(r.graphText, summarize(chosen.root, paths, g, r.report), undefined, false, kept);
+      const kept = { head: new Map(paths.map((p, i) => [p, texts[i]])), base: r.base ?? undefined };
+      const summary = summarize(chosen.root, paths, g, r.report);
+      await loadOpened(r.graphText, r.note ? { ...summary, text: `${summary.text} · ${r.note}` } : summary, undefined, false, kept);
     } catch (e) {
       if (!current()) return;
       phase = null;

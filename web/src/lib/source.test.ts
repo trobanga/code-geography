@@ -911,6 +911,20 @@ describe('textReader of a local directory', () => {
     await expect(read({ file: 'B.java', span: span(1, 1) })).rejects.toThrow('no file B.java');
   });
 
+  it('marks the uncommitted lines against the texts at HEAD, and a removed node from those texts', async () => {
+    const read = textReader({
+      head: new Map([['A.java', 'a\nX\nc\n']]),
+      base: new Map([
+        ['A.java', 'a\nb\nc\n'],
+        ['B.java', 'x\ny\n'],
+      ]),
+    });
+
+    expect(shown((await read({ file: 'A.java', span: span(1, 3) })).lines)).toEqual(['1 a =', '2 b -', '2 X +', '3 c =']);
+    const gone = await read({ file: 'B.java', span: span(1, 2), change: 'removed' });
+    expect(shown(gone.lines)).toEqual(['1 x -', '2 y -']);
+  });
+
   it('marks the references of an open declaration, also on lines outside its own', async () => {
     const read = textReader({ head: new Map([['A.java', 'import B;\nclass A {\n  B b;\n}\n']]) });
     const e = { ...edge('A', 'B', 'type_ref'), sites: [{ lines: [1, 3] }] };

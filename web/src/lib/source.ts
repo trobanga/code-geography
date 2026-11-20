@@ -281,19 +281,20 @@ export function sourceReader(d: SourceRepo): ReadSource {
 /**
  * The texts of a local directory, by path below it, kept in memory from the index on: a file
  * that changed since then would have spans that no longer fit (ADR 0031). `head`: the texts that
- * were indexed. A later overlay of uncommitted changes can add the texts of a base.
+ * were indexed. `base`: the texts of the inputs at `HEAD`, for the overlay of uncommitted changes (ADR 0039).
  */
 export interface SourceTexts {
   head: ReadonlyMap<string, string>;
+  base?: ReadonlyMap<string, string>;
 }
 
-/** The reader of a local directory: the lines of the span, from the texts held. */
+/** The reader of a local directory: the lines of the span, from the texts held; with a base, the marks of the uncommitted changes. */
 export function textReader(t: SourceTexts): ReadSource {
   const fileIn = (texts: ReadonlyMap<string, string>) => async (path: string) => {
     const text = texts.get(path);
     return text === undefined ? undefined : { key: text, text: async () => text };
   };
-  return readerOf({ head: fileIn(t.head), base: undefined, at: () => '' });
+  return readerOf({ head: fileIn(t.head), base: t.base && fileIn(t.base), at: (side) => (side === 'base' ? ' at HEAD' : '') });
 }
 
 /** One file of one side: what names its content (equal keys, equal texts) and how to read it. */

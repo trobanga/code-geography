@@ -192,18 +192,33 @@ pub struct DiffSpec {
     pub changed: Vec<(String, Change)>,
 }
 
+/// Whether two source sets hold the same paths with the same texts, in any order.
+fn same_sources(a: &[SourceFile], b: &[SourceFile]) -> bool {
+    fn set(s: &[SourceFile]) -> std::collections::BTreeMap<&str, &str> {
+        s.iter()
+            .map(|f| (f.path.as_str(), f.text.as_str()))
+            .collect()
+    }
+    a.len() == b.len() && set(a) == set(b)
+}
+
 /// The overlay of two source sets: both are indexed with `index_sources`, joined with
 /// `cg_core::diff`, and `spec` fills `DiffInfo`. The report is the one of the head index;
-/// the base index only provides the removed nodes and edges.
+/// the base index only provides the removed nodes and edges. Equal source sets (a clean
+/// working tree, ADR 0039) are indexed once: the index does not depend on the order of the
+/// files, so the base index would be the head index.
 pub fn diff_sources(
     root_name: &str,
     base: &[SourceFile],
     head: &[SourceFile],
     spec: DiffSpec,
 ) -> (Graph, Report) {
-    let (before, _) = index_sources(root_name, base);
     let (after, report) = index_sources(root_name, head);
-    let mut graph = cg_core::diff(&before, &after);
+    let mut graph = if same_sources(base, head) {
+        cg_core::diff(&after, &after)
+    } else {
+        cg_core::diff(&index_sources(root_name, base).0, &after)
+    };
     let mut files = cg_core::file_changes(&graph, &spec.changed);
     // The rule of ADR 8 calls `src/blaze/db/api.clj` test code. A file of a `deps.edn`
     // module follows the source directories of its `deps.edn` (ADR 23); a removed file's

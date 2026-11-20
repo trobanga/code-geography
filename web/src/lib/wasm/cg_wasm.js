@@ -25,16 +25,20 @@ export class Explorer {
         let deferred3_0;
         let deferred3_1;
         try {
-            const ptr0 = passStringToWasm0(from, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(from, wasm.__wbindgen_export, wasm.__wbindgen_export2);
             const len0 = WASM_VECTOR_LEN;
-            const ptr1 = passStringToWasm0(to, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const ptr1 = passStringToWasm0(to, wasm.__wbindgen_export, wasm.__wbindgen_export2);
             const len1 = WASM_VECTOR_LEN;
-            const ret = wasm.explorer_edgesBetween(this.__wbg_ptr, ptr0, len0, ptr1, len1, include_tests, merge_imports);
-            deferred3_0 = ret[0];
-            deferred3_1 = ret[1];
-            return getStringFromWasm0(ret[0], ret[1]);
+            wasm.explorer_edgesBetween(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1, include_tests, merge_imports);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred3_0 = r0;
+            deferred3_1 = r1;
+            return getStringFromWasm0(r0, r1);
         } finally {
-            wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export3(deferred3_0, deferred3_1, 1);
         }
     }
     /**
@@ -52,33 +56,45 @@ export class Explorer {
         let deferred4_0;
         let deferred4_1;
         try {
-            const ptr0 = passArrayJsValueToWasm0(expanded, wasm.__wbindgen_malloc);
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passArrayJsValueToWasm0(expanded, wasm.__wbindgen_export);
             const len0 = WASM_VECTOR_LEN;
-            const ptr1 = passArrayJsValueToWasm0(focus_nodes, wasm.__wbindgen_malloc);
+            const ptr1 = passArrayJsValueToWasm0(focus_nodes, wasm.__wbindgen_export);
             const len1 = WASM_VECTOR_LEN;
-            const ptr2 = passArrayJsValueToWasm0(unfolded, wasm.__wbindgen_malloc);
+            const ptr2 = passArrayJsValueToWasm0(unfolded, wasm.__wbindgen_export);
             const len2 = WASM_VECTOR_LEN;
-            const ret = wasm.explorer_focusView(this.__wbg_ptr, ptr0, len0, include_tests, merge_imports, ptr1, len1, focus_changes, neighbors, ptr2, len2, fold_mixed);
-            deferred4_0 = ret[0];
-            deferred4_1 = ret[1];
-            return getStringFromWasm0(ret[0], ret[1]);
+            wasm.explorer_focusView(retptr, this.__wbg_ptr, ptr0, len0, include_tests, merge_imports, ptr1, len1, focus_changes, neighbors, ptr2, len2, fold_mixed);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred4_0 = r0;
+            deferred4_1 = r1;
+            return getStringFromWasm0(r0, r1);
         } finally {
-            wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export3(deferred4_0, deferred4_1, 1);
         }
     }
     /**
      * @param {string} graph_json
      */
     constructor(graph_json) {
-        const ptr0 = passStringToWasm0(graph_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.explorer_new(ptr0, len0);
-        if (ret[2]) {
-            throw takeFromExternrefTable0(ret[1]);
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(graph_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.explorer_new(retptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            this.__wbg_ptr = r0;
+            ExplorerFinalization.register(this, this.__wbg_ptr, this);
+            return this;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
         }
-        this.__wbg_ptr = ret[0];
-        ExplorerFinalization.register(this, this.__wbg_ptr, this);
-        return this;
     }
     /**
      * @param {string[]} expanded
@@ -90,18 +106,117 @@ export class Explorer {
         let deferred2_0;
         let deferred2_1;
         try {
-            const ptr0 = passArrayJsValueToWasm0(expanded, wasm.__wbindgen_malloc);
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passArrayJsValueToWasm0(expanded, wasm.__wbindgen_export);
             const len0 = WASM_VECTOR_LEN;
-            const ret = wasm.explorer_view(this.__wbg_ptr, ptr0, len0, include_tests, merge_imports);
-            deferred2_0 = ret[0];
-            deferred2_1 = ret[1];
-            return getStringFromWasm0(ret[0], ret[1]);
+            wasm.explorer_view(retptr, this.__wbg_ptr, ptr0, len0, include_tests, merge_imports);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred2_0 = r0;
+            deferred2_1 = r1;
+            return getStringFromWasm0(r0, r1);
         } finally {
-            wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export3(deferred2_0, deferred2_1, 1);
         }
     }
 }
 if (Symbol.dispose) Explorer.prototype[Symbol.dispose] = Explorer.prototype.free;
+
+/**
+ * The JavaScript class `GitRepo`: a repository built from the files of its `.git`
+ * (ADR 0039). See `cg_git::Repository`.
+ */
+export class GitRepo {
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        GitRepoFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_gitrepo_free(ptr, 0);
+    }
+    /**
+     * `addLoose(id, bytes)`: the file `.git/objects/xx/yyyy…` with `id` = `xxyyyy…`.
+     * @param {string} id
+     * @param {Uint8Array} bytes
+     */
+    addLoose(id, bytes) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(id, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passArray8ToWasm0(bytes, wasm.__wbindgen_export);
+            const len1 = WASM_VECTOR_LEN;
+            wasm.gitrepo_addLoose(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            if (r1) {
+                throw takeObject(r0);
+            }
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * `addPack(index, data)`: a `.idx` file and its `.pack` file; throws on a broken pack.
+     * @param {Uint8Array} index
+     * @param {Uint8Array} data
+     */
+    addPack(index, data) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passArray8ToWasm0(index, wasm.__wbindgen_export);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passArray8ToWasm0(data, wasm.__wbindgen_export);
+            const len1 = WASM_VECTOR_LEN;
+            wasm.gitrepo_addPack(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            if (r1) {
+                throw takeObject(r0);
+            }
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * `addRef(name, text)`: a file below `.git/refs`, `name` from `.git` (`refs/heads/main`).
+     * @param {string} name
+     * @param {string} text
+     */
+    addRef(name, text) {
+        const ptr0 = passStringToWasm0(name, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(text, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+        const len1 = WASM_VECTOR_LEN;
+        wasm.gitrepo_addRef(this.__wbg_ptr, ptr0, len0, ptr1, len1);
+    }
+    /**
+     * `new GitRepo(head)`: `head` is the text of `.git/HEAD`.
+     * @param {string} head
+     */
+    constructor(head) {
+        const ptr0 = passStringToWasm0(head, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.gitrepo_new(ptr0, len0);
+        this.__wbg_ptr = ret;
+        GitRepoFinalization.register(this, this.__wbg_ptr, this);
+        return this;
+    }
+    /**
+     * `setPackedRefs(text)`: the text of `.git/packed-refs`.
+     * @param {string} text
+     */
+    setPackedRefs(text) {
+        const ptr0 = passStringToWasm0(text, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.gitrepo_setPackedRefs(this.__wbg_ptr, ptr0, len0);
+    }
+}
+if (Symbol.dispose) GitRepo.prototype[Symbol.dispose] = GitRepo.prototype.free;
 
 /**
  * `diffSources(basePaths, baseTexts, headPaths, headTexts, rootName, baseName, headName,
@@ -123,36 +238,42 @@ export function diffSources(base_paths, base_texts, head_paths, head_texts, root
     let deferred11_0;
     let deferred11_1;
     try {
-        const ptr0 = passArrayJsValueToWasm0(base_paths, wasm.__wbindgen_malloc);
+        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+        const ptr0 = passArrayJsValueToWasm0(base_paths, wasm.__wbindgen_export);
         const len0 = WASM_VECTOR_LEN;
-        const ptr1 = passArrayJsValueToWasm0(base_texts, wasm.__wbindgen_malloc);
+        const ptr1 = passArrayJsValueToWasm0(base_texts, wasm.__wbindgen_export);
         const len1 = WASM_VECTOR_LEN;
-        const ptr2 = passArrayJsValueToWasm0(head_paths, wasm.__wbindgen_malloc);
+        const ptr2 = passArrayJsValueToWasm0(head_paths, wasm.__wbindgen_export);
         const len2 = WASM_VECTOR_LEN;
-        const ptr3 = passArrayJsValueToWasm0(head_texts, wasm.__wbindgen_malloc);
+        const ptr3 = passArrayJsValueToWasm0(head_texts, wasm.__wbindgen_export);
         const len3 = WASM_VECTOR_LEN;
-        const ptr4 = passStringToWasm0(root_name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const ptr4 = passStringToWasm0(root_name, wasm.__wbindgen_export, wasm.__wbindgen_export2);
         const len4 = WASM_VECTOR_LEN;
-        const ptr5 = passStringToWasm0(base_name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const ptr5 = passStringToWasm0(base_name, wasm.__wbindgen_export, wasm.__wbindgen_export2);
         const len5 = WASM_VECTOR_LEN;
-        const ptr6 = passStringToWasm0(head_name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const ptr6 = passStringToWasm0(head_name, wasm.__wbindgen_export, wasm.__wbindgen_export2);
         const len6 = WASM_VECTOR_LEN;
-        const ptr7 = passArrayJsValueToWasm0(changed_paths, wasm.__wbindgen_malloc);
+        const ptr7 = passArrayJsValueToWasm0(changed_paths, wasm.__wbindgen_export);
         const len7 = WASM_VECTOR_LEN;
-        const ptr8 = passArrayJsValueToWasm0(changed_kinds, wasm.__wbindgen_malloc);
+        const ptr8 = passArrayJsValueToWasm0(changed_kinds, wasm.__wbindgen_export);
         const len8 = WASM_VECTOR_LEN;
-        const ret = wasm.diffSources(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5, ptr6, len6, ptr7, len7, ptr8, len8);
-        var ptr10 = ret[0];
-        var len10 = ret[1];
-        if (ret[3]) {
+        wasm.diffSources(retptr, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5, ptr6, len6, ptr7, len7, ptr8, len8);
+        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+        var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+        var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+        var ptr10 = r0;
+        var len10 = r1;
+        if (r3) {
             ptr10 = 0; len10 = 0;
-            throw takeFromExternrefTable0(ret[2]);
+            throw takeObject(r2);
         }
         deferred11_0 = ptr10;
         deferred11_1 = len10;
         return getStringFromWasm0(ptr10, len10);
     } finally {
-        wasm.__wbindgen_free(deferred11_0, deferred11_1, 1);
+        wasm.__wbindgen_add_to_stack_pointer(16);
+        wasm.__wbindgen_export3(deferred11_0, deferred11_1, 1);
     }
 }
 
@@ -167,24 +288,30 @@ export function indexSources(paths, texts, root_name) {
     let deferred5_0;
     let deferred5_1;
     try {
-        const ptr0 = passArrayJsValueToWasm0(paths, wasm.__wbindgen_malloc);
+        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+        const ptr0 = passArrayJsValueToWasm0(paths, wasm.__wbindgen_export);
         const len0 = WASM_VECTOR_LEN;
-        const ptr1 = passArrayJsValueToWasm0(texts, wasm.__wbindgen_malloc);
+        const ptr1 = passArrayJsValueToWasm0(texts, wasm.__wbindgen_export);
         const len1 = WASM_VECTOR_LEN;
-        const ptr2 = passStringToWasm0(root_name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const ptr2 = passStringToWasm0(root_name, wasm.__wbindgen_export, wasm.__wbindgen_export2);
         const len2 = WASM_VECTOR_LEN;
-        const ret = wasm.indexSources(ptr0, len0, ptr1, len1, ptr2, len2);
-        var ptr4 = ret[0];
-        var len4 = ret[1];
-        if (ret[3]) {
+        wasm.indexSources(retptr, ptr0, len0, ptr1, len1, ptr2, len2);
+        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+        var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+        var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+        var ptr4 = r0;
+        var len4 = r1;
+        if (r3) {
             ptr4 = 0; len4 = 0;
-            throw takeFromExternrefTable0(ret[2]);
+            throw takeObject(r2);
         }
         deferred5_0 = ptr4;
         deferred5_1 = len4;
         return getStringFromWasm0(ptr4, len4);
     } finally {
-        wasm.__wbindgen_free(deferred5_0, deferred5_1, 1);
+        wasm.__wbindgen_add_to_stack_pointer(16);
+        wasm.__wbindgen_export3(deferred5_0, deferred5_1, 1);
     }
 }
 
@@ -195,22 +322,63 @@ export function indexSources(paths, texts, root_name) {
  * @returns {boolean}
  */
 export function isInput(path) {
-    const ptr0 = passStringToWasm0(path, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const ptr0 = passStringToWasm0(path, wasm.__wbindgen_export, wasm.__wbindgen_export2);
     const len0 = WASM_VECTOR_LEN;
     const ret = wasm.isInput(ptr0, len0);
     return ret !== 0;
+}
+
+/**
+ * `worktreeOverlay(repo, paths, texts, rootName)`: JSON of `{graph, report, base}` with the
+ * overlay of the working tree against `HEAD`; throws when git cannot give `HEAD`.
+ * @param {GitRepo} repo
+ * @param {string[]} paths
+ * @param {string[]} texts
+ * @param {string} root_name
+ * @returns {string}
+ */
+export function worktreeOverlay(repo, paths, texts, root_name) {
+    let deferred5_0;
+    let deferred5_1;
+    try {
+        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+        _assertClass(repo, GitRepo);
+        const ptr0 = passArrayJsValueToWasm0(paths, wasm.__wbindgen_export);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArrayJsValueToWasm0(texts, wasm.__wbindgen_export);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(root_name, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+        const len2 = WASM_VECTOR_LEN;
+        wasm.worktreeOverlay(retptr, repo.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2);
+        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+        var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+        var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+        var ptr4 = r0;
+        var len4 = r1;
+        if (r3) {
+            ptr4 = 0; len4 = 0;
+            throw takeObject(r2);
+        }
+        deferred5_0 = ptr4;
+        deferred5_1 = len4;
+        return getStringFromWasm0(ptr4, len4);
+    } finally {
+        wasm.__wbindgen_add_to_stack_pointer(16);
+        wasm.__wbindgen_export3(deferred5_0, deferred5_1, 1);
+    }
 }
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,
         __wbg_Error_9dc85fe1bc224456: function(arg0, arg1) {
             const ret = Error(getStringFromWasm0(arg0, arg1));
-            return ret;
+            return addHeapObject(ret);
         },
         __wbg___wbindgen_string_get_fa2687d531ed17a5: function(arg0, arg1) {
-            const obj = arg1;
+            const obj = getObject(arg1);
             const ret = typeof(obj) === 'string' ? obj : undefined;
-            var ptr1 = isLikeNone(ret) ? 0 : passStringToWasm0(ret, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            var ptr1 = isLikeNone(ret) ? 0 : passStringToWasm0(ret, wasm.__wbindgen_export, wasm.__wbindgen_export2);
             var len1 = WASM_VECTOR_LEN;
             getDataViewMemory0().setInt32(arg0 + 4 * 1, len1, true);
             getDataViewMemory0().setInt32(arg0 + 4 * 0, ptr1, true);
@@ -218,14 +386,8 @@ function __wbg_get_imports() {
         __wbg___wbindgen_throw_bbadd78c1bac3a77: function(arg0, arg1) {
             throw new Error(getStringFromWasm0(arg0, arg1));
         },
-        __wbindgen_init_externref_table: function() {
-            const table = wasm.__wbindgen_externrefs;
-            const offset = table.grow(4);
-            table.set(0, undefined);
-            table.set(offset + 0, undefined);
-            table.set(offset + 1, null);
-            table.set(offset + 2, true);
-            table.set(offset + 3, false);
+        __wbindgen_object_drop_ref: function(arg0) {
+            takeObject(arg0);
         },
     };
     return {
@@ -237,11 +399,29 @@ function __wbg_get_imports() {
 const ExplorerFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_explorer_free(ptr, 1));
+const GitRepoFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_gitrepo_free(ptr, 1));
 
-function addToExternrefTable0(obj) {
-    const idx = wasm.__externref_table_alloc();
-    wasm.__wbindgen_externrefs.set(idx, obj);
+function addHeapObject(obj) {
+    if (heap_next === heap.length) heap.push(heap.length + 1);
+    const idx = heap_next;
+    heap_next = heap[idx];
+
+    heap[idx] = obj;
     return idx;
+}
+
+function _assertClass(instance, klass) {
+    if (!(instance instanceof klass)) {
+        throw new Error(`expected instance of ${klass.name}`);
+    }
+}
+
+function dropObject(idx) {
+    if (idx < 1028) return;
+    heap[idx] = heap_next;
+    heap_next = idx;
 }
 
 let cachedDataViewMemory0 = null;
@@ -264,15 +444,29 @@ function getUint8ArrayMemory0() {
     return cachedUint8ArrayMemory0;
 }
 
+function getObject(idx) { return heap[idx]; }
+
+let heap = new Array(1024).fill(undefined);
+heap.push(undefined, null, true, false);
+
+let heap_next = heap.length;
+
 function isLikeNone(x) {
     return x === undefined || x === null;
 }
 
+function passArray8ToWasm0(arg, malloc) {
+    const ptr = malloc(arg.length * 1, 1) >>> 0;
+    getUint8ArrayMemory0().set(arg, ptr / 1);
+    WASM_VECTOR_LEN = arg.length;
+    return ptr;
+}
+
 function passArrayJsValueToWasm0(array, malloc) {
     const ptr = malloc(array.length * 4, 4) >>> 0;
+    const mem = getDataViewMemory0();
     for (let i = 0; i < array.length; i++) {
-        const add = addToExternrefTable0(array[i]);
-        getDataViewMemory0().setUint32(ptr + 4 * i, add, true);
+        mem.setUint32(ptr + 4 * i, addHeapObject(array[i]), true);
     }
     WASM_VECTOR_LEN = array.length;
     return ptr;
@@ -315,10 +509,10 @@ function passStringToWasm0(arg, malloc, realloc) {
     return ptr;
 }
 
-function takeFromExternrefTable0(idx) {
-    const value = wasm.__wbindgen_externrefs.get(idx);
-    wasm.__externref_table_dealloc(idx);
-    return value;
+function takeObject(idx) {
+    const ret = getObject(idx);
+    dropObject(idx);
+    return ret;
 }
 
 let cachedTextDecoder = new TextDecoder('utf-8', { ignoreBOM: true, fatal: true });
@@ -357,7 +551,6 @@ function __wbg_finalize_init(instance, module) {
     wasmModule = module;
     cachedDataViewMemory0 = null;
     cachedUint8ArrayMemory0 = null;
-    wasm.__wbindgen_start();
     return wasm;
 }
 

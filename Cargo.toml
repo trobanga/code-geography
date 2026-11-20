@@ -1,9 +1,19 @@
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/index-java", "crates/index-rust", "crates/index-clojure", "crates/index-elixir", "crates/index-typescript", "crates/walk", "crates/index", "crates/cli", "crates/wasm"]
+members = ["crates/core", "crates/index-java", "crates/index-rust", "crates/index-clojure", "crates/index-elixir", "crates/index-typescript", "crates/walk", "crates/git", "crates/index", "crates/cli", "crates/wasm"]
 
 # The release version: the cut-release skill bumps it here and in web/package.json.
 [workspace.package]
 version = "0.2.0"
 edition = "2024"
 license = "Apache-2.0"
+
+# The WASM module of the viewer (scripts/build-wasm.sh): LTO, abort on panic and no symbols make
+# it smaller at the speed of the release profile; `opt-level = "s"` would save 4 % more but index
+# about 20 % slower (ADR 0039). The native CLI keeps the plain release profile.
+[profile.wasm]
+inherits = "release"
+opt-level = 2
+lto = true
+panic = "abort"
+strip = true

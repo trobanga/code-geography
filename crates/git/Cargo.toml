@@ -1,0 +1,12 @@
+[package]
+name = "cg-git"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Reads git objects from bytes in memory: no file system, builds for wasm32 (ADR 0039).
+[dependencies]
+gix-hash = { version = "0.28.1", default-features = false, features = ["sha1"] }
+gix-object = { version = "0.66.1", default-features = false, features = ["sha1"] }
+gix-pack = { version = "0.77.0", default-features = false, features = ["sha1"] }
+gix-zlib = "0.4.0"

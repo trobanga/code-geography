@@ -169,6 +169,85 @@ pub fn diff_sources(
         .map_err(|e| e.to_string())
 }
 
+/// The overlay of the working tree against `HEAD` (ADR 0039): the inputs of the commit at
+/// `HEAD` are the base, `paths` and `texts` (the inputs that the walk read) the head. A file
+/// is changed when its text differs; an input that `HEAD` lacks is `added`, also when git
+/// does not track it. JSON `{graph, report, base}` like `diff_sources`; `base` maps the
+/// path of each input at `HEAD` to its text there, for the source view.
+pub fn worktree_overlay(
+    repo: &cg_git::Repository,
+    paths: &[String],
+    texts: &[String],
+    root_name: &str,
+) -> Result<String, String> {
+    let head = source_files(paths, texts, "paths", "texts")?;
+    let commit = repo
+        .resolve("HEAD")
+        .map_err(|e| format!("no commit at HEAD: {e}"))?;
+    let tree = repo.commit(&commit)?.tree;
+    let base = repo
+        .files(&tree, &walk_lists, &is_input)?
+        .into_iter()
+        .map(|(path, id)| {
+            let text = blob_text(&repo.blob(&id)?);
+            Ok(cg_index::SourceFile { path, text })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let before: serde_json::Map<String, serde_json::Value> = base
+        .iter()
+        .map(|f| (f.path.clone(), f.text.clone().into()))
+        .collect();
+    let spec = cg_index::DiffSpec {
+        base: commit.to_hex_with_len(7).to_string(),
+        head: "working tree".to_string(),
+        changed: text_changes(&base, &head),
+    };
+    let (graph, report) = cg_index::diff_sources(root_name, &base, &head, spec);
+    serde_json::to_string(&serde_json::json!({ "graph": graph, "report": report, "base": before }))
+        .map_err(|e| e.to_string())
+}
+
+/// Whether the walk of a chosen directory (`web/src/lib/walk.ts`) lists the directory
+/// `dir`: the rule of the indexer is asked for a source file in it.
+fn walk_lists(dir: &str) -> bool {
+    is_input(&format!("{dir}/X.java"))
+}
+
+/// The text of a blob as the browser reads a file (`File.text()`): UTF-8 with the
+/// invalid bytes replaced, without a byte order mark.
+fn blob_text(bytes: &[u8]) -> String {
+    let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
+/// The files whose text differs between `base` and `head`, sorted by path.
+fn text_changes(
+    base: &[cg_index::SourceFile],
+    head: &[cg_index::SourceFile],
+) -> Vec<(String, cg_core::Change)> {
+    use cg_core::Change;
+    let before: std::collections::HashMap<&str, &str> = base
+        .iter()
+        .map(|f| (f.path.as_str(), f.text.as_str()))
+        .collect();
+    let after: HashSet<&str> = head.iter().map(|f| f.path.as_str()).collect();
+    let mut changed: Vec<(String, Change)> = head
+        .iter()
+        .filter_map(|f| match before.get(f.path.as_str()) {
+            None => Some((f.path.clone(), Change::Added)),
+            Some(text) if *text != f.text => Some((f.path.clone(), Change::Modified)),
+            Some(_) => None,
+        })
+        .chain(
+            base.iter()
+                .filter(|f| !after.contains(f.path.as_str()))
+                .map(|f| (f.path.clone(), Change::Removed)),
+        )
+        .collect();
+    changed.sort();
+    changed
+}
+
 /// `isInput(path)`: true for a `.java` file, a `pom.xml`, a `.rs` file or a `Cargo.toml`
 /// that an indexer wants.
 #[wasm_bindgen(js_name = isInput)]
@@ -239,6 +318,56 @@ impl JsExplorer {
             fold_mixed,
         )
     }
+}
+
+/// The JavaScript class `GitRepo`: a repository built from the files of its `.git`
+/// (ADR 0039). See `cg_git::Repository`.
+#[wasm_bindgen(js_name = GitRepo)]
+pub struct JsGitRepo(cg_git::Repository);
+
+#[wasm_bindgen(js_class = GitRepo)]
+impl JsGitRepo {
+    /// `new GitRepo(head)`: `head` is the text of `.git/HEAD`.
+    #[wasm_bindgen(constructor)]
+    pub fn new(head: &str) -> JsGitRepo {
+        JsGitRepo(cg_git::Repository::new(head))
+    }
+
+    /// `addRef(name, text)`: a file below `.git/refs`, `name` from `.git` (`refs/heads/main`).
+    #[wasm_bindgen(js_name = addRef)]
+    pub fn add_ref(&mut self, name: &str, text: &str) {
+        self.0.add_ref(name, text);
+    }
+
+    /// `setPackedRefs(text)`: the text of `.git/packed-refs`.
+    #[wasm_bindgen(js_name = setPackedRefs)]
+    pub fn set_packed_refs(&mut self, text: &str) {
+        self.0.set_packed_refs(text);
+    }
+
+    /// `addPack(index, data)`: a `.idx` file and its `.pack` file; throws on a broken pack.
+    #[wasm_bindgen(js_name = addPack)]
+    pub fn add_pack(&mut self, index: Vec<u8>, data: Vec<u8>) -> Result<(), JsError> {
+        self.0.add_pack(index, data).map_err(|e| JsError::new(&e))
+    }
+
+    /// `addLoose(id, bytes)`: the file `.git/objects/xx/yyyy…` with `id` = `xxyyyy…`.
+    #[wasm_bindgen(js_name = addLoose)]
+    pub fn add_loose(&mut self, id: &str, bytes: Vec<u8>) -> Result<(), JsError> {
+        self.0.add_loose(id, bytes).map_err(|e| JsError::new(&e))
+    }
+}
+
+/// `worktreeOverlay(repo, paths, texts, rootName)`: JSON of `{graph, report, base}` with the
+/// overlay of the working tree against `HEAD`; throws when git cannot give `HEAD`.
+#[wasm_bindgen(js_name = worktreeOverlay)]
+pub fn js_worktree_overlay(
+    repo: &JsGitRepo,
+    paths: Vec<String>,
+    texts: Vec<String>,
+    root_name: &str,
+) -> Result<String, JsError> {
+    worktree_overlay(&repo.0, &paths, &texts, root_name).map_err(|message| JsError::new(&message))
 }
 
 /// `diffSources(basePaths, baseTexts, headPaths, headTexts, rootName, baseName, headName,

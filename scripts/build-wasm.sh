@@ -13,6 +13,7 @@ include="$(dirname "$language_manifest")/wasm/include"
 [ -d "$include" ] || { echo "no $include (tree-sitter-language headers for wasm)" >&2; exit 1; }
 export CFLAGS_wasm32_unknown_unknown="-I$include"
 
-cargo build -p cg-wasm --target wasm32-unknown-unknown --release --offline
+# The profile `wasm` of Cargo.toml: LTO, abort on panic, no symbols (ADR 0039).
+cargo build -p cg-wasm --target wasm32-unknown-unknown --profile wasm --offline
 wasm-bindgen --target web --out-dir web/src/lib/wasm \
-    target/wasm32-unknown-unknown/release/cg_wasm.wasm
+    target/wasm32-unknown-unknown/wasm/cg_wasm.wasm
