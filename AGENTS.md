@@ -26,7 +26,7 @@ model. Record each new decision of that weight as a new ADR.
 | selection | The boxes that the developer selected: a click selects one, Shift+click adds or removes one. Lines between two selected boxes are full, lines to the outside weak (dim with `between selected`); `open all` / `close all` works on all of them (ADR 0029). |
 | box search | A field in the toolbar that finds boxes by the words of their name, also in closed containers. Choosing a match opens and unfolds the containers on its path, selects the box and pans to it; a match in test code turns test code on (ADR 0038). |
 | commit context | For an overlay of a forge repository, on demand: the full message of each commit of the overlay, its pull requests and the issue references (`#12`, `owner/repo#12`) read from the message and the pull request bodies, as links. A reference is a guess (ADR 0030). |
-| source view | The panel below the diagram for one or two selected boxes (ADR 0031). One box: its lines (`file`, `span`), or for a module or package the list of its declarations (the topmost nodes with a span below it). Two boxes: the declarations whose edges make their line, each with its targets, from `Explorer.edgesBetween`; an open declaration marks the lines of the sites of these edges and shows the sites outside its own lines below them (ADR 0032). Forge repositories only; a commit marks its added and removed lines. |
+| source view | The panel below the diagram for one or two selected boxes (ADR 0031). One box: its lines (`file`, `span`), or for a module or package the list of its declarations (the topmost nodes with a span below it). Two boxes: the declarations whose edges make their line, each with its targets, from `Explorer.edgesBetween`; an open declaration marks the lines of the sites of these edges and shows the sites outside its own lines below them (ADR 0032). Forge repositories and local directories (the texts of the index, kept in memory); a commit marks its added and removed lines. |
 | front end | The part that turns the sources of one language into a graph (Java, Rust, Clojure, Elixir, TypeScript). `cg-index` runs all of them. |
 | test code | Code in a source set other than `src/main`; for Clojure, code in a directory that only an alias of `deps.edn` names (ADR 0023); for Elixir, code below the directory `test` of a Mix project (ADR 0035); for TypeScript, a file that Jest and Vitest take as a test by its name (`*.test.ts`, `*.spec.ts`, below `__tests__` or `__mocks__`, ADR 0034). Hidden by default. |
 
@@ -84,6 +84,7 @@ web/src/lib/boxSearch.ts  box search (ADR 0038): boxIndex, findBoxes; BoxSearch.
                    revealDepth in expansion.ts gives the depth that shows a box
 web/src/lib/source.ts  the source view (ADR 0031): sourceView (what a selection shows), lineGroups,
                    declarations, sourceReader (texts by blob sha from the cache, else the forge),
+                   textReader (the texts of a local directory, held since its index),
                    overlayLines (marks of a commit, from lineDiff.ts), readInto (the state of one read);
                    withRefs (the sites of edges on shown lines), readDeclaration (the lines of a
                    declaration and the sites outside them), openable (whether a row opens), ADR 0032;
@@ -254,8 +255,9 @@ and `web/package.json`. The skill `.agents/skills/cut-release` does the steps.
   request links only on the forge do not show. Kept in memory only: a reload asks again.
   Both endpoints were checked against github.com and codeberg.org on 2026-11-16; Forgejo
   with a token was not.
-- Source view (ADR 0031): no lines for a local graph, a local directory or `/commit.json`
-  (lists only). No syntax highlighting. Under an active focus the list of a line can hold
+- Source view (ADR 0031): no lines for a local graph or `/commit.json` (lists only). A
+  local directory shows the texts read for its index, kept in memory while it is shown:
+  an edit on disk since then does not show. No syntax highlighting. Under an active focus the list of a line can hold
   more edges than the count on the line. The marks of a commit follow a line diff of the
   file: moved code is removed and added lines; above 1000 changed lines in a file the part
   between the first and the last change counts as replaced. A span is rendered whole.

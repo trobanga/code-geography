@@ -51,7 +51,8 @@ it can stand for hundreds of edges.
 
 ## Consequences
 - A local graph, a local directory and `/commit.json` show the lists, but no lines, and
-  a message that the source is not available.
+  a message that the source is not available. Update: a local directory shows its lines,
+  see the addition below.
 - The source view costs no API call for a repository that is open: all inputs of the
   indexer are in the cache. If the cache lost a text, one call fetches it again.
 - Under an active focus, lift drops the lines of placeholders (ADR 13). The list still
@@ -64,3 +65,16 @@ it can stand for hundreds of edges.
   1000 changed lines in one file, the part between the first and the last change counts
   as replaced.
 - No syntax highlighting. A span is rendered whole, also when it has thousands of lines.
+
+## Addition (2026-11-20, CG-12): a local directory
+A directory opened in the browser (picker, `<input webkitdirectory>`, drop) shows its
+lines too. The viewer reads all inputs as texts to index them; it now keeps these texts
+in memory, by path, while the directory is shown (`textReader` in `source.ts`), and drops
+them when another graph opens. It does not read a file again through its handle or
+entry: a file that changed after the index has spans that no longer fit, and the input
+fallback has no handle at all. The forge reader and the local reader share one core over
+two sides (head and an optional base), each file with a key of its content (blob sha,
+or the text itself); a later overlay of a local directory can give the local reader the
+texts of a base. Cost: the texts stay in memory, as large as the inputs read (on blaze at most
+the 44 MB of its `.clj`, `.java` and `deps.edn` files). A local
+`graph.json` and `/commit.json` still have no texts.

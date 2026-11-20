@@ -48,7 +48,7 @@
   import { inputError, summarize, type Summary } from './lib/project';
   import { collectDir, fromEntry, type Collect, type DirEntry } from './lib/walk';
   import { runLayout, type Layout } from './lib/layout';
-  import { sourceReader } from './lib/source';
+  import { sourceReader, textReader } from './lib/source';
   import type { Graph, GraphEdge, Level, View } from './lib/types';
   import init, { Explorer, isInput } from './lib/wasm/cg_wasm.js';
 
@@ -227,6 +227,8 @@
   const sourceAt = $derived(fs.at);
   const sourceRepo = $derived(fs.repo);
   const sourceBase = $derived(shownBase(fs));
+  /** The texts of the local directory shown, kept from its index (CG-12); null for any other graph. */
+  let localTexts = $state.raw<ReadonlyMap<string, string> | null>(null);
   /** Reads the lines of a node of the repository shown; null: the graph has no texts. */
   const readSource = $derived(
     sourceAt && sourceRepo
@@ -237,7 +239,9 @@
           head: shaOf(sourceAt),
           base: sourceBase,
         })
-      : null,
+      : localTexts
+        ? textReader({ head: localTexts })
+        : null,
   );
   /** The edges behind the line from one box to another, from the graph in WASM. */
   const between = (from: string, to: string) =>
@@ -285,6 +289,7 @@
       const text = await r.text();
       src = s;
       forge.forget();
+      localTexts = null;
       selected = [];
       project = null;
       await load(text);
@@ -294,8 +299,16 @@
   }
 
   /** Replaces the graph by one opened from disk or a forge (`keep`): by default nothing open, no focus, no selection. */
-  async function loadOpened(text: string, summary: Summary | null, hash = freshHash(location.hash), keep = false) {
+  /** `texts`: those of a local directory, for the source view. */
+  async function loadOpened(
+    text: string,
+    summary: Summary | null,
+    hash = freshHash(location.hash),
+    keep = false,
+    texts: ReadonlyMap<string, string> | null = null,
+  ) {
     if (!keep) forge.forget();
+    localTexts = texts;
     selected = [];
     src = null;
     project = summary;
@@ -337,7 +350,9 @@
       const g = JSON.parse(r.graphText) as Graph;
       console.info(`indexed ${chosen.root}: ${g.nodes.length} nodes ${g.edges.length} edges ${Math.round(performance.now() - t0)} ms`);
       phase = null;
-      await loadOpened(r.graphText, summarize(chosen.root, paths, g, r.report));
+      // The texts of the index stay for the source view: a file read again could have changed (CG-12).
+      const kept = new Map(paths.map((p, i) => [p, texts[i]]));
+      await loadOpened(r.graphText, summarize(chosen.root, paths, g, r.report), undefined, false, kept);
     } catch (e) {
       if (!current()) return;
       phase = null;

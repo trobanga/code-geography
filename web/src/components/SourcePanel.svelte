@@ -23,7 +23,7 @@
     kinds: KindSwitch;
     /** The edges behind the line from one box to another, from the graph in WASM. */
     between: (from: string, to: string) => GraphEdge[];
-    /** Reads the lines of a node. Null: the graph has no texts (a local graph or directory). */
+    /** Reads the lines of a node. Null: the graph has no texts (a local graph, `/commit.json`). */
     read: ReadSource | null;
   } = $props();
 
@@ -70,7 +70,7 @@
       {/if}
       {#if read === null}
         <span class="text-[var(--muted)]" data-source-missing
-          >not available: only a repository opened from a forge has the texts</span
+          >not available: only a repository from a forge or a local directory has the texts</span
         >
       {/if}
       <button

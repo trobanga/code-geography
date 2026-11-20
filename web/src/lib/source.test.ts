@@ -17,6 +17,7 @@ import {
   sourceReader,
   sourceView,
   spanLines,
+  textReader,
   WHOLE_FILE,
   splitLines,
   withRefs,
@@ -891,5 +892,34 @@ describe('refsTitle', () => {
 
     expect(refsTitle(refs, (id) => id.toUpperCase())).toBe('calls RUN, type_ref BAR');
     expect(refsTitle(refs.slice(0, 1), (id) => id)).toBe('calls run');
+  });
+});
+
+describe('textReader of a local directory', () => {
+  it('gives the path of the file and the lines of the span from the texts it holds', async () => {
+    const read = textReader({ head: new Map([['src/A.java', 'one\ntwo\nthree\nfour\n']]) });
+
+    const source = await read({ file: 'src/A.java', span: span(2, 3) });
+
+    expect(source.file).toBe('src/A.java');
+    expect(shown(source.lines)).toEqual(['2 two =', '3 three =']);
+  });
+
+  it('rejects with the path for a file that it does not hold', async () => {
+    const read = textReader({ head: new Map([['A.java', 'one\n']]) });
+
+    await expect(read({ file: 'B.java', span: span(1, 1) })).rejects.toThrow('no file B.java');
+  });
+
+  it('marks the references of an open declaration, also on lines outside its own', async () => {
+    const read = textReader({ head: new Map([['A.java', 'import B;\nclass A {\n  B b;\n}\n']]) });
+    const e = { ...edge('A', 'B', 'type_ref'), sites: [{ lines: [1, 3] }] };
+
+    const blocks = await readDeclaration(read, { file: 'A.java', span: span(2, 4) }, [e]);
+
+    expect(blocks.map((b) => [b.own, b.lines.filter((l) => l.refs).map((l) => l.no)])).toEqual([
+      [true, [3]],
+      [false, [1]],
+    ]);
   });
 });

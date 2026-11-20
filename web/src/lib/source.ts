@@ -270,27 +270,68 @@ export function sourceReader(d: SourceRepo): ReadSource {
     }
     return entries;
   };
-  const entryAt = async (sha: string, path: string) => (await entriesAt(sha)).get(path);
-  const textOf = async (sha: string, entry: Entry) => (await texts(d.forge(), d.repo, sha, [entry], await d.cache()))[0].text;
+  const fileAt = (sha: string) => async (path: string) => {
+    const entry = (await entriesAt(sha)).get(path);
+    return entry && { key: entry.blobSha, text: async () => (await texts(d.forge(), d.repo, sha, [entry], await d.cache()))[0].text };
+  };
+  const base = d.base === undefined ? undefined : d.base === null ? null : fileAt(d.base);
+  return readerOf({ head: fileAt(d.head), base, at: (side) => ` at ${(side === 'head' ? d.head : d.base!).slice(0, 7)}` });
+}
+
+/**
+ * The texts of a local directory, by path below it, kept in memory from the index on: a file
+ * that changed since then would have spans that no longer fit (ADR 0031). `head`: the texts that
+ * were indexed. A later overlay of uncommitted changes can add the texts of a base.
+ */
+export interface SourceTexts {
+  head: ReadonlyMap<string, string>;
+}
+
+/** The reader of a local directory: the lines of the span, from the texts held. */
+export function textReader(t: SourceTexts): ReadSource {
+  const fileIn = (texts: ReadonlyMap<string, string>) => async (path: string) => {
+    const text = texts.get(path);
+    return text === undefined ? undefined : { key: text, text: async () => text };
+  };
+  return readerOf({ head: fileIn(t.head), base: undefined, at: () => '' });
+}
+
+/** One file of one side: what names its content (equal keys, equal texts) and how to read it. */
+interface SideFile {
+  key: string;
+  text: () => Promise<string>;
+}
+
+type FileAt = (path: string) => Promise<SideFile | undefined>;
+
+/** The two sides of a reader. `base` null: the head is a root commit; undefined: no overlay. `at`: where a side is, for a message. */
+interface Sides {
+  head: FileAt;
+  base: FileAt | null | undefined;
+  at: (side: 'base' | 'head') => string;
+}
+
+/** Without an overlay: the lines of the span at the head. With one: the marks of the commit; see `sourceReader`. */
+function readerOf(s: Sides): ReadSource {
   return async (node) => {
     if (!hasLines(node)) throw new Error('no source lines');
     const { file, span } = node;
     // The base has no such file for an added file, and there is no base for a root commit or without an overlay.
-    const baseSha = d.base ?? null;
-    const [base, head] = await Promise.all([baseSha === null ? undefined : entryAt(baseSha, file), entryAt(d.head, file)]);
+    const hasBase = s.base !== null && s.base !== undefined;
+    const [base, head] = await Promise.all([hasBase ? s.base!(file) : undefined, s.head(file)]);
     // A node that the commit removed, or a file that only the base has (a reference in a file that the commit deleted).
-    const removed = baseSha !== null && (node.change === 'removed' || (!head && base !== undefined));
-    if (!(removed ? base : head)) throw new Error(`no file ${file} at ${(removed ? baseSha : d.head).slice(0, 7)}`);
+    const removed = hasBase && (node.change === 'removed' || (!head && base !== undefined));
+    if (!(removed ? base : head)) throw new Error(`no file ${file}${s.at(removed ? 'base' : 'head')}`);
     // The base has no file of this path, but the commit did not add the node: the file moved (the ids of
     // its nodes stay), or it is a new file of a node that was there. The graph does not hold the path at
     // the base, so no line is marked, and none has a number at the base.
-    const baseUnknown = baseSha !== null && !removed && base === undefined && node.change !== 'added';
-    // The same blob on both sides, or one side only: one text, no marks.
-    const shown = removed ? { sha: baseSha, entry: base! } : { sha: d.head, entry: head! };
-    if (d.base === undefined || baseUnknown || base?.blobSha === head?.blobSha) {
-      return { file, lines: spanLines(await textOf(shown.sha, shown.entry), span, d.base === undefined || baseUnknown ? 'head' : 'both') };
+    const baseUnknown = hasBase && !removed && base === undefined && node.change !== 'added';
+    // The same text on both sides, or one side only: one text, no marks.
+    const shown = removed ? base! : head!;
+    if (s.base === undefined || baseUnknown || base?.key === head?.key) {
+      return { file, lines: spanLines(await shown.text(), span, s.base === undefined || baseUnknown ? 'head' : 'both') };
     }
-    const [baseText, headText] = await Promise.all([base && textOf(baseSha!, base), head && textOf(d.head, head)]);
+    const [baseText, headText] = await Promise.all([base?.text(), head?.text()]);
     return { file, lines: overlayLines(baseText, headText, span, removed ? 'base' : 'head') };
   };
 }

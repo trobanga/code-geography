@@ -7,6 +7,7 @@ import { Explorer, diffSources, indexSources, initSync, isInput } from './wasm/c
 import type { Graph, GraphEdge, View } from './types';
 import { runJob } from './workerJob';
 import { headOf } from './commit';
+import { textReader } from './source';
 
 initSync({ module: readFileSync(new URL('./wasm/cg_wasm_bg.wasm', import.meta.url)) });
 
@@ -69,6 +70,16 @@ describe('the indexer in WASM', () => {
     expect(there.every((e) => e.from === 'type:a.Foo' || e.from === 'fn:a.Foo#f()')).toBe(true);
     expect(there.find((e) => e.from === 'fn:a.Foo#f()' && e.kind === 'calls')?.sites).toEqual([{ lines: [4] }]);
     expect(back).toEqual([]);
+  });
+
+  it('gives nodes whose file and span the texts of the index show (the source view of a local directory)', async () => {
+    const { graph } = run();
+    const read = textReader({ head: new Map(FILES) });
+
+    const g = await read(graph.nodes.find((n) => n.id === 'fn:b.Bar#g()')!);
+
+    expect(g.file).toBe('src/main/java/b/Bar.java');
+    expect(g.lines.map((l) => l.text)).toEqual(['  public void g() {}']);
   });
 
   it('throws on paths and texts of different length', () => {
