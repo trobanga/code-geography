@@ -1999,3 +1999,43 @@ fn a_function_used_as_a_value_has_the_line_of_its_name() {
         own_file(&[5])
     );
 }
+
+#[test]
+fn mods_that_glob_each_other_resolve_in_time() {
+    const MODS: usize = 4;
+    let mut files = vec![
+        (
+            "Cargo.toml".to_string(),
+            "[package]\nname = \"globs\"\nversion = \"0.1.0\"\nedition = \"2021\"\n".to_string(),
+        ),
+        (
+            "src/lib.rs".to_string(),
+            (0..MODS).map(|i| format!("pub mod m{i};\n")).collect(),
+        ),
+    ];
+    for i in 0..MODS {
+        let globs: String = (0..MODS)
+            .filter(|j| *j != i)
+            .map(|j| format!("pub use crate::m{j}::*;\n"))
+            .collect();
+        files.push((
+            format!("src/m{i}.rs"),
+            format!("{globs}pub fn f_m{i}() {{ unknown(); }}\n"),
+        ));
+    }
+    let files: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(p, t)| (p.as_str(), t.as_str()))
+        .collect();
+    let started = std::time::Instant::now();
+    let (_, report) = run(&files);
+    let elapsed = started.elapsed();
+    assert_eq!(
+        (report.calls.unresolved, report.calls.to_function),
+        (MODS, 0)
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(1),
+        "took {elapsed:?}"
+    );
+}

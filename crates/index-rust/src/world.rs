@@ -6,6 +6,7 @@ use crate::declare::Decl;
 use crate::modules::ModInfo;
 use crate::syntax::{line_of, named_children, path_of, text};
 use cg_core::NodeKind;
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use tree_sitter::Node as Ts;
 
@@ -57,7 +58,7 @@ struct Scope {
     globs: Vec<(Vec<String>, u32)>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum Ns {
     Type,
     Value,
@@ -72,7 +73,13 @@ pub struct World<'a, 't> {
     lib_roots: HashMap<&'a str, usize>,
     /// The names that the manifest of each package lets code use as crates.
     dependencies: &'a [&'a HashSet<String>],
+    /// The answers of `lookup_with` by all of its arguments; depth is part of the key, so a
+    /// cached answer is the answer of that call.
+    lookups: RefCell<HashMap<LookupKey, Option<Res>>>,
 }
+
+/// Module, name, namespace, depth and whether external globs bind.
+type LookupKey = (usize, String, Ns, usize, bool);
 
 const DEPTH: usize = 16;
 
@@ -84,49 +91,7 @@ impl<'a, 't> World<'a, 't> {
         mods: &'a [ModInfo<'t>],
         decls: &'a [Decl<'t>],
     ) -> Self {
-        let mut scopes: Vec<Scope> = mods.iter().map(|_| Scope::default()).collect();
-        for (index, m) in mods.iter().enumerate() {
-            for (parent, name) in &m.declared_in {
-                scopes[*parent]
-                    .types
-                    .insert(name.clone(), Entity::Mod(index));
-            }
-        }
-        for (index, decl) in decls.iter().enumerate() {
-            match (decl.kind, decl.is_member) {
-                (NodeKind::Type, _) => {
-                    scopes[decl.module]
-                        .types
-                        .insert(decl.name.clone(), Entity::Type(index));
-                }
-                (NodeKind::Function, false) => {
-                    scopes[decl.module]
-                        .values
-                        .insert(decl.name.clone(), Entity::Function(index));
-                }
-                _ => {}
-            }
-        }
-        for (index, m) in mods.iter().enumerate() {
-            for item in &m.items {
-                match item.kind() {
-                    "use_declaration" => {
-                        if let Some(argument) = item.child_by_field_name("argument") {
-                            collect_uses(argument, m.source, &[], &mut scopes[index]);
-                        }
-                    }
-                    // Items that exist but are no nodes.
-                    "const_item" | "static_item" | "macro_definition" => {
-                        if let Some(name) = item.child_by_field_name("name") {
-                            scopes[index]
-                                .values
-                                .insert(text(name, m.source).to_string(), Entity::Other);
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
+        let scopes = build_scopes(mods, decls);
         let lib_roots = mods
             .iter()
             .enumerate()
@@ -139,6 +104,7 @@ impl<'a, 't> World<'a, 't> {
             scopes,
             dependencies,
             lib_roots,
+            lookups: RefCell::new(HashMap::new()),
         }
     }
 
@@ -269,22 +235,40 @@ impl<'a, 't> World<'a, 't> {
         depth: usize,
         external_globs: bool,
     ) -> Option<Res> {
+        let key = (module, name.to_string(), ns, depth, external_globs);
+        let cached = self.lookups.borrow().get(&key).copied();
+        if let Some(answer) = cached {
+            return answer;
+        }
+        let answer = self.lookup_uncached(module, name, ns, depth, external_globs);
+        self.lookups.borrow_mut().insert(key, answer);
+        answer
+    }
+
+    fn lookup_uncached(
+        &self,
+        module: usize,
+        name: &str,
+        ns: Ns,
+        depth: usize,
+        external_globs: bool,
+    ) -> Option<Res> {
         if depth == 0 {
             return None;
         }
-        let scope = &self.scopes[module];
-        if ns != Ns::Value
-            && let Some(entity) = scope.types.get(name)
-        {
-            return Some(Res::Item(*entity, 1));
-        }
-        if ns != Ns::Type
-            && let Some(entity) = scope.values.get(name)
-        {
-            return Some(Res::Item(*entity, 1));
-        }
+        own_item(&self.scopes[module], name, ns)
+            .or_else(|| self.lookup_uses(module, name, ns, depth))
+            .or_else(|| self.lookup_globs(module, name, ns, depth, external_globs))
+    }
+
+    /// The `use` declarations of `module` that bind `name`.
+    fn lookup_uses(&self, module: usize, name: &str, ns: Ns, depth: usize) -> Option<Res> {
         let mut unfollowed = None;
-        for (_, path, _) in scope.uses.iter().filter(|(bound, _, _)| bound == name) {
+        for (_, path, _) in self.scopes[module]
+            .uses
+            .iter()
+            .filter(|(bound, _, _)| bound == name)
+        {
             let segments: Vec<&str> = path.iter().map(String::as_str).collect();
             match self.resolve_from(module, &segments, ns, depth - 1) {
                 Res::Item(entity, consumed) if consumed == segments.len() => {
@@ -298,10 +282,19 @@ impl<'a, 't> World<'a, 't> {
                 }
             }
         }
-        if unfollowed.is_some() {
-            return unfollowed;
-        }
-        for (path, _) in &scope.globs {
+        unfollowed
+    }
+
+    /// The globs of `module` that bring `name` in.
+    fn lookup_globs(
+        &self,
+        module: usize,
+        name: &str,
+        ns: Ns,
+        depth: usize,
+        external_globs: bool,
+    ) -> Option<Res> {
+        for (path, _) in &self.scopes[module].globs {
             let segments: Vec<&str> = path.iter().map(String::as_str).collect();
             match self.resolve_from(module, &segments, Ns::Type, depth - 1) {
                 Res::Item(Entity::Mod(target), consumed) if consumed == segments.len() => {
@@ -316,6 +309,68 @@ impl<'a, 't> World<'a, 't> {
             }
         }
         None
+    }
+}
+
+/// The item that `scope` itself declares under `name` in `ns`.
+fn own_item(scope: &Scope, name: &str, ns: Ns) -> Option<Res> {
+    let in_types = (ns != Ns::Value).then(|| scope.types.get(name)).flatten();
+    let in_values = (ns != Ns::Type).then(|| scope.values.get(name)).flatten();
+    in_types.or(in_values).map(|entity| Res::Item(*entity, 1))
+}
+
+/// The scope of every mod: its declared mods, its types and functions, its `use`
+/// declarations and the items that are no nodes.
+fn build_scopes(mods: &[ModInfo], decls: &[Decl]) -> Vec<Scope> {
+    let mut scopes: Vec<Scope> = mods.iter().map(|_| Scope::default()).collect();
+    for (index, m) in mods.iter().enumerate() {
+        for (parent, name) in &m.declared_in {
+            scopes[*parent]
+                .types
+                .insert(name.clone(), Entity::Mod(index));
+        }
+    }
+    for (index, decl) in decls.iter().enumerate() {
+        bind_decl(&mut scopes[decl.module], decl, index);
+    }
+    for (index, m) in mods.iter().enumerate() {
+        for item in &m.items {
+            bind_item(&mut scopes[index], *item, m.source);
+        }
+    }
+    scopes
+}
+
+fn bind_decl(scope: &mut Scope, decl: &Decl, index: usize) {
+    match (decl.kind, decl.is_member) {
+        (NodeKind::Type, _) => {
+            scope.types.insert(decl.name.clone(), Entity::Type(index));
+        }
+        (NodeKind::Function, false) => {
+            scope
+                .values
+                .insert(decl.name.clone(), Entity::Function(index));
+        }
+        _ => {}
+    }
+}
+
+fn bind_item(scope: &mut Scope, item: Ts, source: &str) {
+    match item.kind() {
+        "use_declaration" => {
+            if let Some(argument) = item.child_by_field_name("argument") {
+                collect_uses(argument, source, &[], scope);
+            }
+        }
+        // Items that exist but are no nodes.
+        "const_item" | "static_item" | "macro_definition" => {
+            if let Some(name) = item.child_by_field_name("name") {
+                scope
+                    .values
+                    .insert(text(name, source).to_string(), Entity::Other);
+            }
+        }
+        _ => {}
     }
 }
 
