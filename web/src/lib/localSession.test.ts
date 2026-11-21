@@ -72,7 +72,57 @@ async function until(done: () => boolean) {
   for (let i = 0; i < 200 && !done(); i++) await Promise.resolve();
 }
 
+/** A session that nothing started: the state of a directory whose git is still being read. */
+function bare() {
+  let state: LocalState = NO_LOCAL;
+  const session = localSession({ begin: () => () => true, phase: () => {}, fail: () => {}, show: async () => {}, onState: (s) => (state = s) });
+  return { session, state: () => state };
+}
+
 describe('localSession', () => {
+  it('is loading from expect until settle: the git of the shown directory is still read', () => {
+    const t = bare();
+
+    const still = t.session.expect();
+
+    expect(t.state()).toMatchObject({ active: false, loading: true });
+    expect(still()).toBe(true);
+    t.session.settle();
+    expect(t.state()).toMatchObject({ active: false, loading: false });
+    expect(still()).toBe(true);
+  });
+
+  it('ends an expected directory on forget, also when no repository was started, and on the next expect', () => {
+    const t = bare();
+    const first = t.session.expect();
+
+    t.session.forget();
+
+    expect(first()).toBe(false);
+    expect(t.state()).toMatchObject({ active: false, loading: false });
+
+    const second = t.session.expect();
+    const third = t.session.expect();
+    expect(second()).toBe(false);
+    expect(third()).toBe(true);
+  });
+
+  it('is not loading any more when the repository starts, and its check stays true', () => {
+    const t = bare();
+    const still = t.session.expect();
+
+    t.session.start({ log: async () => [], overlay: async () => { throw new Error('not asked'); }, close: () => {} }, 'repo', {
+      text: '{}',
+      summary: {} as Summary,
+      texts: { head: new Map(), base: new Map() } as SourceTexts,
+    });
+
+    expect(t.state()).toMatchObject({ active: true, loading: false });
+    expect(still()).toBe(true);
+    t.session.forget();
+    expect(still()).toBe(false);
+    expect(t.state()).toEqual(NO_LOCAL);
+  });
   it('starts with the working tree shown and the list closed', () => {
     const t = setup();
 
@@ -362,5 +412,231 @@ describe('localSession', () => {
 
     expect(t.isClosed()).toBe(true);
     expect(other.close).not.toHaveBeenCalled();
+  });
+});
+
+/** A promise that the test settles by hand. */
+function deferred<T>() {
+  let ok!: (v: T) => void;
+  let no!: (e: unknown) => void;
+  const promise = new Promise<T>((a, b) => ((ok = a), (no = b)));
+  return { promise, ok, no };
+}
+
+describe('localSession, replies that come late or fail', () => {
+  it('shows nothing of a first page that arrives after forget, nor of one that fails then', async () => {
+    const t = setup();
+    const late = deferred<Commit[]>();
+    vi.spyOn(t.repo, 'log').mockReturnValueOnce(late.promise);
+    t.session.toggleList();
+    t.session.forget();
+    late.ok(history(70).slice(0, 30));
+    await until(() => false);
+    expect(t.state()).toEqual(NO_LOCAL);
+
+    const t2 = setup();
+    const failing = deferred<Commit[]>();
+    vi.spyOn(t2.repo, 'log').mockReturnValueOnce(failing.promise);
+    t2.session.toggleList();
+    t2.session.forget();
+    failing.no(new Error('gone'));
+    await until(() => false);
+    expect(t2.state()).toEqual(NO_LOCAL);
+  });
+
+  it('says why the list failed also when the cause is not an Error', async () => {
+    const t = setup();
+    vi.spyOn(t.repo, 'log').mockRejectedValueOnce('boom');
+
+    t.session.toggleList();
+    await until(() => t.state().listStatus !== null && t.state().listStatus !== 'listing the last 30 commits');
+
+    expect(t.state().listStatus).toBe('cannot list the commits: boom');
+  });
+
+  it('knows the end of a history that fills a page exactly, with a root commit last', async () => {
+    const t = setup(history(30));
+
+    t.session.toggleList();
+    await until(() => t.state().commits !== null);
+
+    expect(t.state().commits?.list).toHaveLength(30);
+    expect(t.state().commits?.next).toBeNull();
+  });
+
+  it('leaves the state alone when the list is closed and a click outside closes it again', () => {
+    const t = setup();
+    const before = t.state();
+
+    t.session.closeList();
+
+    expect(t.state()).toBe(before);
+  });
+
+  it('changes nothing of a next page that arrives after forget, or that fails then', async () => {
+    const t = setup();
+    t.session.toggleList();
+    await until(() => t.state().commits !== null);
+    const late = deferred<Commit[]>();
+    vi.spyOn(t.repo, 'log').mockReturnValueOnce(late.promise);
+    const more = t.session.loadMore();
+    t.session.forget();
+    late.ok(history(70).slice(30, 60));
+    await more;
+    expect(t.state()).toEqual(NO_LOCAL);
+
+    const t2 = setup();
+    t2.session.toggleList();
+    await until(() => t2.state().commits !== null);
+    const failing = deferred<Commit[]>();
+    vi.spyOn(t2.repo, 'log').mockReturnValueOnce(failing.promise);
+    const more2 = t2.session.loadMore();
+    t2.session.forget();
+    failing.no(new Error('gone'));
+    await more2;
+    expect(t2.state()).toEqual(NO_LOCAL);
+  });
+
+  it('says why more commits failed, also when the cause is not an Error, and keeps the list', async () => {
+    const t = setup();
+    t.session.toggleList();
+    await until(() => t.state().commits !== null);
+    vi.spyOn(t.repo, 'log').mockRejectedValueOnce('boom');
+
+    await t.session.loadMore();
+
+    expect(t.state().listStatus).toBe('cannot list more commits: boom');
+    expect(t.state().commits?.list).toHaveLength(30);
+  });
+
+  it('counts no changed files for an overlay whose graph has no diff', async () => {
+    const t = setup();
+    t.session.toggleList();
+    await until(() => t.state().commits !== null);
+    vi.spyOn(t.repo, 'overlay').mockResolvedValueOnce({ graphText: '{"nodes":[],"edges":[]}', report, base: {}, head: {}, indexes: 0 });
+
+    await t.session.pick(sha(2));
+
+    expect(t.shown[0].summary.text).toContain(', 0 changed files');
+  });
+
+  it('reports nothing of an overlay that fails after a later choice replaced it', async () => {
+    const t = setup();
+    t.session.toggleList();
+    await until(() => t.state().commits !== null);
+    const slow = deferred<never>();
+    vi.spyOn(t.repo, 'overlay').mockReturnValueOnce(slow.promise);
+
+    const first = t.session.pick(sha(2));
+    await t.session.pick(sha(1));
+    slow.no(new Error('late failure'));
+    await first;
+
+    expect(t.errors).toEqual([]);
+    expect(t.state().shown).toMatchObject({ head: sha(1) });
+  });
+
+  it('reports a sha whose log answers with no commit', async () => {
+    const t = setup();
+    vi.spyOn(t.repo, 'log').mockResolvedValueOnce([]);
+
+    await t.session.pickSha('abcdef0');
+
+    expect(t.errors).toEqual(['cannot open abcdef0: no commit abcdef0']);
+  });
+
+  it('builds no overlay for a sha that is resolved after a later choice, nor reports its failure', async () => {
+    const t = setup();
+    const late = deferred<Commit[]>();
+    vi.spyOn(t.repo, 'log').mockReturnValueOnce(late.promise);
+    const first = t.session.pickSha(sha(40).slice(0, 7));
+    await t.session.pickWorktree();
+    late.ok([history(70)[40]]);
+    await first;
+    expect(t.calls.filter((c) => c.startsWith('overlay'))).toEqual([]);
+
+    const failing = deferred<Commit[]>();
+    vi.spyOn(t.repo, 'log').mockReturnValueOnce(failing.promise);
+    const second = t.session.pickSha(sha(40).slice(0, 7));
+    await t.session.pickWorktree();
+    failing.no(new Error('late failure'));
+    await second;
+    expect(t.errors).toEqual([]);
+  });
+
+  it('builds no second overlay for an unlisted sha whose commit is the one shown', async () => {
+    const t = setup();
+    await t.session.pickRange(sha(41), sha(40));
+
+    await t.session.pickSha(sha(40).slice(0, 7));
+
+    expect(t.calls.filter((c) => c.startsWith('overlay'))).toHaveLength(1);
+    expect(t.shown).toHaveLength(1);
+    expect(t.phases.at(-1)).toBeNull();
+  });
+
+  it('reports an end of a range that the log does not find', async () => {
+    const t = setup();
+    vi.spyOn(t.repo, 'log').mockResolvedValueOnce([]);
+
+    await t.session.pickRange('abcdef0', sha(10).slice(0, 7));
+
+    expect(t.errors).toEqual(['cannot open the range: no commit abcdef0']);
+  });
+
+  it('builds no overlay for a range that is resolved after a later choice, nor reports its failure', async () => {
+    const t = setup();
+    const late = deferred<Commit[]>();
+    vi.spyOn(t.repo, 'log').mockReturnValueOnce(late.promise);
+    const first = t.session.pickRange(sha(30).slice(0, 7), sha(10).slice(0, 7));
+    await t.session.pickWorktree();
+    late.ok([history(70)[30]]);
+    await first;
+    expect(t.calls.filter((c) => c.startsWith('overlay'))).toEqual([]);
+
+    const failing = deferred<Commit[]>();
+    vi.spyOn(t.repo, 'log').mockReturnValueOnce(failing.promise);
+    const second = t.session.pickRange(sha(30).slice(0, 7), sha(10).slice(0, 7));
+    await t.session.pickWorktree();
+    failing.no(new Error('late failure'));
+    await second;
+    expect(t.errors).toEqual([]);
+  });
+
+  it('builds no second overlay for a range that is the one shown', async () => {
+    const t = setup();
+    await t.session.pickRange(sha(30), sha(10));
+
+    await t.session.pickRange(sha(30).slice(0, 7), sha(10).slice(0, 7));
+
+    expect(t.calls.filter((c) => c.startsWith('overlay'))).toHaveLength(1);
+    expect(t.phases.at(-1)).toBeNull();
+  });
+
+  it('asks nothing of a repository that was forgotten', async () => {
+    const t = setup();
+    t.session.toggleList();
+    await until(() => t.state().commits !== null);
+    t.session.forget();
+    const asked = t.calls.length;
+
+    await t.session.pick(sha(1));
+    await t.session.pickSha(sha(40).slice(0, 7));
+    await t.session.pickRange(sha(30), sha(10));
+    await t.session.pickWorktree();
+    await t.session.loadMore();
+
+    expect(t.calls).toHaveLength(asked);
+    expect(t.shown).toHaveLength(0);
+    expect(t.state()).toEqual(NO_LOCAL);
+  });
+
+  it('does not touch the app when a session that shows nothing is forgotten', () => {
+    const phase = vi.fn();
+    const session = localSession({ begin: () => () => true, phase, fail: () => {}, show: async () => {}, onState: () => {} });
+
+    session.forget();
+
+    expect(phase).not.toHaveBeenCalled();
   });
 });

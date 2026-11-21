@@ -45,7 +45,7 @@
   import { forgeOfRepo, parseSource } from './lib/forges';
   import { tokenStore, type TokenField } from './lib/tokenStore';
   import { diffInWorker, indexInWorker, localRepoWorker, type LocalRepoWorker } from './lib/indexProject';
-  import { indexLocal } from './lib/localGit';
+  import { openLocal } from './lib/localGit';
   import { localSession, NO_LOCAL, type LocalState } from './lib/localSession';
   import { inputError, summarize, type Summary } from './lib/project';
   import { collectDir, fromEntry, type Collect, type DirEntry } from './lib/walk';
@@ -259,6 +259,21 @@
     explorer ? (JSON.parse(explorer.edgesBetween(from, to, tests, MERGE_IMPORTS)) as GraphEdge[]) : [];
 
   async function load(text: string, hash = location.hash) {
+    if (!(await swapGraph(text))) return;
+    offsets = new Map();
+    // The layout of the graph before this one does not fit the new one.
+    laid = null;
+    error = null;
+    applyHash(hash);
+  }
+
+  /**
+   * Puts the graph of `text` in place of the one shown and nothing else: the open containers, the selection,
+   * the offsets, the hash, the viewport and the layout (until the one of the new view lands) stay. Alone it
+   * serves the overlay that follows the plain index of a local directory, which holds every node of it
+   * (CG-16). null: the graph cannot load, the error is shown.
+   */
+  async function swapGraph(text: string): Promise<Graph | null> {
     try {
       await init();
       const g = JSON.parse(text) as Graph;
@@ -267,13 +282,10 @@
       explorer = ex;
       graph = g;
       tree = buildTree(g.nodes);
-      offsets = new Map();
-      // The layout of the graph before this one does not fit the new one.
-      laid = null;
-      error = null;
-      applyHash(hash);
+      return g;
     } catch (e) {
       error = `cannot load graph: ${e instanceof Error ? e.message : String(e)}`;
+      return null;
     }
   }
 
@@ -338,12 +350,16 @@
     return () => my === openSeq;
   }
 
-  /** Indexes the Java, Rust, Clojure, Elixir and TypeScript sources of a chosen directory in a worker (ADR 0015). Only inputs are read. */
+  /**
+   * Indexes the Java, Rust, Clojure, Elixir and TypeScript sources of a chosen directory in a worker (ADR 0015). Only inputs are read.
+   * The plain diagram shows as soon as the index is there; the read of `.git` runs beside it, and the commit list and the
+   * marks of the uncommitted changes follow when git is ready (CG-16, ADR 0039, 0040).
+   */
   async function openDirectory(collect: Collect) {
     const current = begin();
-    /** The worker that keeps the git repository for the commit list (ADR 0040); closed unless the local session takes it. */
-    let handle: LocalRepoWorker | null = null;
-    let started = false;
+    /** The worker that indexes and then keeps the git repository for the commit list (ADR 0040); closed unless the local session takes it. */
+    let worker: LocalRepoWorker | null = null;
+    let handed = false;
     try {
       await init();
       const t0 = performance.now();
@@ -360,38 +376,60 @@
         return;
       }
       phase = `reading ${chosen.inputs.length} files of ${chosen.root}`;
+      // Started now, it loads its WASM while the files are read.
+      const mine = (worker = localRepoWorker());
       const paths = chosen.inputs.map((i) => i.path);
-      const texts = await Promise.all(chosen.inputs.map((i) => i.file.text()));
-      if (!current()) return;
-      phase = `reading .git of ${chosen.root}`;
-      const probe = await chosen.git();
+      const reading = Promise.all(chosen.inputs.map((i) => i.file.text()));
+      // The read of .git starts now, after the reads of the sources were asked for (for an <input> its first step walks
+      // every file listed), and runs beside them and the index. `openLocal` takes its failure as a note.
+      const git = chosen.git();
+      git.catch(() => {});
+      const texts = await reading;
       if (!current()) return;
       phase = `indexing ${chosen.inputs.length} files of ${chosen.root}`;
-      // A repository: the overlay of the uncommitted changes against HEAD (ADR 0039), in the worker that then serves its history (ADR 0040).
-      const repoWorker = probe.kind === 'repo' ? (handle = localRepoWorker()) : null;
-      const r = await indexLocal({ paths, texts, rootName: chosen.root }, probe, { index: indexInWorker, worktree: (req) => repoWorker!.worktree(req) });
-      if (!current()) return;
-      const g = JSON.parse(r.graphText) as Graph;
-      console.info(`indexed ${chosen.root}: ${g.nodes.length} nodes ${g.edges.length} edges ${Math.round(performance.now() - t0)} ms`);
-      phase = null;
       // The texts of the index stay for the source view: a file read again could have changed (CG-12).
-      const kept = { head: new Map(paths.map((p, i) => [p, texts[i]])), base: r.base ?? undefined };
-      const summary = summarize(chosen.root, paths, g, r.report);
-      const shownSummary = r.note ? { ...summary, text: `${summary.text} · ${r.note}` } : summary;
-      await loadOpened(r.graphText, shownSummary, undefined, false, kept);
-      // The overlay came from the repository: the list of its commits and their overlays are served by the same worker.
-      // No `current()` here: `loadOpened` ends the forge session, whose `cancel` starts a new open of its own. A later
-      // open of another source ends this session again in its own `loadOpened`.
-      if (handle && r.base !== null) {
-        local.start(handle, chosen.root, { text: r.graphText, summary: shownSummary, texts: kept });
-        started = true;
-      }
+      const head = new Map(paths.map((p, i) => [p, texts[i]]));
+      handed = true;
+      await openLocal({ paths, texts, rootName: chosen.root }, git, mine, {
+        show: async (plain) => {
+          if (!current()) return null;
+          const g = JSON.parse(plain.graphText) as Graph;
+          console.info(`indexed ${chosen.root}: ${g.nodes.length} nodes ${g.edges.length} edges ${Math.round(performance.now() - t0)} ms`);
+          phase = null;
+          const summary = summarize(chosen.root, paths, g, plain.report);
+          await loadOpened(plain.graphText, summary, undefined, false, { head });
+          // Another source shown while this one loaded: it ended the local session before `expect` below could start.
+          if (project !== summary) return null;
+          // No `current()` from here on: `loadOpened` ends the forge session, whose `cancel` starts a new open of its own. A later
+          // open of another source ends this expectation in its own `loadOpened`.
+          return local.expect();
+        },
+        // The overlay came from the repository: the list of its commits and their overlays are served by the same worker.
+        // It takes the place of the plain graph and keeps the view (CG-16).
+        attach: async (r) => {
+          const g = await swapGraph(r.graphText);
+          if (!g) {
+            mine.close();
+            local.settle();
+            return;
+          }
+          const kept = { head, base: r.base };
+          const summary = summarize(chosen.root, paths, g, r.report);
+          local.start(mine, chosen.root, { text: r.graphText, summary, texts: kept });
+          localTexts = kept;
+          project = summary;
+        },
+        settle: (note) => {
+          local.settle();
+          if (note && project) project = { ...project, text: `${project.text} · ${note}` };
+        },
+      });
     } catch (e) {
       if (!current()) return;
       phase = null;
       error = `cannot index the directory: ${e instanceof Error ? e.message : String(e)}`;
     } finally {
-      if (!started) handle?.close();
+      if (!handed) worker?.close();
     }
   }
 
@@ -731,6 +769,9 @@
           <span>{diff ? `${diff.base} → ${diff.head}` : shaOf(fs.at).slice(0, 7)}</span>
           <span class="text-[var(--muted)]" aria-hidden="true">▾</span>
         </button>
+      {:else if ls.loading}
+        <!-- The plain diagram of a local directory is shown; its git is still read. -->
+        <span class="shrink-0 text-[var(--muted)]" title="the commit list and the marks of uncommitted changes follow when git is read">reading .git…</span>
       {:else if ls.active}
         <!-- A local repository: the same control for its commit list, with the uncommitted changes as one entry. -->
         <button

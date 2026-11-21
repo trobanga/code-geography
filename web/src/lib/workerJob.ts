@@ -1,7 +1,7 @@
 // The protocol of the index worker: one job per worker, run against the WASM functions.
 import type { Commit } from './forge';
 import type { Changed, Side } from './forgeDiff';
-import type { GitFiles } from './localGit';
+import type { GitFiles, LocalSources } from './localGit';
 import type { CallReport } from './project';
 
 /** Index one source set (ADR 0015). */
@@ -23,12 +23,12 @@ export interface DiffJob {
   changed: Changed[];
 }
 
+/** Index the working tree of a chosen directory and keep the index, as the head of the overlay against `HEAD` (CG-16). */
+export type LocalJob = { kind: 'local' } & LocalSources;
+
 /** The overlay of the working tree of a local repository against `HEAD` (ADR 0039). */
 export interface WorktreeJob {
   kind: 'worktree';
-  rootName: string;
-  paths: string[];
-  texts: string[];
   git: GitFiles;
 }
 
@@ -47,7 +47,7 @@ export interface CommitJob {
   rootName: string;
 }
 
-export type Job = IndexJob | DiffJob | WorktreeJob | LogJob | CommitJob;
+export type Job = IndexJob | LocalJob | DiffJob | WorktreeJob | LogJob | CommitJob;
 /** An overlay or a plain index. `base`: of a worktree or commit job, the texts of the inputs at the base by path. */
 export type GraphReply = {
   ok: true;
@@ -92,7 +92,15 @@ export interface Wasm {
   ): string;
   /** The class `GitRepo` of the WASM module. */
   GitRepo: new (head: string) => GitRepoLike;
-  worktreeOverlay(repo: GitRepoLike, paths: string[], texts: string[], rootName: string): string;
+  /** The class `Worktree` of the WASM module: the index of the working tree of a chosen directory. */
+  Worktree: new (paths: string[], texts: string[], rootName: string) => WorktreeLike;
+  worktreeOverlay(repo: GitRepoLike, worktree: WorktreeLike): string;
+}
+
+/** The parts of the class `Worktree` of the WASM module that the runner uses. */
+export interface WorktreeLike {
+  json(): string;
+  free(): void;
 }
 
 /** The parts of the class `GitRepo` of the WASM module that the runner uses. */
@@ -113,6 +121,7 @@ export interface GitRepoLike {
  */
 export function jobRunner(wasm: Wasm): <J extends Job>(job: J) => ReplyOf<J> {
   let repo: GitRepoLike | null = null;
+  let worktree: WorktreeLike | null = null;
   const graphReply = (json: string): GraphReply => {
     const { graph, report, base, head, indexes } = JSON.parse(json);
     return { ok: true, graphText: JSON.stringify(graph), report, ...(base ? { base } : {}), ...(head ? { head } : {}), ...(indexes !== undefined ? { indexes } : {}) };
@@ -126,6 +135,11 @@ export function jobRunner(wasm: Wasm): <J extends Job>(job: J) => ReplyOf<J> {
       switch (job.kind) {
         case 'index':
           return graphReply(wasm.indexSources(job.paths, job.texts, job.rootName));
+        case 'local':
+          worktree?.free();
+          worktree = null;
+          worktree = new wasm.Worktree(job.paths, job.texts, job.rootName);
+          return graphReply(worktree.json());
         case 'diff':
           return graphReply(
             wasm.diffSources(
@@ -141,20 +155,26 @@ export function jobRunner(wasm: Wasm): <J extends Job>(job: J) => ReplyOf<J> {
             ),
           );
         case 'worktree': {
-          repo?.free();
-          repo = null;
-          const made = new wasm.GitRepo(job.git.head);
+          // The overlay takes the working tree of the last local job, once.
+          const head = worktree;
+          worktree = null;
+          if (!head) throw new Error('no working tree');
+          let made: GitRepoLike | null = null;
           try {
+            repo?.free();
+            repo = null;
+            made = new wasm.GitRepo(job.git.head);
             for (const r of job.git.refs) made.addRef(r.name, r.text);
             if (job.git.packedRefs !== null) made.setPackedRefs(job.git.packedRefs);
             for (const p of job.git.packs) made.addPack(p.index, p.data);
             for (const l of job.git.loose) made.addLoose(l.id, l.bytes);
-            const reply = graphReply(wasm.worktreeOverlay(made, job.paths, job.texts, job.rootName));
+            const reply = graphReply(wasm.worktreeOverlay(made, head));
             repo = made;
+            made = null;
             return reply;
-          } catch (err) {
-            made.free();
-            throw err;
+          } finally {
+            made?.free();
+            head.free();
           }
         }
         case 'log':

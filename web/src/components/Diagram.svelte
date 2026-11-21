@@ -13,7 +13,7 @@
   import { lineStrength, type Strength } from '../lib/selection';
   import { impliedSegments } from '../lib/implied';
   import { untrack } from 'svelte';
-  import { fitTransform, keepInView, labelAnchor, reveal as revealBox, zoomAt, type Transform } from '../lib/viewport';
+  import { fitTransform, keepInView, keepPlace, labelAnchor, reveal as revealBox, zoomAt, type Transform } from '../lib/viewport';
 
   let {
     tree,
@@ -93,10 +93,19 @@
   const placed = $derived(placeNodes(layout.nodes, offsets));
   const rects = $derived(new Map<string, Rect>(placed.nodes.map((n) => [n.id, n])));
 
-  // The viewport changed its size (the source view opened below): the box selected last stays in view.
+  /** The top of the viewport on the page, as last seen. */
+  let top: number | null = null;
+  // The viewport changed its size (the source view opened below, a bar appeared above it): the picture stays where it
+  // was on the page, so a bar above (the commit strip of a local directory whose git came after its diagram, CG-16)
+  // does not move it, and the box selected last stays in view.
   $effect(() => {
     const viewport = { width: vw, height: vh };
     untrack(() => {
+      if (wrap) {
+        const now = wrap.getBoundingClientRect().top;
+        t = keepPlace(t, top, now);
+        top = now;
+      }
       const box = boxOf(selected[selected.length - 1]);
       if (box) t = keepInView(box, viewport, t, 16);
     });

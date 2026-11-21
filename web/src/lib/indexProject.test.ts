@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { localRepoWorker, type WorkerLike } from './indexProject';
+import { describe, expect, it, vi } from 'vitest';
+import { diffInWorker, indexInWorker, localRepoWorker, type WorkerLike } from './indexProject';
 import type { GitFiles } from './localGit';
 import type { WorkerRequest, WorkerResponse } from './workerJob';
 
@@ -31,16 +31,28 @@ const git = (): GitFiles => ({
 const overlay = { ok: true, graphText: '{}', report: { calls: {} as never } } as const;
 
 describe('localRepoWorker', () => {
+  it('sends the sources as a local job and gives the plain index', async () => {
+    const w = new FakeWorker();
+    const repo = localRepoWorker(() => w);
+
+    const pending = repo.index({ rootName: 'r', paths: ['a'], texts: ['x'] });
+
+    expect(w.posted).toHaveLength(1);
+    expect(w.posted[0].msg.job).toEqual({ kind: 'local', rootName: 'r', paths: ['a'], texts: ['x'] });
+    w.reply(w.posted[0].msg.id, overlay);
+    await expect(pending).resolves.toEqual({ graphText: '{}', report: overlay.report });
+  });
+
   it('sends the worktree job with the bytes of .git moved to the worker, and gives the overlay with the texts at HEAD', async () => {
     const w = new FakeWorker();
     const repo = localRepoWorker(() => w);
     const files = git();
     const buffers = [files.packs[0].index.buffer, files.packs[0].data.buffer, files.loose[0].bytes.buffer];
 
-    const pending = repo.worktree({ rootName: 'r', paths: ['a'], texts: ['x'], git: files });
+    const pending = repo.worktree(files);
 
     expect(w.posted).toHaveLength(1);
-    expect(w.posted[0].msg.job).toMatchObject({ kind: 'worktree', rootName: 'r', paths: ['a'], texts: ['x'] });
+    expect(w.posted[0].msg.job).toEqual({ kind: 'worktree', git: files });
     expect(w.posted[0].transfer).toEqual(buffers);
     w.reply(w.posted[0].msg.id, { ...overlay, base: { a: 'old' }, indexes: 1 });
     await expect(pending).resolves.toEqual({ graphText: '{}', report: overlay.report, base: { a: 'old' }, indexes: 1 });
@@ -97,5 +109,73 @@ describe('localRepoWorker', () => {
     expect(w.terminated).toBe(true);
     await expect(a).rejects.toThrow('closed');
     await expect(repo.overlay(null, 'h', 'r')).rejects.toThrow('closed');
+  });
+});
+
+describe('localRepoWorker, replies without optional parts', () => {
+  it('gives empty texts and no indexes for a worktree or commit reply that has none', async () => {
+    const w = new FakeWorker();
+    const repo = localRepoWorker(() => w);
+
+    const worktree = repo.worktree(git());
+    w.reply(w.posted[0].msg.id, overlay);
+    await expect(worktree).resolves.toEqual({ graphText: '{}', report: overlay.report, base: {}, indexes: 0 });
+
+    const commit = repo.overlay(null, 'h', 'r');
+    w.reply(w.posted[1].msg.id, overlay);
+    await expect(commit).resolves.toEqual({ graphText: '{}', report: overlay.report, base: {}, head: {}, indexes: 0 });
+  });
+
+  it('rejects a log whose reply holds no commits', async () => {
+    const w = new FakeWorker();
+    const repo = localRepoWorker(() => w);
+
+    const log = repo.log(null, 1);
+    w.reply(w.posted[0].msg.id, overlay);
+
+    await expect(log).rejects.toThrow('no commits in the reply');
+  });
+});
+
+describe('indexInWorker and diffInWorker', () => {
+  /** Stands in for `Worker`: answers each job at once and records it and the end of the worker. */
+  class AnsweringWorker extends FakeWorker {
+    static made: AnsweringWorker[] = [];
+    constructor() {
+      super();
+      AnsweringWorker.made.push(this);
+    }
+    postMessage(msg: WorkerRequest, transfer: Transferable[] = []) {
+      super.postMessage(msg, transfer);
+      queueMicrotask(() => this.reply(msg.id, msg.job.kind === 'diff' ? { ok: false, error: 'diff broke' } : overlay));
+    }
+  }
+
+  it('index the sources in a worker of its own that ends after the reply, and reject with the error of the reply', async () => {
+    AnsweringWorker.made = [];
+    vi.stubGlobal('Worker', AnsweringWorker);
+    try {
+      await expect(indexInWorker({ rootName: 'r', paths: ['a'], texts: ['x'] })).resolves.toMatchObject({ graphText: '{}', report: overlay.report });
+      expect(AnsweringWorker.made[0].posted[0].msg.job).toEqual({ kind: 'index', rootName: 'r', paths: ['a'], texts: ['x'] });
+      expect(AnsweringWorker.made[0].terminated).toBe(true);
+
+      const side = { paths: [], texts: [] };
+      await expect(diffInWorker({ rootName: 'r', base: side, head: side, baseName: 'b', headName: 'h', changed: [] })).rejects.toThrow('diff broke');
+      expect(AnsweringWorker.made[1].terminated).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('start the real worker for a local repository when none is passed', async () => {
+    AnsweringWorker.made = [];
+    vi.stubGlobal('Worker', AnsweringWorker);
+    try {
+      const repo = localRepoWorker();
+      await expect(repo.index({ rootName: 'r', paths: [], texts: [] })).resolves.toMatchObject({ graphText: '{}' });
+      expect(AnsweringWorker.made).toHaveLength(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

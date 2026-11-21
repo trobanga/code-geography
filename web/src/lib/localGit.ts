@@ -1,5 +1,6 @@
 // The git history of a chosen directory (ADR 0039): the files of its `.git` that the reader in
 // WASM needs, and the overlay of the uncommitted changes against `HEAD`.
+import { pool } from './pool';
 import type { FileLike, WalkDir, WalkEntry } from './walk';
 
 /**
@@ -7,6 +8,9 @@ import type { FileLike, WalkDir, WalkEntry } from './walk';
  * memory of the index worker, once as the bytes read and once in WASM (ADR 0039).
  */
 export const MAX_OBJECT_BYTES = 512 * 2 ** 20;
+
+/** How many loose objects are read at the same time. */
+const LOOSE_READERS = 64;
 
 /** The files of `.git` that the reader takes: `HEAD`, the refs below `refs`, `packed-refs`, the packs and the loose objects. */
 export interface GitFiles {
@@ -26,6 +30,8 @@ export type GitProbe = { kind: 'none' } | { kind: 'note'; note: string } | { kin
 const note = (text: string): Extract<GitProbe, { kind: 'note' }> => ({ kind: 'note', note: `no overlay of uncommitted changes: ${text}` });
 
 type FileEntry = Extract<WalkEntry, { kind: 'file' }>;
+
+const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 async function list(dir: WalkDir): Promise<WalkEntry[]> {
   const out: WalkEntry[] = [];
@@ -61,8 +67,9 @@ function sizeText(n: number): string {
 
 /**
  * Reads the `.git` of `dir`. A `.git` file (a work tree or a submodule) points outside the
- * directory, which the browser cannot reach: a note. Packs and loose objects above `limit`
- * bytes in all are refused before they are read: a note.
+ * directory, which the browser cannot reach: a note. Packs above `limit` bytes are refused
+ * before anything is read; the loose objects are read in one pass, and a running total that
+ * passes `limit` with the packs stops it: a note.
  */
 export async function readGit(dir: WalkDir, limit = MAX_OBJECT_BYTES): Promise<GitProbe> {
   try {
@@ -108,15 +115,30 @@ async function readGitFiles(dir: WalkDir, limit: number): Promise<GitProbe> {
     )
   ).flat();
 
-  // The sizes first: a pack that is too large is not read at all.
-  const opened = await Promise.all([...packs.flatMap((p) => [p.index, p.data]), ...loose.map((l) => l.file)].map((f) => f.open()));
-  const total = opened.reduce((sum, f) => sum + f.size, 0);
-  if (total > limit) {
-    return note(
-      `the packs and loose objects of .git take ${sizeText(total)}, over the limit of ${sizeText(limit)} that the viewer reads into memory`,
-    );
-  }
-  const read = await Promise.all(opened.map(bytesOf));
+  const tooMuch = (total: number) =>
+    note(`the packs and loose objects of .git take ${sizeText(total)}, over the limit of ${sizeText(limit)} that the viewer reads into memory`);
+  // The packs are sized first: they are the bulk, and a pack that is too large is not read at all.
+  const packOpened = await Promise.all(packs.flatMap((p) => [p.index, p.data]).map((f) => f.open()));
+  let total = packOpened.reduce((sum, f) => sum + f.size, 0);
+  if (total > limit) return tooMuch(total);
+  const packsRead = Promise.all(packOpened.map(bytesOf));
+  packsRead.catch(() => {}); // awaited below, unless the loose objects pass the limit first
+  // The loose objects in one pass (open, bytes), a few at a time, beside the packs, with a running
+  // total: once it passes the limit nothing more is opened.
+  const over = new Error('over the limit');
+  const looseRead = await pool(loose, LOOSE_READERS, async (l) => {
+    // The length of the bytes, not `File.size`: for the files of an `<input webkitdirectory>`
+    // each `size` asks the disk again, which took seconds for 8 700 loose objects (CG-16).
+    const b = await bytesOf(await l.file.open());
+    total += b.byteLength;
+    if (total > limit) throw over;
+    return b;
+  }).catch((e: unknown) => {
+    if (e === over) return null;
+    throw e;
+  });
+  if (!looseRead) return tooMuch(total);
+  const read = await packsRead;
   const refs = refsDir ? await filesBelow(refsDir, 'refs/') : [];
   return {
     kind: 'repo',
@@ -125,7 +147,7 @@ async function readGitFiles(dir: WalkDir, limit: number): Promise<GitProbe> {
       refs: await Promise.all(refs.map(async (r) => ({ name: r.path, text: await r.file.text() }))),
       packedRefs: packedFile ? await packedFile.text() : null,
       packs: packs.map((_, i) => ({ index: read[2 * i], data: read[2 * i + 1] })),
-      loose: loose.map((l, i) => ({ id: l.id, bytes: read[2 * packs.length + i] })),
+      loose: loose.map((l, i) => ({ id: l.id, bytes: looseRead[i] })),
     },
   };
 }
@@ -166,30 +188,66 @@ export interface LocalSources {
 
 type Indexed<R> = { graphText: string; report: R };
 
-/** The two ways to index: plain, or the overlay against `HEAD` with the texts at `HEAD` (`base`). */
-export interface LocalRun<R> {
+/** What `openLocal` needs of the index worker: the plain index, then the overlay against `HEAD`. */
+export interface LocalWorker<R> {
   index(req: LocalSources): Promise<Indexed<R>>;
-  worktree(req: LocalSources & { git: GitFiles }): Promise<Indexed<R> & { base: Record<string, string> }>;
+  worktree(git: GitFiles): Promise<Indexed<R> & { base: Record<string, string> }>;
+  close(): void;
+}
+
+export interface OpenSteps<R> {
+  /** Shows the plain index. null: a later open replaced this one, nothing was shown. Else a check whether the directory is still shown. */
+  show(plain: Indexed<R>): Promise<(() => boolean) | null>;
+  /** The overlay against `HEAD`: the worker now belongs to the caller (it serves the history). */
+  attach(overlay: Indexed<R> & { base: Map<string, string> }): Promise<void> | void;
+  /** git gives no overlay: the note why, null when the directory has no `.git`. */
+  settle(note: string | null): void;
 }
 
 /**
- * Indexes a chosen directory: with a repository, as the overlay of the working tree against
- * `HEAD`; without, or when git cannot give `HEAD`, plainly, with a note that says why.
+ * Opens a chosen directory in two steps (CG-16): the plain index is shown as soon as it is
+ * there, while the read of `.git` (`probe`) may still run; then the overlay of the working
+ * tree against `HEAD` follows, or a note that says why there is none. 'attached': the worker
+ * went to `attach`; 'plain': the plain index stays; 'stale': a later open replaced this one.
+ * The worker is closed unless attached.
  */
-export async function indexLocal<R>(
+export async function openLocal<R>(
   sources: LocalSources,
-  probe: GitProbe,
-  run: LocalRun<R>,
-): Promise<Indexed<R> & { note: string | null; base: Map<string, string> | null }> {
-  if (probe.kind === 'repo') {
-    try {
-      const r = await run.worktree({ ...sources, git: probe.files });
-      return { graphText: r.graphText, report: r.report, note: null, base: new Map(Object.entries(r.base)) };
-    } catch (e) {
-      const plain = await run.index(sources);
-      return { ...plain, note: note(e instanceof Error ? e.message : String(e)).note, base: null };
+  probe: Promise<GitProbe>,
+  worker: LocalWorker<R>,
+  steps: OpenSteps<R>,
+): Promise<'attached' | 'plain' | 'stale'> {
+  // A failed read is a note; handled at once, so it is never an unhandled rejection, whatever else happens.
+  const read: Promise<GitProbe> = probe.catch((e) => note(`cannot read .git: ${message(e)}`));
+  let attached = false;
+  /** Why git gives no overlay; settled after the worker closed. */
+  let settled: { note: string | null } | null = null;
+  try {
+    const still = await steps.show(await worker.index(sources));
+    if (!still) return 'stale';
+    const found = await read;
+    if (!still()) return 'stale';
+    if (found.kind !== 'repo') {
+      settled = { note: found.kind === 'note' ? found.note : null };
+      return 'plain';
     }
+    const overlay = await worker.worktree(found.files).catch((e: unknown) => note(message(e)));
+    if (!still()) return 'stale';
+    if ('kind' in overlay) {
+      settled = { note: overlay.note };
+      return 'plain';
+    }
+    try {
+      await steps.attach({ graphText: overlay.graphText, report: overlay.report, base: new Map(Object.entries(overlay.base)) });
+    } catch (e) {
+      settled = { note: note(message(e)).note };
+      return 'plain';
+    }
+    attached = true;
+    return 'attached';
+  } finally {
+    if (!attached) worker.close();
+    if (settled) steps.settle(settled.note);
   }
-  const plain = await run.index(sources);
-  return { ...plain, note: probe.kind === 'note' ? probe.note : null, base: null };
 }
+

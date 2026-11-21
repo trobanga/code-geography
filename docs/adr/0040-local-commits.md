@@ -10,13 +10,14 @@ bytes that the worker already holds, so the same should work without a forge. Th
 mid repository takes seconds, and the packs can take hundreds of MB.
 
 ## Decision
-- **The repository stays in one worker.** Opening a directory with a usable `.git` starts a
-  worker for it (`localRepoWorker` in `web/src/lib/indexProject.ts`) that lives as long as the
-  directory is shown. The bytes of `.git` are transferred to it once; there they become one
+- **The repository stays in one worker.** Opening a directory starts a worker for it
+  (`localRepoWorker` in `web/src/lib/indexProject.ts`), which makes its plain index first
+  (CG-16, ADR 0039). When `.git` gives no overlay the worker ends after the index; else it lives
+  as long as the directory is shown. The bytes of `.git` are transferred to it once; there they become one
   `GitRepo` (crates/wasm). Every later question (a page of the list, a sha, an overlay) is a
   message to that worker: no read of `.git`, no copy of the packs per click. Another source
   (another directory, a forge, a file, `/graph.json`) ends the worker and frees its memory. The
-  plain index and the overlays of a forge keep their one-shot workers.
+  index and the overlays of a forge repository keep their one-shot workers.
 - **The list walks the first parents from `HEAD`**, 30 commits a page ("load more commits"
   goes on from the first parent of the last commit listed); the whole history is never read.
   As for a forge, the commits of update bots and their merges are left out of the rows, and a
@@ -50,7 +51,7 @@ mid repository takes seconds, and the packs can take hundreds of MB.
   rule). Measured in headless Chromium on fts-next (309 inputs, dev server): an overlay with two
   indexes 414 to 439 ms in the worker, with one 245 ms, the uncommitted entry 1 ms; the open of
   the directory (reading 67 MB of `.git` through the fallback input, the uncommitted overlay)
-  15 s.
+  15 s, before CG-16 (ADR 0039 has the times since).
 - **Commit data.** `cg-git` gives a commit its author name, its author date (ISO 8601 in the
   author's offset, as `git log --format=%aI`) and its message; the WASM answer has the shape of
   `Commit` of `forge.ts`, so the forge's `commitRows` and `rangeOfCommit` take it as is. The

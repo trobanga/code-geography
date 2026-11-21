@@ -277,28 +277,29 @@ fn stepping_down_the_history_indexes_one_tree_per_step() {
     );
 }
 
+fn worktree(r: &Repo) -> cg_wasm::Worktree {
+    let (paths, texts) = worktree_inputs(r);
+    cg_wasm::Worktree::index(&paths, &texts, "r").unwrap()
+}
+
 #[test]
 fn the_working_tree_and_a_commit_share_the_tree_of_head() {
     let (r, [_, two, three]) = history("shared");
     let mut local = r.local();
-    // A clean working tree is indexed once, and its tree is then kept.
-    let (paths, texts) = worktree_inputs(&r);
-    let clean = json(local.worktree_overlay(&paths, &texts, "r"));
-    assert_eq!(indexes(&clean), 1);
+    // A clean working tree is the tree of `HEAD`: its index is the base, nothing runs again,
+    // and the tree is then kept.
+    let clean = json(local.worktree_overlay(&worktree(&r)));
+    assert_eq!(indexes(&clean), 0);
     assert_eq!(
         indexes(&json(local.commit_overlay(Some(&two), &three, "r"))),
         1
     );
-    // A changed working tree: the head is new, the tree of `HEAD` is kept.
+    // A changed working tree: the tree of `HEAD` is kept, and the index of the working
+    // tree is not counted.
     r.write("src/main/java/p/C.java", "package p;\nclass C { int x; }\n");
-    let (paths, texts) = worktree_inputs(&r);
-    let dirty = json(local.worktree_overlay(&paths, &texts, "r"));
-    assert_eq!(indexes(&dirty), 1);
-    let (paths, texts) = worktree_inputs(&r);
-    assert_eq!(
-        indexes(&json(local.worktree_overlay(&paths, &texts, "r"))),
-        1
-    );
+    let dirty = json(local.worktree_overlay(&worktree(&r)));
+    assert_eq!(indexes(&dirty), 0);
+    assert_eq!(indexes(&json(local.worktree_overlay(&worktree(&r)))), 0);
 }
 
 #[test]

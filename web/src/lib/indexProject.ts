@@ -2,11 +2,11 @@
 // that a local repository keeps for its history (ADR 0040).
 import type { Commit } from './forge';
 import type { CallReport } from './project';
-import type { CommitJob, DiffJob, IndexJob, Job, JobReply, WorkerRequest, WorkerResponse, WorktreeJob } from './workerJob';
+import type { GitFiles, LocalSources } from './localGit';
+import type { CommitJob, DiffJob, IndexJob, Job, JobReply, WorkerRequest, WorkerResponse } from './workerJob';
 
 export type IndexRequest = Omit<IndexJob, 'kind'>;
 export type DiffRequest = Omit<DiffJob, 'kind'>;
-export type WorktreeRequest = Omit<WorktreeJob, 'kind'>;
 type Indexed = { graphText: string; report: { calls: CallReport } };
 
 /** The part of `Worker` that is used; a test passes a fake. */
@@ -30,7 +30,7 @@ export function diffInWorker(req: DiffRequest): Promise<Indexed> {
 }
 
 /** The bytes of the packs and loose objects of `.git`: they move to the worker, so they are unusable here afterwards. */
-const bytesOf = (git: WorktreeRequest['git']) =>
+const bytesOf = (git: GitFiles) =>
   [...git.packs.flatMap((p) => [p.index.buffer, p.data.buffer]), ...git.loose.map((l) => l.bytes.buffer)] as ArrayBuffer[];
 
 type Done = Extract<JobReply, { ok: true }>;
@@ -89,8 +89,10 @@ export type CommitOverlay = Indexed & { base: Record<string, string>; head: Reco
 
 /** One worker that keeps the git repository of a chosen directory and answers for its history (ADR 0040). */
 export interface LocalRepoWorker {
-  /** The overlay of the working tree against `HEAD`; the worker keeps the repository. The bytes of `.git` move to it. */
-  worktree(req: WorktreeRequest): Promise<Indexed & { base: Record<string, string>; indexes: number }>;
+  /** The plain index of the sources of the directory; the worker keeps it as the head of `worktree` (CG-16). */
+  index(req: LocalSources): Promise<Indexed>;
+  /** The overlay of the working tree of the last `index` against `HEAD`; the worker keeps the repository. The bytes of `.git` move to it. */
+  worktree(git: GitFiles): Promise<Indexed & { base: Record<string, string>; indexes: number }>;
   /** The first-parent history from `from` (null: `HEAD`), at most `n` commits. */
   log(from: string | null, n: number): Promise<Commit[]>;
   /** The overlay of the tree `head` against the tree `base` (null: nothing). */
@@ -102,8 +104,12 @@ export function localRepoWorker(make: () => WorkerLike = startWorker): LocalRepo
   const channel = openChannel(make());
   const graph = (r: Done) => r as Graph;
   return {
-    worktree: async (req) => {
-      const r = graph(await channel.request({ kind: 'worktree', ...req }, bytesOf(req.git)));
+    index: async (req) => {
+      const r = graph(await channel.request({ kind: 'local', ...req }));
+      return { graphText: r.graphText, report: r.report };
+    },
+    worktree: async (git) => {
+      const r = graph(await channel.request({ kind: 'worktree', git }, bytesOf(git)));
       return { graphText: r.graphText, report: r.report, base: r.base ?? {}, indexes: r.indexes ?? 0 };
     },
     log: async (from, n) => {

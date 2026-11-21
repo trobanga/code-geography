@@ -70,6 +70,14 @@ function shift(lo: number, hi: number, size: number, margin: number): number {
   return 0;
 }
 
+/**
+ * The transform after the viewport moved on the page from `before` to `now` (its top, in pixels): a bar
+ * that appears above it (a commit strip) does not move the picture on the page. null: not seen before.
+ */
+export function keepPlace(t: Transform, before: number | null, now: number): Transform {
+  return before === null || before === now ? t : { ...t, y: t.y - (now - before) };
+}
+
 export function polylineMidpoint(pts: { x: number; y: number }[]): { x: number; y: number } {
   const seg = pts.slice(1).map((p, i) => Math.hypot(p.x - pts[i].x, p.y - pts[i].y));
   let rest = seg.reduce((a, b) => a + b, 0) / 2;

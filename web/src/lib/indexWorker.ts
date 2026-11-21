@@ -1,12 +1,12 @@
 // Runs the indexer (ADR 0015) in its own WASM instance, so the page stays responsive. One runner
 // per worker: a local repository keeps its git repository here between jobs (ADR 0040).
 import wasmUrl from './wasm/cg_wasm_bg.wasm?url';
-import init, { GitRepo, diffSources, indexSources, worktreeOverlay } from './wasm/cg_wasm.js';
+import init, { GitRepo, Worktree, diffSources, indexSources, worktreeOverlay } from './wasm/cg_wasm.js';
 import { jobRunner, type JobReply, type WorkerRequest } from './workerJob';
 
 const ready = init({ module_or_path: wasmUrl });
 ready.catch(() => {}); // each job reports the failure itself
-const run = jobRunner({ indexSources, diffSources, GitRepo, worktreeOverlay });
+const run = jobRunner({ indexSources, diffSources, GitRepo, Worktree, worktreeOverlay });
 /** Jobs run one after the other, in the order of the messages. */
 let queue: Promise<unknown> = Promise.resolve();
 

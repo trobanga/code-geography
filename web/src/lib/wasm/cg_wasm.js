@@ -322,6 +322,74 @@ export class GitRepo {
 if (Symbol.dispose) GitRepo.prototype[Symbol.dispose] = GitRepo.prototype.free;
 
 /**
+ * The JavaScript class `Worktree`: the index of the working tree of a chosen directory
+ * (see `Worktree` above); `free()` drops it.
+ */
+export class Worktree {
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        WorktreeFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_worktree_free(ptr, 0);
+    }
+    /**
+     * `json()`: JSON of `{graph, report}`, as `indexSources` gives it.
+     * @returns {string}
+     */
+    json() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.worktree_json(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export3(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
+     * `new Worktree(paths, texts, rootName)`: indexes the inputs; throws when `paths` and
+     * `texts` differ in length.
+     * @param {string[]} paths
+     * @param {string[]} texts
+     * @param {string} root_name
+     */
+    constructor(paths, texts, root_name) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passArrayJsValueToWasm0(paths, wasm.__wbindgen_export);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passArrayJsValueToWasm0(texts, wasm.__wbindgen_export);
+            const len1 = WASM_VECTOR_LEN;
+            const ptr2 = passStringToWasm0(root_name, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len2 = WASM_VECTOR_LEN;
+            wasm.worktree_new(retptr, ptr0, len0, ptr1, len1, ptr2, len2);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            this.__wbg_ptr = r0;
+            WorktreeFinalization.register(this, this.__wbg_ptr, this);
+            return this;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+}
+if (Symbol.dispose) Worktree.prototype[Symbol.dispose] = Worktree.prototype.free;
+
+/**
  * `diffSources(basePaths, baseTexts, headPaths, headTexts, rootName, baseName, headName,
  * changedPaths, changedKinds)`: JSON of `{graph, report}` with the overlay graph; throws
  * when two parallel arrays differ in length or a kind is not `added`, `removed` or
@@ -432,43 +500,36 @@ export function isInput(path) {
 }
 
 /**
- * `worktreeOverlay(repo, paths, texts, rootName)`: JSON of `{graph, report, base}` with the
+ * `worktreeOverlay(repo, worktree)`: JSON of `{graph, report, base, indexes}` with the
  * overlay of the working tree against `HEAD`; throws when git cannot give `HEAD`.
  * @param {GitRepo} repo
- * @param {string[]} paths
- * @param {string[]} texts
- * @param {string} root_name
+ * @param {Worktree} worktree
  * @returns {string}
  */
-export function worktreeOverlay(repo, paths, texts, root_name) {
-    let deferred5_0;
-    let deferred5_1;
+export function worktreeOverlay(repo, worktree) {
+    let deferred2_0;
+    let deferred2_1;
     try {
         const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
         _assertClass(repo, GitRepo);
-        const ptr0 = passArrayJsValueToWasm0(paths, wasm.__wbindgen_export);
-        const len0 = WASM_VECTOR_LEN;
-        const ptr1 = passArrayJsValueToWasm0(texts, wasm.__wbindgen_export);
-        const len1 = WASM_VECTOR_LEN;
-        const ptr2 = passStringToWasm0(root_name, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-        const len2 = WASM_VECTOR_LEN;
-        wasm.worktreeOverlay(retptr, repo.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2);
+        _assertClass(worktree, Worktree);
+        wasm.worktreeOverlay(retptr, repo.__wbg_ptr, worktree.__wbg_ptr);
         var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
         var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
         var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
         var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
-        var ptr4 = r0;
-        var len4 = r1;
+        var ptr1 = r0;
+        var len1 = r1;
         if (r3) {
-            ptr4 = 0; len4 = 0;
+            ptr1 = 0; len1 = 0;
             throw takeObject(r2);
         }
-        deferred5_0 = ptr4;
-        deferred5_1 = len4;
-        return getStringFromWasm0(ptr4, len4);
+        deferred2_0 = ptr1;
+        deferred2_1 = len1;
+        return getStringFromWasm0(ptr1, len1);
     } finally {
         wasm.__wbindgen_add_to_stack_pointer(16);
-        wasm.__wbindgen_export3(deferred5_0, deferred5_1, 1);
+        wasm.__wbindgen_export3(deferred2_0, deferred2_1, 1);
     }
 }
 function __wbg_get_imports() {
@@ -505,6 +566,9 @@ const ExplorerFinalization = (typeof FinalizationRegistry === 'undefined')
 const GitRepoFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_gitrepo_free(ptr, 1));
+const WorktreeFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_worktree_free(ptr, 1));
 
 function addHeapObject(obj) {
     if (heap_next === heap.length) heap.push(heap.length + 1);

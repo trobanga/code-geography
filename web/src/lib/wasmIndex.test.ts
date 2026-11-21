@@ -7,10 +7,10 @@ import { createHash } from 'node:crypto';
 // @ts-ignore As above.
 import { deflateSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
-import { Explorer, GitRepo, diffSources, indexSources, initSync, isInput, worktreeOverlay } from './wasm/cg_wasm.js';
+import { Explorer, GitRepo, Worktree, diffSources, indexSources, initSync, isInput, worktreeOverlay } from './wasm/cg_wasm.js';
 import type { Graph, GraphEdge, View } from './types';
 import type { GitFiles } from './localGit';
-import { jobRunner, type WorktreeJob } from './workerJob';
+import { jobRunner } from './workerJob';
 import { headOf } from './commit';
 import { textReader } from './source';
 
@@ -273,9 +273,18 @@ describe('the indexer in WASM', () => {
   });
 });
 
-const runJob = jobRunner({ indexSources, diffSources, GitRepo, worktreeOverlay });
+const runJob = jobRunner({ indexSources, diffSources, GitRepo, Worktree, worktreeOverlay });
 
 describe('runJob', () => {
+  it('replies the index of a local job as an index job does', () => {
+    const paths = ['pom.xml', 'src/main/java/a/A.java'];
+    const texts = ['', 'package a;\nclass A {}\n'];
+    const local = runJob({ kind: 'local', rootName: 'repo', paths, texts });
+    const plain = runJob({ kind: 'index', rootName: 'repo', paths, texts });
+    expect(local.ok).toBe(true);
+    expect(local).toEqual(plain);
+  });
+
   it('builds the overlay of two source sets with the changed files', () => {
     const reply = runJob(
       {
@@ -349,15 +358,14 @@ describe('runJob of a worktree', () => {
       ['src/main/java/a/Gone.java', 'package a;\nclass Gone {}\n'],
     ]);
     const git = { head: 'ref: refs/heads/main\n', refs: [{ name: 'refs/heads/main', text: `${objects[0].id}\n` }], packedRefs: null, packs: [], loose: objects };
-    const reply = runJob(
-      {
-        kind: 'worktree',
-        rootName: 'repo',
-        paths: ['pom.xml', 'src/main/java/a/A.java', 'src/main/java/a/New.java'],
-        texts: ['', 'package a;\nclass A { int x; }\n', 'package a;\nclass New {}\n'],
-        git,
-      },
-    );
+    const local = runJob({
+      kind: 'local',
+      rootName: 'repo',
+      paths: ['pom.xml', 'src/main/java/a/A.java', 'src/main/java/a/New.java'],
+      texts: ['', 'package a;\nclass A { int x; }\n', 'package a;\nclass New {}\n'],
+    });
+    if (!local.ok) throw new Error(local.error);
+    const reply = runJob({ kind: 'worktree', git });
     if (!reply.ok) throw new Error(reply.error);
     const g = JSON.parse(reply.graphText) as Graph;
     expect(g.diff).toMatchObject({ base: objects[0].id.slice(0, 7), head: 'working tree' });
@@ -371,8 +379,29 @@ describe('runJob of a worktree', () => {
 
   it('fails with the reason when HEAD names no commit', () => {
     const git = { head: 'ref: refs/heads/main\n', refs: [], packedRefs: null, packs: [], loose: [] };
-    const reply = runJob({ kind: 'worktree', rootName: 'repo', paths: [], texts: [], git });
+    runJob({ kind: 'local', rootName: 'repo', paths: [], texts: [] });
+    const reply = runJob({ kind: 'worktree', git });
     expect(reply).toEqual({ ok: false, error: 'no commit at HEAD: no ref refs/heads/main' });
+  });
+
+  it('needs the working tree of a local job, and uses it once', () => {
+    const objects = commitOf([['pom.xml', ''], ['src/main/java/a/A.java', 'package a;\nclass A {}\n']]);
+    const git = { head: 'ref: refs/heads/main\n', refs: [{ name: 'refs/heads/main', text: `${objects[0].id}\n` }], packedRefs: null, packs: [], loose: objects };
+    const run = jobRunner({ indexSources, diffSources, GitRepo, Worktree, worktreeOverlay });
+    expect(run({ kind: 'worktree', git })).toEqual({ ok: false, error: 'no working tree' });
+
+    expect(run({ kind: 'local', rootName: 'repo', paths: ['pom.xml'], texts: [''] }).ok).toBe(true);
+    expect(run({ kind: 'worktree', git }).ok).toBe(true);
+    // The overlay freed it.
+    expect(run({ kind: 'worktree', git })).toEqual({ ok: false, error: 'no working tree' });
+  });
+
+  it('frees the working tree also when git fails', () => {
+    const git = { head: 'ref: refs/heads/main\n', refs: [], packedRefs: null, packs: [], loose: [] };
+    const run = jobRunner({ indexSources, diffSources, GitRepo, Worktree, worktreeOverlay });
+    run({ kind: 'local', rootName: 'repo', paths: [], texts: [] });
+    expect(run({ kind: 'worktree', git }).ok).toBe(false);
+    expect(run({ kind: 'worktree', git })).toEqual({ ok: false, error: 'no working tree' });
   });
 });
 
@@ -388,18 +417,16 @@ describe('the job runner of a local repository', () => {
     const git = { head: 'ref: refs/heads/main\n', refs: [{ name: 'refs/heads/main', text: `${three[0].id}\n` }], packedRefs: null, packs: [], loose };
     return { ids: [one[0].id, two[0].id, three[0].id], git };
   };
-  const worktree = (git: GitFiles): WorktreeJob => ({
-    kind: 'worktree',
-    rootName: 'repo',
-    paths: ['pom.xml', 'src/main/java/a/A.java', 'src/main/java/a/B.java'],
-    texts: ['', A2, B],
-    git,
-  });
+  /** The working tree of the newest commit, then its overlay against `HEAD`: the repository is kept. */
+  const open = (run: ReturnType<typeof jobRunner>, git: GitFiles) => {
+    run({ kind: 'local', rootName: 'repo', paths: ['pom.xml', 'src/main/java/a/A.java', 'src/main/java/a/B.java'], texts: ['', A2, B] });
+    return run({ kind: 'worktree', git });
+  };
 
   it('keeps the repository after the worktree job: the log, then the overlay of a commit against its first parent', () => {
-    const run = jobRunner({ indexSources, diffSources, GitRepo, worktreeOverlay });
+    const run = jobRunner({ indexSources, diffSources, GitRepo, Worktree, worktreeOverlay });
     const { ids, git } = history();
-    expect(run(worktree(git)).ok).toBe(true);
+    expect(open(run, git).ok).toBe(true);
 
     const log = run({ kind: 'log', from: null, n: 10 });
     if (!log.ok) throw new Error(log.error);
@@ -420,9 +447,9 @@ describe('the job runner of a local repository', () => {
   });
 
   it('indexes one tree less when the next overlay steps down the history', () => {
-    const run = jobRunner({ indexSources, diffSources, GitRepo, worktreeOverlay });
+    const run = jobRunner({ indexSources, diffSources, GitRepo, Worktree, worktreeOverlay });
     const { ids, git } = history();
-    run(worktree(git));
+    open(run, git);
     const indexes = (base: string, head: string) => {
       const r = run({ kind: 'commit', base, head, rootName: 'repo' });
       if (!r.ok) throw new Error(r.error);
@@ -434,24 +461,24 @@ describe('the job runner of a local repository', () => {
   });
 
   it('compares a root commit with nothing', () => {
-    const run = jobRunner({ indexSources, diffSources, GitRepo, worktreeOverlay });
+    const run = jobRunner({ indexSources, diffSources, GitRepo, Worktree, worktreeOverlay });
     const { ids, git } = history();
-    run(worktree(git));
+    open(run, git);
     const r = run({ kind: 'commit', base: null, head: ids[0], rootName: 'repo' });
     if (!r.ok) throw new Error(r.error);
     expect((JSON.parse(r.graphText) as Graph).diff?.base).toBe('none');
   });
 
   it('fails a log or a commit job without a repository', () => {
-    const run = jobRunner({ indexSources, diffSources, GitRepo, worktreeOverlay });
+    const run = jobRunner({ indexSources, diffSources, GitRepo, Worktree, worktreeOverlay });
 
     expect(run({ kind: 'log', from: null, n: 5 })).toEqual({ ok: false, error: 'no repository' });
     expect(run({ kind: 'commit', base: null, head: 'abc', rootName: 'repo' })).toEqual({ ok: false, error: 'no repository' });
   });
 
   it('fails a log of a name that is no commit with the reason', () => {
-    const run = jobRunner({ indexSources, diffSources, GitRepo, worktreeOverlay });
-    run(worktree(history().git));
+    const run = jobRunner({ indexSources, diffSources, GitRepo, Worktree, worktreeOverlay });
+    open(run, history().git);
 
     const r = run({ kind: 'log', from: 'deadbeef', n: 1 });
 

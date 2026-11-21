@@ -58,6 +58,24 @@ export class GitRepo {
 }
 
 /**
+ * The JavaScript class `Worktree`: the index of the working tree of a chosen directory
+ * (see `Worktree` above); `free()` drops it.
+ */
+export class Worktree {
+    free(): void;
+    [Symbol.dispose](): void;
+    /**
+     * `json()`: JSON of `{graph, report}`, as `indexSources` gives it.
+     */
+    json(): string;
+    /**
+     * `new Worktree(paths, texts, rootName)`: indexes the inputs; throws when `paths` and
+     * `texts` differ in length.
+     */
+    constructor(paths: string[], texts: string[], root_name: string);
+}
+
+/**
  * `diffSources(basePaths, baseTexts, headPaths, headTexts, rootName, baseName, headName,
  * changedPaths, changedKinds)`: JSON of `{graph, report}` with the overlay graph; throws
  * when two parallel arrays differ in length or a kind is not `added`, `removed` or
@@ -77,10 +95,10 @@ export function indexSources(paths: string[], texts: string[], root_name: string
 export function isInput(path: string): boolean;
 
 /**
- * `worktreeOverlay(repo, paths, texts, rootName)`: JSON of `{graph, report, base}` with the
+ * `worktreeOverlay(repo, worktree)`: JSON of `{graph, report, base, indexes}` with the
  * overlay of the working tree against `HEAD`; throws when git cannot give `HEAD`.
  */
-export function worktreeOverlay(repo: GitRepo, paths: string[], texts: string[], root_name: string): string;
+export function worktreeOverlay(repo: GitRepo, worktree: Worktree): string;
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
@@ -89,6 +107,7 @@ export interface InitOutput {
     readonly memcmp: (a: number, b: number, c: number) => number;
     readonly __wbg_explorer_free: (a: number, b: number) => void;
     readonly __wbg_gitrepo_free: (a: number, b: number) => void;
+    readonly __wbg_worktree_free: (a: number, b: number) => void;
     readonly diffSources: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number) => void;
     readonly explorer_edgesBetween: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly explorer_focusView: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number) => void;
@@ -104,7 +123,9 @@ export interface InitOutput {
     readonly gitrepo_setPackedRefs: (a: number, b: number, c: number) => void;
     readonly indexSources: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly isInput: (a: number, b: number) => number;
-    readonly worktreeOverlay: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
+    readonly worktreeOverlay: (a: number, b: number, c: number) => void;
+    readonly worktree_json: (a: number, b: number) => void;
+    readonly worktree_new: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly strlen: (a: number) => number;
     readonly free: (a: number) => void;
     readonly malloc: (a: number) => number;

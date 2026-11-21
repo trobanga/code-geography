@@ -73,12 +73,13 @@ crates/cli         cg index <repo> -o graph.json; cg diff <repo> <rev|A..B> -o d
 crates/wasm        wasm-bindgen binding of core and the indexers: class Explorer (view, focusView,
                    edgesBetween), indexSources(paths, texts, rootName), diffSources(...), isInput(path),
                    class GitRepo (log, resolve, commitOverlay; LocalRepo keeps the indexed trees of
-                   the last overlay) and worktreeOverlay(repo, paths, texts, rootName) (ADR 0039, 0040)
+                   the last overlay), class Worktree (the index of a working tree, kept as the head of
+                   its overlay) and worktreeOverlay(repo, worktree) (ADR 0039, 0040)
 scripts/build-wasm.sh   builds crates/wasm into web/src/lib/wasm (generated, committed) with the
                         Cargo profile `wasm` (LTO, opt-level 2, ADR 0039);
                         sets the C include path for the tree-sitter grammars (needs cargo, jq)
 web/               viewer: Svelte 5, Tailwind 4, ELK layout in a web worker, plain SVG
-web/src/lib/forge.ts   opens a repository of a forge: pool, cache by blob sha, progress (ADR 0020);
+web/src/lib/forge.ts   opens a repository of a forge: requests in a pool (pool.ts), cache by blob sha, progress (ADR 0020);
                    the interfaces Forge, CommitSource (between, pullsOf, links) and WebLinks;
                    github.ts and forgejo.ts implement them (URLs, answers, errors, URL forms,
                    the web links of the commit context: no other file builds a host URL);
@@ -99,10 +100,12 @@ web/src/lib/source.ts  the source view (ADR 0031): sourceView (what a selection 
                    SourcePanel.svelte, SourceList.svelte and SourceCode.svelte show it
 web/src/lib/localGit.ts  the .git of a chosen directory (ADR 0039): readGit (the files the reader
                    needs, a note for a work tree or above the limit), filesDir (the fallback input),
-                   indexLocal (the overlay against HEAD, else the plain index with a note)
+                   openLocal (the plain index first, then the overlay against HEAD or a note, CG-16)
 web/src/lib/localSession.ts  a local repository in the viewer (ADR 0040): the commit list, the overlay
                    of a commit or a range, the uncommitted entry; its worker (localRepoWorker in
-                   indexProject.ts) holds the GitRepo while the directory is shown
+                   indexProject.ts) holds the GitRepo while the directory is shown; expect, settle and
+                   `loading`: the plain diagram is shown and git is still read (CG-16), a later source
+                   ends the expectation so that a late overlay changes nothing
 web/src/lib/cover.ts  the cover of the diagram (the Survey picture) for a level button, "+" and "−": on the
                    screen before the cut of the step, off when its layout is there
 web/src/lib/tokenStore.ts  tokens by origin (session/local storage) and authorized(): the only
@@ -295,19 +298,21 @@ and `web/package.json`. The skill `.agents/skills/cut-release` does the steps.
   commit message in another encoding than UTF-8 (`encoding` header) is read as UTF-8. A
   shallow clone lists its commits up to the last one it holds; the overlay of that one fails,
   as its parent is missing (`.git/shallow` is not read). An abbreviated sha that a blob or a
-  tree shares is ambiguous, also where git would take the commit. Opening fts-next (130 880
-  files, 67 MB of `.git`: 15 packs, 8 709 loose objects) through the fallback input in headless
-  Chromium takes 15 s: 11.5 s pass before any code runs, while the browser lists all files for
-  the input, and the 3.0 s after that go to reading `.git` (2.25 s: taking the sizes of the files
-  1.1 s, reading the loose objects 1.0 s, reading the packs 24 ms), building `GitRepo` 22 ms and
-  the overlay 290 ms; the first picture waits for all of it; the picker path was not measured. The packs and loose objects of `.git` must fit in 512 MiB
+  tree shares is ambiguous, also where git would take the commit. The plain diagram shows
+  before `.git` is read; the commit list and the marks follow (ADR 0039, CG-16). Opening
+  fts-next (130 880 files, 67 MB of `.git`) in headless Chromium on a loaded machine: through
+  the picker the diagram after 1.2 to 1.5 s, the commit list after 2.6 to 2.8 s (before: both
+  after 3.4 to 3.9 s); through the fallback input, counted from its `change` event, 2.3 to 3.6 s
+  and 2.7 to 4.9 s (before: 5.0 to 17.5 s). Before that event the browser lists all files for the
+  input (11.5 s, under Playwright 20 to 50 s). The picker path was measured with a copy in the
+  origin private file system, not with a directory on disk. The packs and loose objects of `.git` must fit in 512 MiB
   together: they are read whole into the memory of the worker; above, the directory opens
-  without overlay and with a note. Every loose object is read. A work tree or a submodule
+  without overlay and with a note. Every loose object is read; the read stops when their sum with the packs passes the limit. A work tree or a submodule
   (`.git` is a file) gives a note: its history lies outside the chosen directory. Not read:
   `.gitignore` (an untracked input is `added`), `alternates`, `.gitattributes`, LFS, the
   index (staged and unstaged changes are one). CRLF in the working tree against LF blobs
   shows the file as modified. SHA-1 repositories only. A delta base outside its pack is an
-  error. The File System Access API path and the fallback input were checked with fakes and
-  on disk through Node, not in a browser.
+  error. The File System Access API path was checked in a browser only with a directory of the origin
+  private file system, not with a directory on disk.
 - Local classes and members of anonymous classes get no node.
 - A rename of a type or method looks like one removal and one addition.

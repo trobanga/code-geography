@@ -17,9 +17,11 @@ export interface LocalState {
   commits: { list: Commit[]; next: string | null } | null;
   listStatus: string | null;
   listOpen: boolean;
+  /** The plain index of a directory is shown and its `.git` is still read (CG-16): the commit list and the marks follow. */
+  loading: boolean;
 }
 
-export const NO_LOCAL: LocalState = { active: false, shown: 'worktree', commits: null, listStatus: null, listOpen: false };
+export const NO_LOCAL: LocalState = { active: false, shown: 'worktree', commits: null, listStatus: null, listOpen: false, loading: false };
 
 /** The part of `LocalRepoWorker` that the session uses. */
 export interface LocalRepo {
@@ -57,6 +59,8 @@ export function localSession(d: LocalDeps) {
   let repo: LocalRepo | null = null;
   let rootName = '';
   let worktree: KeptWorktree | null = null;
+  /** Counts the directories that are expected: a check is true while its number is the latest. */
+  let expected = 0;
   const set = (patch: Partial<LocalState>) => d.onState((s = { ...s, ...patch }));
 
   /** The page that `list` ends with, and where the next starts: null after the root commit or a short page. */
@@ -222,9 +226,10 @@ export function localSession(d: LocalDeps) {
     await d.show(worktree.text, worktree.summary, worktree.texts);
   }
 
-  /** Another source is shown: the worker ends, nothing of the repository stays. A pending overlay changes nothing. */
+  /** Another source is shown: the worker ends, nothing of the repository stays, and a directory that is expected is not shown any more. A pending overlay changes nothing. */
   function forget() {
-    if (!s.active) return;
+    expected++;
+    if (!s.active && !s.loading) return;
     repo?.close();
     repo = null;
     worktree = null;
@@ -233,6 +238,16 @@ export function localSession(d: LocalDeps) {
   }
 
   return {
+    /** The plain index of a directory is shown and its git is read: loading. The check tells whether this directory is still shown, until `forget` or the next `expect`. */
+    expect(): () => boolean {
+      const mine = ++expected;
+      set({ loading: true });
+      return () => expected === mine;
+    },
+    /** Git gave no overlay: not loading any more. */
+    settle() {
+      set({ loading: false });
+    },
     /** A repository was opened: its working tree is shown. A session before it ends. */
     start(handle: LocalRepo, root: string, kept: KeptWorktree) {
       if (repo && repo !== handle) repo.close();

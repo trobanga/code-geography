@@ -99,10 +99,7 @@ pub fn index_sources(
     texts: &[String],
     root_name: &str,
 ) -> Result<String, String> {
-    let files = source_files(paths, texts, "paths", "texts")?;
-    let (graph, report) = cg_index::index_sources(root_name, &files);
-    serde_json::to_string(&serde_json::json!({ "graph": graph, "report": report }))
-        .map_err(|e| e.to_string())
+    Ok(Worktree::index(paths, texts, root_name)?.json())
 }
 
 fn source_files(
@@ -188,6 +185,25 @@ impl Indexed {
     }
 }
 
+/// The index of the working tree of a chosen directory: made once, shown at once, and the
+/// head of the overlay against `HEAD` (`LocalRepo::worktree_overlay`), which does not index
+/// it again.
+pub struct Worktree(Rc<Indexed>);
+
+impl Worktree {
+    /// Indexes the inputs: `paths[i]` holds `texts[i]` (as for `index_sources`).
+    pub fn index(paths: &[String], texts: &[String], root_name: &str) -> Result<Worktree, String> {
+        let files = source_files(paths, texts, "paths", "texts")?;
+        Ok(Worktree(Rc::new(index_files(root_name, files, &mut 0))))
+    }
+
+    /// The JSON `{graph, report}` that `index_sources` gives for the same input.
+    pub fn json(&self) -> String {
+        serde_json::to_string(&json!({ "graph": self.0.graph, "report": self.0.report }))
+            .expect("an index serializes to JSON")
+    }
+}
+
 /// A local repository (ADR 0039): the objects of a `.git` and the trees that were indexed
 /// by the last overlay (at most two), so that stepping down a list of commits indexes one
 /// tree per step: the head of one step is the base of the next. The cache is by tree id
@@ -261,17 +277,22 @@ impl LocalRepo {
             .collect()
     }
 
-    /// The index of the inputs of `tree`: from the cache, else made (`runs` counts it).
+    /// The index of the inputs of `tree`: from the cache, else `reuse` when it holds the same
+    /// sources, else made (`runs` counts it).
     fn indexed(
         &self,
         tree: &cg_git::Id,
         root_name: &str,
         runs: &mut u32,
+        reuse: Option<&Rc<Indexed>>,
     ) -> Result<Rc<Indexed>, String> {
         if let Some(found) = self.cache.get(tree).filter(|i| i.root_name == root_name) {
             return Ok(Rc::clone(found));
         }
         let files = self.inputs_of(tree)?;
+        if let Some(ready) = reuse.filter(|r| cg_index::same_sources(&files, &r.files)) {
+            return Ok(Rc::clone(ready));
+        }
         Ok(Rc::new(index_files(root_name, files, runs)))
     }
 
@@ -294,10 +315,10 @@ impl LocalRepo {
             .map(|id| self.repo.commit(&id).map(|c| c.tree))
             .transpose()?;
         let mut runs = 0;
-        let after = self.indexed(&head_tree, root_name, &mut runs)?;
+        let after = self.indexed(&head_tree, root_name, &mut runs, None)?;
         let before = match &base_tree {
             Some(tree) if *tree == head_tree => Rc::clone(&after),
-            Some(tree) => self.indexed(tree, root_name, &mut runs)?,
+            Some(tree) => self.indexed(tree, root_name, &mut runs, None)?,
             None => Rc::new(index_files(root_name, Vec::new(), &mut runs)),
         };
         let changed = self
@@ -340,43 +361,35 @@ impl LocalRepo {
     }
 
     /// The overlay of the working tree against `HEAD` (ADR 0039): the inputs of the commit
-    /// at `HEAD` are the base, `paths` and `texts` (the inputs that the walk read) the head.
-    /// A file is changed when its text differs; an input that `HEAD` lacks is `added`, also
-    /// when it is not tracked. JSON `{graph, report, base, indexes}` like `diff_sources`;
-    /// `base` maps the path of each input at `HEAD` to its text there, for the source view;
-    /// `indexes` is as for `commit_overlay` (a working tree equal to `HEAD` is indexed once).
-    pub fn worktree_overlay(
-        &mut self,
-        paths: &[String],
-        texts: &[String],
-        root_name: &str,
-    ) -> Result<String, String> {
-        let head = source_files(paths, texts, "paths", "texts")?;
+    /// at `HEAD` are the base, the index of `worktree` (the inputs that the walk read) the
+    /// head, which is not indexed again. A file is changed when its text differs; an input
+    /// that `HEAD` lacks is `added`, also when it is not tracked. JSON `{graph, report, base,
+    /// indexes}` like `diff_sources`; `base` maps the path of each input at `HEAD` to its
+    /// text there, for the source view; `indexes` is as for `commit_overlay` (the index of
+    /// `worktree` is not counted; a `HEAD` with the sources of the working tree takes its
+    /// index and runs nothing).
+    pub fn worktree_overlay(&mut self, worktree: &Worktree) -> Result<String, String> {
+        let head = &worktree.0;
         let commit = self
             .repo
             .resolve("HEAD")
             .map_err(|e| format!("no commit at HEAD: {e}"))?;
         let tree = self.repo.commit(&commit)?.tree;
         let mut runs = 0;
-        let before = self.indexed(&tree, root_name, &mut runs)?;
-        let after = if cg_index::same_sources(&before.files, &head) {
-            None
-        } else {
-            Some(index_files(root_name, head, &mut runs))
-        };
-        let (files, graph, report) = match &after {
-            Some(i) => (&i.files, &i.graph, &i.report),
-            None => (&before.files, &before.graph, &before.report),
-        };
+        let before = self.indexed(&tree, &head.root_name, &mut runs, Some(head))?;
         let spec = cg_index::DiffSpec {
             base: commit.to_hex_with_len(7).to_string(),
             head: "working tree".to_string(),
-            changed: text_changes(&before.files, files),
+            changed: text_changes(&before.files, &head.files),
         };
-        let overlay = cg_index::diff_indexed((&before.files, &before.graph), (files, graph), spec);
+        let overlay = cg_index::diff_indexed(
+            (&before.files, &before.graph),
+            (&head.files, &head.graph),
+            spec,
+        );
         let answer = serde_json::to_string(&json!({
             "graph": overlay,
-            "report": report,
+            "report": head.report,
             "base": before.texts(),
             "indexes": runs,
         }))
@@ -582,17 +595,38 @@ impl JsGitRepo {
     }
 }
 
-/// `worktreeOverlay(repo, paths, texts, rootName)`: JSON of `{graph, report, base}` with the
+/// The JavaScript class `Worktree`: the index of the working tree of a chosen directory
+/// (see `Worktree` above); `free()` drops it.
+#[wasm_bindgen(js_name = Worktree)]
+pub struct JsWorktree(Worktree);
+
+#[wasm_bindgen(js_class = Worktree)]
+impl JsWorktree {
+    /// `new Worktree(paths, texts, rootName)`: indexes the inputs; throws when `paths` and
+    /// `texts` differ in length.
+    #[wasm_bindgen(constructor)]
+    pub fn new(
+        paths: Vec<String>,
+        texts: Vec<String>,
+        root_name: &str,
+    ) -> Result<JsWorktree, JsError> {
+        Worktree::index(&paths, &texts, root_name)
+            .map(JsWorktree)
+            .map_err(|message| JsError::new(&message))
+    }
+
+    /// `json()`: JSON of `{graph, report}`, as `indexSources` gives it.
+    pub fn json(&self) -> String {
+        self.0.json()
+    }
+}
+
+/// `worktreeOverlay(repo, worktree)`: JSON of `{graph, report, base, indexes}` with the
 /// overlay of the working tree against `HEAD`; throws when git cannot give `HEAD`.
 #[wasm_bindgen(js_name = worktreeOverlay)]
-pub fn js_worktree_overlay(
-    repo: &mut JsGitRepo,
-    paths: Vec<String>,
-    texts: Vec<String>,
-    root_name: &str,
-) -> Result<String, JsError> {
+pub fn js_worktree_overlay(repo: &mut JsGitRepo, worktree: &JsWorktree) -> Result<String, JsError> {
     repo.0
-        .worktree_overlay(&paths, &texts, root_name)
+        .worktree_overlay(&worktree.0)
         .map_err(|message| JsError::new(&message))
 }
 

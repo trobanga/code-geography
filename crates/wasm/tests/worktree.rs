@@ -75,13 +75,20 @@ fn inputs(dir: &Path, paths: &[&str]) -> (Vec<String>, Vec<String>) {
     (paths, texts)
 }
 
-fn overlay(dir: &Path, paths: &[&str]) -> Graph {
+fn worktree(paths: &[String], texts: &[String]) -> cg_wasm::Worktree {
+    cg_wasm::Worktree::index(paths, texts, "r").unwrap()
+}
+
+fn overlay_json(dir: &Path, paths: &[&str]) -> serde_json::Value {
     let (paths, texts) = inputs(dir, paths);
     let json = cg_wasm::LocalRepo::new(reader(dir))
-        .worktree_overlay(&paths, &texts, "r")
+        .worktree_overlay(&worktree(&paths, &texts))
         .unwrap();
-    let value: serde_json::Value = serde_json::from_str(&json).unwrap();
-    serde_json::from_value(value["graph"].clone()).unwrap()
+    serde_json::from_str(&json).unwrap()
+}
+
+fn overlay(dir: &Path, paths: &[&str]) -> Graph {
+    serde_json::from_value(overlay_json(dir, paths)["graph"].clone()).unwrap()
 }
 
 fn changes(graph: &Graph) -> Vec<(String, Change)> {
@@ -98,6 +105,22 @@ const ALL: [&str; 4] = [
     "src/main/java/p/B.java",
     "src/main/java/p/C.java",
 ];
+
+#[test]
+fn the_index_of_the_working_tree_is_the_index_of_its_sources() {
+    let paths = vec!["pom.xml".to_string(), "src/main/java/p/A.java".to_string()];
+    let texts = vec![
+        "<project><artifactId>m</artifactId></project>\n".to_string(),
+        "package p;\nclass A {}\n".to_string(),
+    ];
+    let worktree = cg_wasm::Worktree::index(&paths, &texts, "r").unwrap();
+    assert_eq!(
+        worktree.json(),
+        cg_wasm::index_sources(&paths, &texts, "r").unwrap()
+    );
+    let err = cg_wasm::Worktree::index(&paths, &texts[..1], "r").err();
+    assert!(err.is_some_and(|e| e.contains("paths")));
+}
 
 #[test]
 fn uncommitted_changes_are_the_overlay_against_head() {
@@ -159,11 +182,7 @@ fn the_overlay_carries_the_texts_of_the_inputs_at_head() {
     );
     fs::remove_file(dir.join("src/main/java/p/B.java")).unwrap();
     write(&dir, "src/main/java/p/C.java", "package p;\nclass C {}\n");
-    let (paths, texts) = inputs(&dir, &ALL);
-    let json = cg_wasm::LocalRepo::new(reader(&dir))
-        .worktree_overlay(&paths, &texts, "r")
-        .unwrap();
-    let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let value = overlay_json(&dir, &ALL);
     assert_eq!(
         value["base"],
         serde_json::json!({
@@ -186,9 +205,46 @@ fn a_clean_working_tree_is_an_overlay_with_no_change() {
     write(&dir, "src/main/java/p/A.java", "package p;\nclass A {}\n");
     git(&dir, &["add", "-A"]);
     git(&dir, &["commit", "-q", "-m", "one"]);
-    let graph = overlay(&dir, &ALL);
+    let value = overlay_json(&dir, &ALL);
+    let graph: Graph = serde_json::from_value(value["graph"].clone()).unwrap();
     assert!(changes(&graph).is_empty());
     assert!(graph.nodes.iter().all(|n| n.change.is_none()));
+    // The base is the index of the working tree: nothing ran again.
+    assert_eq!(value["indexes"], 0);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_changed_working_tree_indexes_head_once_and_then_from_the_cache() {
+    let dir = repo("runs");
+    write(
+        &dir,
+        "pom.xml",
+        "<project><artifactId>m</artifactId></project>\n",
+    );
+    write(&dir, "src/main/java/p/A.java", "package p;\nclass A {}\n");
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-q", "-m", "one"]);
+    write(
+        &dir,
+        "src/main/java/p/A.java",
+        "package p;\nclass A { int x; }\n",
+    );
+    let (paths, mut texts) = inputs(&dir, &ALL);
+    let mut local = cg_wasm::LocalRepo::new(reader(&dir));
+    let first = local.worktree_overlay(&worktree(&paths, &texts)).unwrap();
+    let first: serde_json::Value = serde_json::from_str(&first).unwrap();
+    assert_eq!(first["indexes"], 1);
+    let graph: Graph = serde_json::from_value(first["graph"].clone()).unwrap();
+    assert_eq!(
+        changes(&graph),
+        [("src/main/java/p/A.java".to_string(), Change::Modified)]
+    );
+    // HEAD is cached now: a second edit indexes nothing but the working tree.
+    texts[1] = "package p;\nclass A { int y; }\n".to_string();
+    let second = local.worktree_overlay(&worktree(&paths, &texts)).unwrap();
+    let second: serde_json::Value = serde_json::from_str(&second).unwrap();
+    assert_eq!(second["indexes"], 0);
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -214,7 +270,7 @@ fn a_byte_order_mark_that_the_browser_drops_is_no_change() {
         "package p;\nclass A {}\n".to_string(),
     ];
     let json = cg_wasm::LocalRepo::new(reader(&dir))
-        .worktree_overlay(&paths, &texts, "r")
+        .worktree_overlay(&worktree(&paths, &texts))
         .unwrap();
     let value: serde_json::Value = serde_json::from_str(&json).unwrap();
     let graph: Graph = serde_json::from_value(value["graph"].clone()).unwrap();
@@ -250,7 +306,7 @@ fn a_repository_with_no_commit_is_an_error() {
     write(&dir, "src/main/java/p/A.java", "package p;\nclass A {}\n");
     let (paths, texts) = inputs(&dir, &ALL);
     let err = cg_wasm::LocalRepo::new(reader(&dir))
-        .worktree_overlay(&paths, &texts, "r")
+        .worktree_overlay(&worktree(&paths, &texts))
         .unwrap_err();
     assert!(err.contains("no commit"), "{err}");
     let _ = fs::remove_dir_all(&dir);

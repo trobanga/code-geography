@@ -1,5 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { fitTransform, keepInView, labelAnchor, polylineMidpoint, reveal, zoomAt } from './viewport';
+import { fitTransform, keepInView, keepPlace, labelAnchor, polylineMidpoint, reveal, zoomAt } from './viewport';
+
+describe('keepPlace', () => {
+  it('moves the picture up by as much as a bar above pushed the viewport down, so it stays on the page', () => {
+    expect(keepPlace({ x: 10, y: 100, k: 2 }, 113, 152)).toEqual({ x: 10, y: 61, k: 2 });
+    expect(keepPlace({ x: 10, y: 61, k: 2 }, 152, 113)).toEqual({ x: 10, y: 100, k: 2 });
+  });
+
+  it('changes nothing when the top did not move or was not seen before', () => {
+    const t = { x: 10, y: 100, k: 2 };
+    expect(keepPlace(t, 113, 113)).toBe(t);
+    expect(keepPlace(t, null, 152)).toBe(t);
+  });
+});
 
 describe('fitTransform', () => {
   it('scales the content into the viewport with a margin and centers it', () => {
