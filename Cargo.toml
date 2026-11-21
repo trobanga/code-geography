@@ -4,7 +4,7 @@ members = ["crates/core", "crates/index-java", "crates/index-rust", "crates/inde
 
 # The release version: the cut-release skill bumps it here and in web/package.json.
 [workspace.package]
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 license = "Apache-2.0"
 
